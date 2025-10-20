@@ -34,3 +34,5 @@
 *.err filter=lfs diff=lfs merge=lfs -text
 *.stdout filter=lfs diff=lfs merge=lfs -text
 /kb filter=lfs diff=lfs merge=lfs -text
+*.part filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
