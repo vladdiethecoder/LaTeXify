@@ -1,46 +1,86 @@
+from __future__ import annotations
+
 from PIL import Image
 import torch
-from transformers import AutoProcessor, AutoModelForCausalLM
-from .base import OCRBackend, OCRPage
 
-from qwen_vl_utils import process_vision_info  # provided by dots.ocr / Qwen utils
-
-MODEL_PATH = "third_party/dots.ocr/weights/DotsOCR"
-proc = AutoProcessor.from_pretrained(MODEL_PATH, trust_remote_code=True)
-model = AutoModelForImageTextToText.from_pretrained(
-    MODEL_PATH, trust_remote_code=True, torch_dtype="auto",
-    attn_implementation="sdpa", device_map="auto"
+# --- Keep these imports at module scope; do not rebind these names later ---
+from transformers import (
+    AutoModelForCausalLM,
+    AutoImageProcessor,
+    AutoTokenizer,
+    Qwen2_5_VLProcessor,
 )
+from transformers.video_processing_utils import BaseVideoProcessor
 
-_mdl.eval()
+from .base import OCRBackend, OCRResult
 
+MODEL_ID = "rednote-hilab/dots.ocr"
 
-PROMPT = (
-    "Read the document in natural order and return structured markdown. "
-    "Use HTML tables, LaTeX equations, and include figure captions if present."
-)
+PROMPT = r"""Please output the layout information from the page image, including each layout element's bbox,
+its category, and the corresponding text content within the bbox.
+1) Bbox format: [x1, y1, x2, y2] (integers).
+2) Categories: ['Caption','Footnote','Formula','List-item','Page-footer','Page-header','Picture','Section-header','Table','Text','Title'].
+3) Rules:
+   - Picture → do NOT OCR text inside the image region.
+   - Formula → output LaTeX (inline \( ... \) or display \[ ... \] / $$ ... $$).
+   - Table → output HTML <table>...</table>.
+   - Others → output Markdown in reading order.
+Return a single JSON object covering the whole page."""
 
 class Backend(OCRBackend):
     name = "dots-ocr"
-    def recognize_page(self, image_path: str, page_num: int = 1) -> OCRPage:
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image_path},
-                {"type": "text",  "text": PROMPT},
-            ],
-        }]
-        text = _proc.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = process_vision_info(messages)  # ensures video fields are present
-        inputs = _proc(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
+
+    def __init__(self):
+        # Model
+        self.model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            attn_implementation="sdpa",
+            trust_remote_code=True,
+        ).eval()
+
+        # Processor (Qwen2.5-VL style: requires image/tokenizer/video processors)
+        image_proc = AutoImageProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+        tokenizer  = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+        video_proc = BaseVideoProcessor()  # satisfy required video processor
+
+        self.processor = Qwen2_5_VLProcessor(
+            image_processor=image_proc,
+            tokenizer=tokenizer,
+            video_processor=video_proc,
+            chat_template=getattr(tokenizer, "chat_template", None),
+        )
+
+
+    def recognize_page(self, image_path: str, page: int = 1) -> OCRResult:
+        # --- load image & compose messages (Qwen chat format) ---
+        messages = [
+            {"role": "system", "content": "You are a precise document OCR+layout engine."},
+            {"role": "user", "content": [
+                {"type": "image", "path": image_path},   # Qwen expects 'path'
+                {"type": "text", "text": PROMPT},
+            ]},
+        ]
+        chat = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        inputs = self.processor(
+            text=[chat],
+            images=[img],
+            videos=[],
             padding=True,
             return_tensors="pt",
-        ).to(_mdl.device)
+        ).to(self.model.device)
+
         with torch.no_grad():
-            out = _mdl.generate(**inputs, max_new_tokens=2500, do_sample=False)
-        trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out)]
-        resp = _proc.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
-        return OCRPage(model=self.name, page=page_num, text_md=resp, blocks=[])
+            eos = getattr(self.model.generation_config, "eos_token_id", None)
+            pad = getattr(self.model.generation_config, "pad_token_id", eos)
+            out = self.model.generate(
+                **inputs, max_new_tokens=3000, do_sample=False,
+                eos_token_id=eos, pad_token_id=pad, return_dict_in_generate=True
+            ).sequences
+
+        in_len = inputs.input_ids.size(1)
+        gen_only = out[:, in_len:] if out.size(1) > in_len else out[:, -1:]
+        md = self.processor.batch_decode(gen_only, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
+        return OCRResult(model=self.name, page=page, text_md=md, blocks=[])

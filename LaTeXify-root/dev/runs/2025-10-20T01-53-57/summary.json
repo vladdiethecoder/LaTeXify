@@ -1,0 +1,10 @@
+{
+  "pdf": null,
+  "pages": 9,
+  "run_dir": "dev/runs/2025-10-20T01-53-57",
+  "checks": {
+    "text_from_2_plus_models": false,
+    "consensus_len_over_200": true,
+    "has_structure_hint": true
+  }
+}
