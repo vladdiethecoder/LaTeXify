@@ -1,0 +1,50 @@
+{
+  "run_dir": "dev/runs/2025-10-20T16-15-18",
+  "pages": [
+    "page-0001.png",
+    "page-0002.png",
+    "page-0003.png",
+    "page-0004.png",
+    "page-0005.png",
+    "page-0006.png",
+    "page-0007.png",
+    "page-0008.png",
+    "page-0009.png"
+  ],
+  "models": [
+    "nanonets-ocr-s",
+    "nanonets-ocr2-3b",
+    "qwen2-vl-ocr-2b-instruct"
+  ],
+  "issues": {
+    "page-0001.png": [
+      "qwen2-vl-ocr-2b-instruct: low_jaccard(0.47)"
+    ],
+    "page-0002.png": [
+      "nanonets-ocr-s: struct_mismatch({'bullets': 1, 'code_fences': 0, 'eq_block': 6, 'eq_inline': 12, 'headings': 0})",
+      "nanonets-ocr2-3b: struct_mismatch({'bullets': 4, 'code_fences': 0, 'eq_block': 5, 'eq_inline': 12, 'headings': 2})"
+    ],
+    "page-0003.png": [
+      "nanonets-ocr-s: struct_mismatch({'bullets': 0, 'code_fences': 0, 'eq_block': 0, 'eq_inline': 24, 'headings': 0})",
+      "nanonets-ocr2-3b: struct_mismatch({'bullets': 0, 'code_fences': 0, 'eq_block': 26, 'eq_inline': 26, 'headings': 0})"
+    ],
+    "page-0005.png": [
+      "nanonets-ocr-s: low_jaccard(0.18)",
+      "nanonets-ocr2-3b: low_jaccard(0.18)"
+    ],
+    "page-0006.png": [
+      "nanonets-ocr2-3b: low_jaccard(0.39)"
+    ],
+    "page-0007.png": [
+      "nanonets-ocr-s: struct_mismatch({'bullets': -9, 'code_fences': 0, 'eq_block': 9, 'eq_inline': 29, 'headings': 0})",
+      "qwen2-vl-ocr-2b-instruct: low_jaccard(0.15), struct_mismatch({'bullets': -9, 'code_fences': 0, 'eq_block': 0, 'eq_inline': 0, 'headings': 0})"
+    ],
+    "page-0008.png": [
+      "nanonets-ocr-s: struct_mismatch({'bullets': 0, 'code_fences': 0, 'eq_block': 12, 'eq_inline': 23, 'headings': 0})"
+    ],
+    "page-0009.png": [
+      "nanonets-ocr-s: struct_mismatch({'bullets': 0, 'code_fences': 0, 'eq_block': 6, 'eq_inline': 15, 'headings': 0})"
+    ]
+  },
+  "notes": "Use this to drive future repair/suggestions by an agent."
+}

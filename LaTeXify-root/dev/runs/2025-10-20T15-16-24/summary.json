@@ -1,0 +1,191 @@
+{
+  "pdf": "data/inbox/Adv_Func_Assignment_1.pdf",
+  "pages": 9,
+  "run_dir": "dev/runs/2025-10-20T15-16-24",
+  "per_page": [
+    {
+      "page": "page-0001.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0001.png",
+          "text_len": 86
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0001.png",
+          "text_len": 86
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0001.png",
+          "text_len": 67
+        }
+      ]
+    },
+    {
+      "page": "page-0002.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0002.png",
+          "text_len": 886
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0002.png",
+          "text_len": 878
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0002.png",
+          "text_len": 1020
+        }
+      ]
+    },
+    {
+      "page": "page-0003.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0003.png",
+          "text_len": 1043
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0003.png",
+          "text_len": 1011
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0003.png",
+          "text_len": 2272
+        }
+      ]
+    },
+    {
+      "page": "page-0004.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0004.png",
+          "text_len": 1029
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0004.png",
+          "text_len": 925
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0004.png",
+          "text_len": 1089
+        }
+      ]
+    },
+    {
+      "page": "page-0005.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0005.png",
+          "text_len": 583
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0005.png",
+          "text_len": 537
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0005.png",
+          "text_len": 2085
+        }
+      ]
+    },
+    {
+      "page": "page-0006.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0006.png",
+          "text_len": 872
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0006.png",
+          "text_len": 1051
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0006.png",
+          "text_len": 2762
+        }
+      ]
+    },
+    {
+      "page": "page-0007.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0007.png",
+          "text_len": 1135
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0007.png",
+          "text_len": 981
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0007.png",
+          "text_len": 59
+        }
+      ]
+    },
+    {
+      "page": "page-0008.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0008.png",
+          "text_len": 729
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0008.png",
+          "text_len": 682
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0008.png",
+          "text_len": 989
+        }
+      ]
+    },
+    {
+      "page": "page-0009.png",
+      "results": [
+        {
+          "model": "nanonets-ocr2-3b",
+          "page": "page-0009.png",
+          "text_len": 511
+        },
+        {
+          "model": "nanonets-ocr-s",
+          "page": "page-0009.png",
+          "text_len": 474
+        },
+        {
+          "model": "qwen2-vl-ocr-2b-instruct",
+          "page": "page-0009.png",
+          "text_len": 605
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "text_from_2_plus_models": true,
+    "pages_processed": 9
+  }
+}

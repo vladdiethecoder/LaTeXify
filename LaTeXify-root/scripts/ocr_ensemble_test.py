@@ -1,106 +1,157 @@
-#!/usr/bin/env python3
-import json, os, argparse, pathlib, time, glob
+# scripts/ocr_ensemble_test.py
+from __future__ import annotations
+
+import argparse
+import json
+import time
 from pathlib import Path
-from rapidfuzz.distance import Levenshtein
+from typing import List, Union
+
+from dev.utils.pdf_to_images import pdf_to_images
 from dev.ocr_backends.nanonets_ocr2 import Backend as NN2
 from dev.ocr_backends.nanonets_s import Backend as NNS
-from dev.ocr_backends.dots_ocr import Backend as Dots
 from dev.ocr_backends.qwen2vl_ocr2b import Backend as Qwen
-from dev.ocr_backends.base import OCRResult
-from dev.utils.pdf_to_images import pdf_to_images
 
-IMG = Path("data/inbox/sample_page.png")
-RUN_DIR = Path("dev/runs") / time.strftime("%Y-%m-%dT%H-%M-%S")
-RUN_DIR.mkdir(parents=True, exist_ok=True)
+# -----------------------------------------------------------------------------
+# Run scaffolding
+# -----------------------------------------------------------------------------
+RUN_STAMP = time.strftime("%Y-%m-%dT%H-%M-%S")
+RUN_DIR = Path("dev/runs") / RUN_STAMP
 
-def find_first_pdf(folder: str) -> str | None:
-    matches = sorted(glob.glob(os.path.join(folder, "*.pdf")))
-    return matches[0] if matches else None
 
-def save(name, obj):
-    Path(RUN_DIR / f"{name}.json").write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+def _dump_markdown(run_dir: Path, model: str, page_png: Path, text_md: str) -> Path:
+    """
+    Save OCR text for this (model, page) into:
+      dev/runs/<stamp>/outputs/<model>/<page>.md
+    Returns the path written.
+    """
+    out_dir = run_dir / "outputs" / model
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / (page_png.name.replace(".png", ".md"))
+    out_path.write_text(text_md or "", encoding="utf-8")
+    return out_path
 
-def main():
-    import argparse, pathlib, os, glob, json, time
 
-    from dev.utils.pdf_to_images import pdf_to_images
-    from dev.ocr_backends.nanonets_ocr2 import Backend as NN2
-    from dev.ocr_backends.nanonets_s import Backend as NNS
-    try:
-        from dev.ocr_backends.dots_ocr import Backend as Dots
-        HAS_DOTS = True
-    except Exception as e:
-        print("dots.ocr unavailable (continuing without it):", e)
-        HAS_DOTS = False
-    from dev.ocr_backends.qwen2vl_ocr2b import Backend as Qwen
+def _load_first_pdf_if_needed(args_pdf: str | None) -> Path:
+    """
+    Resolve the PDF to process: either the one passed via --pdf or the first
+    *.pdf under data/inbox/.
+    """
+    if args_pdf:
+        return Path(args_pdf)
+    inbox = Path("data/inbox")
+    pdfs = sorted(inbox.glob("*.pdf"))
+    if not pdfs:
+        raise SystemExit("No PDF in data/inbox/. Pass --pdf <file.pdf>.")
+    return pdfs[0]
 
-    def find_first_pdf(folder: str) -> str | None:
-        matches = sorted(glob.glob(os.path.join(folder, "*.pdf")))
-        return matches[0] if matches else None
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", type=str, default=None, help="PDF file or directory containing PDFs")
-    ap.add_argument("--image", type=str, default=None, help="Single image to OCR (png/jpg)")
-    ap.add_argument("--dpi", type=int, default=400)
-    args = ap.parse_args()
+def _ensure_paths(xs: Union[List[str], List[Path]]) -> List[Path]:
+    """Coerce a list of strings/Paths to a list of Path objects."""
+    return [p if isinstance(p, Path) else Path(p) for p in xs]
 
-    ts = time.strftime("%Y-%m-%dT%H-%M-%S")
-    run_dir = pathlib.Path(f"dev/runs/{ts}")
-    run_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---------- choose input(s) ----------
-    if args.pdf:
-        target = args.pdf
-        if os.path.isdir(target):
-            first_pdf = find_first_pdf(target)
-            assert first_pdf, f"No PDFs found in directory: {target}"
-            target = first_pdf
-        assert os.path.exists(target), f"No such file: {target}"
-        img_paths = pdf_to_images(target, out_dir=run_dir / "pages", dpi=args.dpi, prefix="page")
-    elif args.image:
-        assert os.path.exists(args.image), f"No such file: {args.image}"
-        img_paths = [args.image]
-    else:
-        inbox_pdf = find_first_pdf("data/inbox")
-        assert inbox_pdf, "No PDF found. Provide --pdf or place a .pdf in data/inbox/"
-        img_paths = pdf_to_images(inbox_pdf, out_dir=run_dir / "pages", dpi=args.dpi, prefix="page")
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Rasterize a PDF to images and run multiple OCR backends; "
+                    "dump per-model markdown per page and a summary.json."
+    )
+    parser.add_argument(
+        "--pdf",
+        type=str,
+        default=None,
+        help="Path to PDF. Defaults to first in data/inbox/"
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=400,
+        help="Rasterization DPI for PDF pages (default: 400)"
+    )
+    args = parser.parse_args()
 
-    # ---------- backends ----------
-    backends = [NN2(), NNS(), Qwen()] + ([Dots()] if HAS_DOTS else [])
+    # Prepare run folders
+    (RUN_DIR / "pages").mkdir(parents=True, exist_ok=True)
+    (RUN_DIR / "outputs").mkdir(parents=True, exist_ok=True)
 
-    per_page = []
-    for img in img_paths:
-        page_results = []
-        for be in backends:
-            try:
-                r = be.recognize_page(img, page=1)
-                page_results.append({"model": be.name, "text": r.text_md, "blocks": len(r.blocks)})
-                print(f"{be.name:22s} page={pathlib.Path(img).name:>12s} len={len(r.text_md):5d}")
-            except Exception as e:
-                print(f"{be.name} FAILED on {img}: {e}")
-        per_page.append({"image": img, "results": page_results})
+    # Resolve PDF & rasterize to images
+    pdf_path = _load_first_pdf_if_needed(args.pdf)
+    page_paths = pdf_to_images(
+        pdf_path,
+        out_dir=RUN_DIR / "pages",
+        dpi=args.dpi,
+        prefix="page",
+    )
+    page_paths = _ensure_paths(page_paths)  # ensure Path objects for .name
 
-    # ---------- summary checks ----------
-    all_texts = [res["text"] for page in per_page for res in page["results"] if "text" in res]
-    consensus_len = max((len(t) for t in all_texts), default=0)
-    has_structure = any(("\\(" in t or "<table" in t or "\\begin{equation}" in t) for t in all_texts)
-    # consider pass if at least 2 distinct models produced text on any page
-    models_with_text = {res["model"] for page in per_page for res in page["results"] if len(res.get("text","")) > 0}
-    checks = {
-        "text_from_2_plus_models": len(models_with_text) >= 2,
-        "consensus_len_over_200": consensus_len > 200,
-        "has_structure_hint": bool(has_structure),
-    }
+    # Backends (DoTS left out in this environment for stability)
+    backends = [NN2(), NNS(), Qwen()]
 
+    # Build the top-level summary structure
     summary = {
-        "pdf": args.pdf,
-        "pages": len(img_paths),
-        "run_dir": str(run_dir),
-        "checks": checks,
+        "pdf": str(pdf_path),
+        "pages": len(page_paths),
+        "run_dir": str(RUN_DIR),
+        "per_page": [],  # [{page, results:[{model,page,text_len,out_md,blocks_json?,error?}]}]
+        "checks": {},
     }
-    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print("\n=== SUMMARY ===")
-    print(json.dumps(summary, indent=2))
+
+    # Per-page inference + saving
+    per_page = []
+    for page_png in page_paths:
+        page_rec = {"page": page_png.name, "results": []}
+
+        for be in backends:
+            rec = {"model": be.name, "page": page_png.name}
+            try:
+                # OCRResult(model, page, text_md, blocks)
+                r = be.recognize_page(str(page_png), page=1)
+                text_md = (getattr(r, "text_md", "") or "").strip()
+
+                # Save text now so the evaluator can pick it up later
+                out_md = _dump_markdown(RUN_DIR, be.name, page_png, text_md)
+
+                rec["text_len"] = len(text_md)
+                rec["out_md"] = str(out_md)
+
+                # If backend returned structured blocks, write a sidecar JSON
+                blocks = getattr(r, "blocks", None)
+                if blocks:
+                    blocks_path = out_md.with_suffix(".blocks.json")
+                    blocks_path.write_text(
+                        json.dumps(blocks, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    rec["blocks_json"] = str(blocks_path)
+
+                print(f"{be.name:23s} page={page_png.name} len={rec['text_len']:5d}")
+
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                rec["error"] = str(e)
+                print(f"{be.name:23s} FAILED on {page_png}: {e}")
+
+            page_rec["results"].append(rec)
+
+        per_page.append(page_rec)
+
+    # Simple checks (the heavy analysis is done in scripts/evaluate_run.py)
+    summary["per_page"] = per_page
+    summary["checks"] = {
+        "text_from_2_plus_models": any(
+            sum(1 for r in p["results"] if r.get("text_len", 0) > 0) >= 2
+            for p in per_page
+        ),
+        "pages_processed": len(per_page),
+    }
+
+    # Persist summary.json at the run root
+    (RUN_DIR / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
 
 if __name__ == "__main__":
     main()
