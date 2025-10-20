@@ -1,0 +1,21 @@
+# core HF stack
+transformers>=4.44
+accelerate
+# choose the right torch per https://pytorch.org/get-started/locally/
+# (for many CUDA systems pip will install a +cu121 wheel automatically)
+# you can install torch separately before this file if you prefer
+
+# quant + perf (optional)
+bitsandbytes>=0.43
+# flash-attn often installs best AFTER torch is installed; you can pin and install later
+# flash-attn
+
+# imaging & PDF helpers
+Pillow
+numpy
+opencv-python
+pymupdf
+pdf2image
+
+# serving (optional)
+vllm>=0.5.4
