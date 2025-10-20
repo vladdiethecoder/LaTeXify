@@ -1,7 +1,7 @@
 {
   "pdf": "data/inbox/Adv_Func_Assignment_1.pdf",
   "pages": 9,
-  "run_dir": "dev/runs/2025-10-20T15-16-24",
+  "run_dir": "dev/runs/2025-10-20T19-05-58",
   "per_page": [
     {
       "page": "page-0001.png",
@@ -9,17 +9,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0001.png",
-          "text_len": 86
+          "text_len": 86,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0001.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0001.png",
-          "text_len": 86
+          "text_len": 86,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0001.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0001.png",
-          "text_len": 67
+          "text_len": 67,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0001.md"
         }
       ]
     },
@@ -29,17 +32,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0002.png",
-          "text_len": 886
+          "text_len": 886,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0002.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0002.png",
-          "text_len": 878
+          "text_len": 878,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0002.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0002.png",
-          "text_len": 1020
+          "text_len": 1020,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0002.md"
         }
       ]
     },
@@ -49,17 +55,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0003.png",
-          "text_len": 1043
+          "text_len": 1043,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0003.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0003.png",
-          "text_len": 1011
+          "text_len": 1011,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0003.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0003.png",
-          "text_len": 2272
+          "text_len": 2272,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0003.md"
         }
       ]
     },
@@ -69,17 +78,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0004.png",
-          "text_len": 1029
+          "text_len": 1029,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0004.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0004.png",
-          "text_len": 925
+          "text_len": 925,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0004.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0004.png",
-          "text_len": 1089
+          "text_len": 1089,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0004.md"
         }
       ]
     },
@@ -89,17 +101,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0005.png",
-          "text_len": 583
+          "text_len": 583,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0005.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0005.png",
-          "text_len": 537
+          "text_len": 537,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0005.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0005.png",
-          "text_len": 2085
+          "text_len": 2085,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0005.md"
         }
       ]
     },
@@ -109,17 +124,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0006.png",
-          "text_len": 872
+          "text_len": 872,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0006.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0006.png",
-          "text_len": 1051
+          "text_len": 1051,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0006.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0006.png",
-          "text_len": 2762
+          "text_len": 2762,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0006.md"
         }
       ]
     },
@@ -129,17 +147,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0007.png",
-          "text_len": 1135
+          "text_len": 1135,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0007.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0007.png",
-          "text_len": 981
+          "text_len": 981,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0007.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0007.png",
-          "text_len": 59
+          "text_len": 59,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0007.md"
         }
       ]
     },
@@ -149,17 +170,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0008.png",
-          "text_len": 729
+          "text_len": 729,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0008.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0008.png",
-          "text_len": 682
+          "text_len": 682,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0008.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0008.png",
-          "text_len": 989
+          "text_len": 989,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0008.md"
         }
       ]
     },
@@ -169,17 +193,20 @@
         {
           "model": "nanonets-ocr2-3b",
           "page": "page-0009.png",
-          "text_len": 511
+          "text_len": 511,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr2-3b/page-0009.md"
         },
         {
           "model": "nanonets-ocr-s",
           "page": "page-0009.png",
-          "text_len": 474
+          "text_len": 474,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/nanonets-ocr-s/page-0009.md"
         },
         {
           "model": "qwen2-vl-ocr-2b-instruct",
           "page": "page-0009.png",
-          "text_len": 605
+          "text_len": 605,
+          "out_md": "dev/runs/2025-10-20T19-05-58/outputs/qwen2-vl-ocr-2b-instruct/page-0009.md"
         }
       ]
     }
