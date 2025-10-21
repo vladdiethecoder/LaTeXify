@@ -1,203 +1,221 @@
 # dev/chunking/page_aware_chunker.py
 from __future__ import annotations
+
+import json
+import re
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import json
-import math
+from typing import Dict, Iterable, List, Tuple
 
-from PIL import Image
-from pydantic import BaseModel
+# ---------------------------
+# Public entry point
+# ---------------------------
 
-from transformers import AutoProcessor, AutoModelForTokenClassification, pipeline
-
-# HURIDOCS pdf document layout analysis (HF pipeline):
-# Model card shows token classification outputs per, e.g., paragraphs, headers, tables, figures, etc.
-# https://huggingface.co/HURIDOCS/pdf-document-layout-analysis
-MODEL_ID = "HURIDOCS/pdf-document-layout-analysis"
-
-# ---- Data structures ----
-
-@dataclass
-class Region:
-    label: str
-    bbox: Tuple[int, int, int, int]  # (x1, y1, x2, y2)
-    score: float
-
-@dataclass
-class Chunk:
-    chunk_id: str
-    page: int
-    label: str
-    bbox: Tuple[int, int, int, int]
-    text: str
-
-class ChunkPack(BaseModel):
-    pdf_path: str
-    run_dir: str
-    chunks: List[Dict[str, Any]]
-
-# ---- Core helpers ----
-
-def _iou(a: Tuple[int,int,int,int], b: Tuple[int,int,int,int]) -> float:
-    ax1, ay1, ax2, ay2 = a
-    bx1, by1, bx2, by2 = b
-    xi1, yi1 = max(ax1, bx1), max(ay1, by1)
-    xi2, yi2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0, xi2 - xi1), max(0, yi2 - yi1)
-    inter = iw * ih
-    area_a = (ax2 - ax1) * (ay2 - ay1)
-    area_b = (bx2 - bx1) * (by2 - by1)
-    union = area_a + area_b - inter if (area_a + area_b - inter) > 0 else 1.0
-    return inter / union
-
-def _center(b: Tuple[int,int,int,int]) -> Tuple[float,float]:
-    x1,y1,x2,y2 = b
-    return ((x1+x2)/2.0, (y1+y2)/2.0)
-
-def _closest_region(
-    text_bbox: Tuple[int,int,int,int],
-    regions: List[Region],
-    iou_thresh: float = 0.05
-) -> Optional[Region]:
-    # Prefer overlap; fallback to nearest center
-    best: Optional[Region] = None
-    best_score = -1.0
-    cx, cy = _center(text_bbox)
-    for r in regions:
-        ov = _iou(text_bbox, r.bbox)
-        if ov >= iou_thresh and ov > best_score:
-            best, best_score = r, ov
-    if best is not None:
-        return best
-    # distance fallback
-    dmin, dreg = float("inf"), None
-    for r in regions:
-        rx, ry = _center(r.bbox)
-        d = math.hypot(cx - rx, cy - ry)
-        if d < dmin:
-            dmin, dreg = d, r
-    return dreg
-
-# ---- Layout inference ----
-
-def _load_layout_pipeline():
-    # HF pipeline for token classification over PDF-page images
-    return pipeline(
-        task="token-classification",
-        model=MODEL_ID,
-        aggregation_strategy="simple"  # merge sub-tokens into entity spans
-    )
-
-def _infer_regions_on_page(img_path: Path, nlp) -> List[Region]:
-    im = Image.open(img_path).convert("RGB")
-    # Many layout models return entities with 'entity_group' + 'box'/'bbox' in normalized coords
-    out = nlp(im)
-    regions: List[Region] = []
-    for i, ent in enumerate(out):
-        label = ent.get("entity_group") or ent.get("label") or "other"
-        score = float(ent.get("score", 0.0))
-        # Expect xyxy in pixel coords if available; otherwise map from normalized boxes
-        box = ent.get("box") or ent.get("bbox")
-        if isinstance(box, dict) and {"xmin","ymin","xmax","ymax"} <= set(box.keys()):
-            x1, y1, x2, y2 = int(box["xmin"]), int(box["ymin"]), int(box["xmax"]), int(box["ymax"])
-        elif isinstance(box, (list, tuple)) and len(box) == 4:
-            x1, y1, x2, y2 = map(int, box)
-        else:
-            # If only normalized coords exist, estimate via image size
-            w, h = im.size
-            nx1, ny1 = float(ent.get("start", 0.0)), float(ent.get("top", 0.0))
-            nx2, ny2 = float(ent.get("end", 1.0)), float(ent.get("bottom", 1.0))
-            x1, y1, x2, y2 = int(nx1*w), int(ny1*h), int(nx2*w), int(ny2*h)
-        regions.append(Region(label=label, bbox=(x1,y1,x2,y2), score=score))
-    return regions
-
-# ---- Chunk construction ----
-
-def _load_page_text_blocks(run_dir: Path, page_png: Path) -> List[Dict[str, Any]]:
+def build_chunks_for_run(
+    run_dir: Path,
+    pdf_path: Path,
+    *,
+    max_chars: int = 1200,
+    overlap: int = 150,
+    min_par_len: int = 20,
+    write_path: Path | None = None,
+) -> Path:
     """
-    Reads model outputs dumped by scripts/ocr_ensemble_test.py:
-      dev/runs/<stamp>/outputs/<model>/<page>.md
-      dev/runs/<stamp>/outputs/<model>/<page>.blocks.json (optional with bboxes)
-    Returns a list of "blocks" with approximate bboxes when available.
+    Build page-aware chunks from OCR outputs for a given run directory.
+
+    Inputs:
+      - run_dir: dev/runs/<STAMP>
+        expects:
+          pages/               # page images (not required for chunking)
+          outputs/<model>/*.md # OCR per-page Markdown
+      - pdf_path: original source (recorded in metadata only)
+      - max_chars: target max characters per chunk
+      - overlap: character overlap between adjacent chunks
+      - min_par_len: minimum paragraph length to keep (in characters)
+      - write_path: override output jsonl path; defaults to run_dir/'chunks.jsonl'
+
+    Output:
+      - JSONL at run_dir/chunks.jsonl with fields:
+          {id, page, page_idx, text, char_start, char_end,
+           source_files, models, run_dir, pdf, strategy}
     """
-    blocks: List[Dict[str,Any]] = []
-    outputs_dir = run_dir / "outputs"
-    for model_dir in outputs_dir.iterdir():
+    run_dir = Path(run_dir)
+    outputs_root = run_dir / "outputs"
+    if not outputs_root.exists():
+        raise FileNotFoundError(f"No OCR outputs found under {outputs_root}")
+
+    # Collect per-page, across all models
+    per_page_texts: Dict[str, Dict[str, str]] = _gather_texts(outputs_root)
+
+    # Build consensus per page (choose longest non-empty text as the base)
+    consensus: Dict[str, Tuple[str, List[Path], List[str]]] = {}
+    for page_name, model_map in sorted(per_page_texts.items()):
+        items = [(m, t) for m, t in model_map.items() if _nonempty(t)]
+        if not items:
+            continue
+        # choose the longest text as consensus seed
+        items.sort(key=lambda kv: len(kv[1]), reverse=True)
+        best_model, best_text = items[0]
+        file_paths = _page_files_for_page(outputs_root, page_name)
+        consensus[page_name] = (best_text, file_paths, list(model_map.keys()))
+
+    # Chunk per page
+    chunks: List[Dict] = []
+    page_to_idx = _page_index_map(run_dir)
+    counter = 0
+    for page_name, (text, files, models) in sorted(consensus.items(), key=lambda kv: kv[0]):
+        page_idx = page_to_idx.get(page_name, None)
+        paragraphs = _segment_paragraphs(text)
+        paragraphs = [p for p in paragraphs if len(p.strip()) >= min_par_len]
+
+        # merge paragraphs into rolling windows with overlap
+        for chunk_txt, span in _rolling_pack(paragraphs, max_chars=max_chars, overlap=overlap):
+            char_start, char_end = span
+            chunks.append({
+                "id": f"chunk-{counter:06d}",
+                "page": page_name,
+                "page_idx": page_idx,
+                "text": chunk_txt,
+                "char_start": char_start,
+                "char_end": char_end,
+                "source_files": [str(p) for p in files],
+                "models": models,
+                "run_dir": str(run_dir),
+                "pdf": str(pdf_path),
+                "strategy": {
+                    "type": "page_aware_longest_text",
+                    "max_chars": max_chars,
+                    "overlap": overlap,
+                    "min_par_len": min_par_len,
+                },
+            })
+            counter += 1
+
+    if not chunks:
+        raise RuntimeError("No chunks produced. Check OCR outputs exist and contain text.")
+
+    out_path = write_path or (run_dir / "chunks.jsonl")
+    _write_jsonl(out_path, (c for c in chunks))
+    return out_path
+
+
+# ---------------------------
+# Helpers
+# ---------------------------
+
+def _gather_texts(outputs_root: Path) -> Dict[str, Dict[str, str]]:
+    """
+    Returns:
+      {page_name: {model_name: text_md}}
+    """
+    per_page: Dict[str, Dict[str, str]] = {}
+    for model_dir in sorted(outputs_root.glob("*")):
         if not model_dir.is_dir():
             continue
-        md_file = model_dir / page_png.name.replace(".png", ".md")
-        if not md_file.exists():
-            continue
-        text = md_file.read_text(encoding="utf-8").strip()
-        if not text:
-            continue
-        # Try sidecar blocks with boxes
-        sidecar = md_file.with_suffix(".blocks.json")
-        if sidecar.exists():
-            try:
-                obj = json.loads(sidecar.read_text(encoding="utf-8"))
-                for b in obj:
-                    t = (b.get("text") or "").strip()
-                    bb = b.get("bbox") or b.get("box")
-                    if t and isinstance(bb, (list, tuple)) and len(bb) == 4:
-                        blocks.append({"text": t, "bbox": tuple(map(int, bb)), "model": model_dir.name})
-            except Exception:
-                pass
-        if not any(b.get("model") == model_dir.name for b in blocks):
-            # Fallback: one big block without bbox
-            blocks.append({"text": text, "bbox": None, "model": model_dir.name})
-    return blocks
+        model_name = model_dir.name
+        for md_path in sorted(model_dir.glob("*.md")):
+            page_name = md_path.name.replace(".md", ".png")
+            txt = md_path.read_text(encoding="utf-8", errors="ignore")
+            per_page.setdefault(page_name, {})[model_name] = txt
+    return per_page
 
-def build_page_chunks(run_dir: Path, page_idx: int, page_png: Path, nlp) -> List[Chunk]:
-    regions = _infer_regions_on_page(page_png, nlp)
-    text_blocks = _load_page_text_blocks(run_dir, page_png)
-    chunks: List[Chunk] = []
 
-    # If no explicit bboxes for blocks, we still create chunks per model per page
-    # and attach a best-guess region (closest by center == page center).
-    page_center_region = None
-    if regions:
-        # choose largest region as default for bbox-less blocks
-        page_center_region = max(regions, key=lambda r: (r.bbox[2]-r.bbox[0])*(r.bbox[3]-r.bbox[1]))
-
-    for bi, tb in enumerate(text_blocks):
-        if tb["bbox"] is not None and regions:
-            reg = _closest_region(tuple(tb["bbox"]), regions) or page_center_region
-        else:
-            reg = page_center_region
-        label = reg.label if reg else "page"
-        bbox = reg.bbox if reg else (0,0,0,0)
-        text = tb["text"]
-        chunks.append(
-            Chunk(
-                chunk_id=f"p{page_idx:04d}_b{bi:04d}",
-                page=page_idx,
-                label=label,
-                bbox=bbox,
-                text=text,
-            )
-        )
-    return chunks
-
-def build_chunks_for_run(run_dir: Path, pdf_path: Path) -> Path:
+def _page_files_for_page(outputs_root: Path, page_name_png: str) -> List[Path]:
     """
-    Given a run directory (with /pages and /outputs), produce layout-aware chunks and
-    write them to dev/runs/<stamp>/chunks.jsonl
+    Return all OCR output files (.md) that correspond to page_name_png across models.
+    """
+    md_name = page_name_png.replace(".png", ".md")
+    paths: List[Path] = []
+    for model_dir in sorted(outputs_root.glob("*")):
+        candidate = model_dir / md_name
+        if candidate.exists():
+            paths.append(candidate)
+    return paths
+
+
+def _page_index_map(run_dir: Path) -> Dict[str, int]:
+    """
+    Map page file name -> 1-based page index, using the pages/ directory.
     """
     pages_dir = run_dir / "pages"
-    page_paths = sorted(pages_dir.glob("*.png"))
-    if not page_paths:
-        raise SystemExit(f"No page images in {pages_dir}")
+    mapping: Dict[str, int] = {}
+    if pages_dir.exists():
+        pages = sorted(pages_dir.glob("*.png"))
+        for i, p in enumerate(pages, start=1):
+            mapping[p.name] = i
+    return mapping
 
-    nlp = _load_layout_pipeline()
-    all_chunks: List[Chunk] = []
-    for idx, page_png in enumerate(page_paths, start=1):
-        page_chunks = build_page_chunks(run_dir, idx, page_png, nlp)
-        all_chunks.extend(page_chunks)
 
-    out = run_dir / "chunks.jsonl"
-    with out.open("w", encoding="utf-8") as f:
-        for ch in all_chunks:
-            f.write(json.dumps(asdict(ch), ensure_ascii=False) + "\n")
-    return out
+_PARA_SPLIT_RE = re.compile(r"\n{2,}")  # blank-line separated paragraphs
+_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6}\s+|[A-Z][A-Z0-9 \-]{4,}:|[A-Z][\w \-]{4,}$)")
+
+def _segment_paragraphs(text: str) -> List[str]:
+    """
+    Segment simple Markdown-ish text into paragraphs, nudging around headings.
+    """
+    raw_pars = [p.strip() for p in _PARA_SPLIT_RE.split(text or "") if p.strip()]
+    paragraphs: List[str] = []
+    buff: List[str] = []
+    for p in raw_pars:
+        if _HEADING_RE.match(p) and buff:
+            # flush previous group at heading boundary
+            paragraphs.append("\n\n".join(buff).strip())
+            buff = [p]
+        else:
+            buff.append(p)
+    if buff:
+        paragraphs.append("\n\n".join(buff).strip())
+    return paragraphs
+
+
+def _rolling_pack(paragraphs: List[str], *, max_chars: int, overlap: int) -> Iterable[Tuple[str, Tuple[int, int]]]:
+    """
+    Produce character-windowed chunks with overlap from a list of paragraphs.
+
+    Yields:
+      (chunk_text, (global_char_start, global_char_end))
+      where global_* are positions in the concatenated page text.
+    """
+    # Work in concatenated text space to record a page-relative span
+    cat = ""
+    spans: List[Tuple[int, int]] = []  # span per paragraph
+    cursor = 0
+    for p in paragraphs:
+        start = cursor
+        cat += (p + "\n\n")
+        cursor = len(cat)
+        spans.append((start, cursor))
+
+    i = 0
+    while i < len(paragraphs):
+        # pack as many paragraphs as we can into max_chars
+        start_span = spans[i][0]
+        j = i
+        while j < len(paragraphs) and (spans[j][1] - start_span) <= max_chars:
+            j += 1
+        # j is first paragraph that doesn't fit
+        end_span = spans[j - 1][1]
+        text = cat[start_span:end_span].strip()
+        yield (text, (start_span, end_span))
+
+        if j >= len(paragraphs):
+            break
+        # compute next window start using overlap
+        window_len = end_span - start_span
+        target_next_start = end_span - min(overlap, max(0, window_len // 3))
+        # advance i until paragraph boundary crosses target_next_start
+        k = i
+        while k < len(paragraphs) and spans[k][0] < target_next_start:
+            k += 1
+        i = max(k, i + 1)  # ensure progress even if paragraphs are very long
+
+
+def _write_jsonl(path: Path, rows: Iterable[Dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _nonempty(s: str | None) -> bool:
+    return bool(s and s.strip())
