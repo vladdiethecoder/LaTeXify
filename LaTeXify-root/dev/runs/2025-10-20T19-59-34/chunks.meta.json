@@ -1,0 +1,10 @@
+{
+  "pdf": "data/inbox/Adv_Func_Assignment_1.pdf",
+  "pages": 9,
+  "chunks": 35,
+  "params": {
+    "max_chars": 800,
+    "overlap": 120,
+    "min_par_len": 60
+  }
+}

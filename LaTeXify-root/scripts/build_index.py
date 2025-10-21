@@ -1,84 +1,66 @@
 # scripts/build_index.py
 from __future__ import annotations
-
-import argparse
-import json
+import argparse, json
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Dict
 
-import faiss  # faiss-cpu
-from sentence_transformers import SentenceTransformer
 import numpy as np
+import faiss  # type: ignore
+from sentence_transformers import SentenceTransformer
 
-def _read_chunks(chunks_path: Path) -> List[dict]:
-    rows: List[dict] = []
+def _read_chunks(chunks_path: Path) -> List[Dict]:
+    items: List[Dict] = []
     with chunks_path.open("r", encoding="utf-8") as f:
         for line in f:
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
-
-def _encode_texts(texts: List[str], model_name: str, device: str | None) -> np.ndarray:
-    model = SentenceTransformer(model_name, device=device or "cpu")
-    # produce L2-normalized embeddings (cosine-ready for IP index)
-    embs = model.encode(
-        texts,
-        batch_size=64,
-        convert_to_numpy=True,
-        normalize_embeddings=True,  # sentence-transformers handles L2 norm
-        show_progress_bar=True,
-    )
-    return embs
+            line = line.strip()
+            if line:
+                items.append(json.loads(line))
+    return items
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--run_dir", required=True, type=str)
-    ap.add_argument("--chunks", type=str, default=None, help="Optional path; defaults to <run_dir>/chunks.jsonl")
-    ap.add_argument("--encoder", type=str, default="sentence-transformers/all-MiniLM-L6-v2",
-                    help="Sentence-Transformers model id")
-    ap.add_argument("--device", type=str, default=None, help="auto | cpu | cuda")
-    args = ap.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--run_dir", required=True)
+    p.add_argument("--encoder", default="sentence-transformers/all-MiniLM-L6-v2")
+    p.add_argument("--batch_size", type=int, default=64)
+    args = p.parse_args()
 
     run_dir = Path(args.run_dir)
-    chunks_path = Path(args.chunks) if args.chunks else (run_dir / "chunks.jsonl")
+    chunks_path = run_dir / "chunks.jsonl"
     if not chunks_path.exists():
         raise FileNotFoundError(f"No chunks.jsonl at {chunks_path}. Run scripts.build_chunks first.")
 
-    rows = _read_chunks(chunks_path)
-    if not rows:
-        raise RuntimeError("chunks.jsonl is empty")
+    chunks = _read_chunks(chunks_path)
+    texts = [c.get("text", "") for c in chunks]
+    model = SentenceTransformer(args.encoder)
+    # This model maps sentences/paragraphs to 384-dim vectors (per its card).
+    # We'll use normalized embeddings + IndexFlatIP.
+    emb = model.encode(texts, batch_size=args.batch_size, normalize_embeddings=True, convert_to_numpy=True)
+    dim = emb.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    index.add(emb)
 
-    texts = [r["text"] for r in rows]
-    embs = _encode_texts(texts, model_name=args.encoder, device=args.device)
-
-    dim = embs.shape[1]
-    index = faiss.IndexFlatIP(dim)  # cosine via IP on normalized vectors
-    index.add(embs)
-
-    # persist
     faiss_path = run_dir / "faiss.index"
     faiss.write_index(index, str(faiss_path))
 
     meta = {
         "encoder": args.encoder,
         "dim": dim,
-        "normalize": True,
-        "count": len(rows),
-        "chunks_path": str(chunks_path),
-        "id_to_ref": [
+        "count": len(chunks),
+        "chunks_meta": [
             {
-                "id": rows[i]["id"],
-                "page": rows[i]["page"],
-                "page_idx": rows[i].get("page_idx"),
-                "char_start": rows[i]["char_start"],
-                "char_end": rows[i]["char_end"],
+                "chunk_id": c["chunk_id"],
+                "page_num": c["page_num"],
+                "page_name": c["page_name"],
+                "source_image": c["source_image"],
+                "model": c.get("model", "unknown"),
+                "start": c.get("start_char_in_page", 0),
+                "end": c.get("end_char_in_page", 0),
             }
-            for i in range(len(rows))
+            for c in chunks
         ],
     }
-    (run_dir / "faiss.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {faiss_path}")
-    print(f"Wrote {run_dir/'faiss.meta.json'}")
+    (run_dir / "faiss.meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"Wrote {faiss_path} and faiss.meta.json (dim={dim}, n={len(chunks)})")
 
 if __name__ == "__main__":
     main()

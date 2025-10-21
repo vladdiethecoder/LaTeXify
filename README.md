@@ -1,8 +1,4 @@
 # LaTeXify
-Okay, thank you for the clarification! That significantly refines the understanding of LaTeXify's purpose.
-
-Based on your description and the project files, here's a more accurate summary:
-
 LaTeXify is designed as a multimodal Retrieval-Augmented Generation (RAG) pipeline with the ultimate goal of transforming rough drafts (including handwritten notes, typed text, images, and PDFs) of academic coursework or reports into high-quality, publication-ready LaTeX documents 📚✨.
 
 Its core focus is not merely searchable digitization, but sophisticated academic typesetting aiming for:

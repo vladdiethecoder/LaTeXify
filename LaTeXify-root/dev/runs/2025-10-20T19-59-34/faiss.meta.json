@@ -1,0 +1,322 @@
+{
+  "encoder": "sentence-transformers/all-MiniLM-L6-v2",
+  "dim": 384,
+  "count": 35,
+  "chunks_meta": [
+    {
+      "chunk_id": "p0002-para000-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 111
+    },
+    {
+      "chunk_id": "p0002-para001-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 113,
+      "end": 225
+    },
+    {
+      "chunk_id": "p0002-para002-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 227,
+      "end": 330
+    },
+    {
+      "chunk_id": "p0002-para003-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 332,
+      "end": 490
+    },
+    {
+      "chunk_id": "p0002-para004-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 492,
+      "end": 589
+    },
+    {
+      "chunk_id": "p0002-para005-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 591,
+      "end": 683
+    },
+    {
+      "chunk_id": "p0002-para006-span000",
+      "page_num": 2,
+      "page_name": "page-0002.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0002.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 685,
+      "end": 796
+    },
+    {
+      "chunk_id": "p0003-para000-span000",
+      "page_num": 3,
+      "page_name": "page-0003.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0003.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 62
+    },
+    {
+      "chunk_id": "p0003-para001-span000",
+      "page_num": 3,
+      "page_name": "page-0003.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0003.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 64,
+      "end": 129
+    },
+    {
+      "chunk_id": "p0004-para000-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 200
+    },
+    {
+      "chunk_id": "p0004-para001-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 202,
+      "end": 296
+    },
+    {
+      "chunk_id": "p0004-para002-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 298,
+      "end": 391
+    },
+    {
+      "chunk_id": "p0004-para003-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 393,
+      "end": 479
+    },
+    {
+      "chunk_id": "p0004-para004-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 481,
+      "end": 573
+    },
+    {
+      "chunk_id": "p0004-para005-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 575,
+      "end": 662
+    },
+    {
+      "chunk_id": "p0004-para006-span000",
+      "page_num": 4,
+      "page_name": "page-0004.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0004.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 664,
+      "end": 750
+    },
+    {
+      "chunk_id": "p0005-para000-span000",
+      "page_num": 5,
+      "page_name": "page-0005.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0005.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 110
+    },
+    {
+      "chunk_id": "p0005-para001-span000",
+      "page_num": 5,
+      "page_name": "page-0005.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0005.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 112,
+      "end": 219
+    },
+    {
+      "chunk_id": "p0005-para002-span000",
+      "page_num": 5,
+      "page_name": "page-0005.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0005.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 221,
+      "end": 319
+    },
+    {
+      "chunk_id": "p0005-para003-span000",
+      "page_num": 5,
+      "page_name": "page-0005.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0005.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 321,
+      "end": 433
+    },
+    {
+      "chunk_id": "p0006-para000-span000",
+      "page_num": 6,
+      "page_name": "page-0006.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0006.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 469
+    },
+    {
+      "chunk_id": "p0006-para001-span000",
+      "page_num": 6,
+      "page_name": "page-0006.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0006.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 471,
+      "end": 850
+    },
+    {
+      "chunk_id": "p0007-para000-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 63
+    },
+    {
+      "chunk_id": "p0007-para001-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 65,
+      "end": 159
+    },
+    {
+      "chunk_id": "p0007-para002-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 161,
+      "end": 255
+    },
+    {
+      "chunk_id": "p0007-para003-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 257,
+      "end": 388
+    },
+    {
+      "chunk_id": "p0007-para004-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 390,
+      "end": 469
+    },
+    {
+      "chunk_id": "p0007-para005-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 471,
+      "end": 600
+    },
+    {
+      "chunk_id": "p0007-para006-span000",
+      "page_num": 7,
+      "page_name": "page-0007.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0007.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 602,
+      "end": 662
+    },
+    {
+      "chunk_id": "p0008-para000-span000",
+      "page_num": 8,
+      "page_name": "page-0008.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0008.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 183
+    },
+    {
+      "chunk_id": "p0008-para001-span000",
+      "page_num": 8,
+      "page_name": "page-0008.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0008.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 185,
+      "end": 325
+    },
+    {
+      "chunk_id": "p0008-para002-span000",
+      "page_num": 8,
+      "page_name": "page-0008.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0008.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 327,
+      "end": 391
+    },
+    {
+      "chunk_id": "p0008-para003-span000",
+      "page_num": 8,
+      "page_name": "page-0008.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0008.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 393,
+      "end": 469
+    },
+    {
+      "chunk_id": "p0009-para000-span000",
+      "page_num": 9,
+      "page_name": "page-0009.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0009.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 0,
+      "end": 302
+    },
+    {
+      "chunk_id": "p0009-para001-span000",
+      "page_num": 9,
+      "page_name": "page-0009.png",
+      "source_image": "dev/runs/2025-10-20T19-59-34/pages/page-0009.png",
+      "model": "nanonets-ocr2-3b",
+      "start": 304,
+      "end": 369
+    }
+  ]
+}
