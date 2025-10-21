@@ -5,32 +5,17 @@ import io
 import json
 import os
 import re
-import time
+import textwrap
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from PIL import Image
 
 
-# ====== Public API ======
-
-@dataclass
-class Chunk:
-    id: str
-    page: int
-    label: str                     # e.g., TEXT, TITLE, LIST, TABLE, FIGURE
-    text: str
-    source_image: str              # path to page image
-    ocr_model: str                 # which OCR file we used (if known)
-    bbox: Optional[Tuple[int, int, int, int]] = None  # (x1, y1, x2, y2) in pixel coords
-    meta: Optional[Dict[str, Any]] = None             # freeform
-
-    def to_json(self) -> str:
-        rec = asdict(self)
-        return json.dumps(rec, ensure_ascii=False)
-
+# ---------------------------
+# Public API
+# ---------------------------
 
 def build_chunks_for_run(
     run_dir: Path,
@@ -38,322 +23,311 @@ def build_chunks_for_run(
     max_chars: int = 800,
     overlap: int = 120,
     min_par_len: int = 60,
-) -> List[Chunk]:
+) -> Path:
     """
-    Create page-aware chunks by:
-      1) selecting OCR text per page (pref: nanonets-ocr2-3b → nanonets-ocr-s → qwen2...),
-      2) calling HURIDOCS layout API on each page image (HTTP),
-      3) mapping OCR text to layout blocks,
-      4) producing length-bounded overlapping chunks.
-
-    Falls back to simple, heuristic paragraphs if the API is not reachable.
-    Returns the full list of chunks and ALSO writes dev/runs/<stamp>/chunks.jsonl.
+    Build page-aware chunks for a run.
+    • Tries HURIDOCS layout API (POST / with multipart 'file' = PDF).
+    • Falls back to heuristic paragraph segmentation if API is absent.
+    • Produces: <run_dir>/chunks.jsonl
     """
-    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
     pages_dir = run_dir / "pages"
     if not pages_dir.exists():
         raise FileNotFoundError(f"No page images in {pages_dir}")
 
-    # Enumerate page images (sorted lexicographically -> page-0001.png, ...)
-    page_images = sorted(pages_dir.glob("page-*.png"))
-    if not page_images:
-        raise FileNotFoundError("No page images found (expected page-*.png).")
+    # Try HURIDOCS once per PDF (cache JSON).
+    layout_cache_dir = run_dir / "layout"
+    layout_cache_dir.mkdir(parents=True, exist_ok=True)
+    layout_cache = layout_cache_dir / "huridocs_layout.json"
 
-    # Load outputs/*/<page>.md so we can pick best OCR per page
-    ocr_map = _index_ocr_outputs(run_dir)
+    layout = None
+    try:
+        layout = _fetch_layout_with_cache(pdf_path, layout_cache)
+    except Exception as e:
+        print(f"[chunker] Layout API error: {e} — using heuristic fallback.")
 
-    # Prepare HURIDOCS endpoint/config
-    api_url = os.getenv("HURIDOCS_API_URL", "http://127.0.0.1:5060")
-    api_key = os.getenv("HURIDOCS_API_KEY")  # optional; service may be unauthenticated locally
+    # Load OCR outputs (pick best available per page)
+    per_page_text: Dict[str, str] = _collect_page_texts(run_dir)
 
-    all_chunks: List[Chunk] = []
-    for idx, img_path in enumerate(page_images, start=1):
-        page_no = _page_number_from_name(img_path.name) or idx
-        ocr_model, page_text = _select_page_text(ocr_map, img_path.name)
+    # Turn layout into block-level texts where possible; otherwise heuristic
+    records: List[Dict[str, Any]] = []
+    pages = sorted(pages_dir.glob("page-*.png"))
 
-        # Try layout over HTTP, then fallback
-        blocks = None
-        try:
-            blocks = _huridocs_analyze_page(api_url, api_key, img_path)
-        except Exception as e:
-            print(f"[chunker] Layout API error on {img_path.name}: {e} — using heuristic fallback.")
+    if layout:
+        # Parse into a standard: Dict[page_index -> List[BlockCandidate]]
+        parsed = _parse_huridocs_layout(layout)
+        for page_idx, page_png in enumerate(pages, start=1):
+            page_key = page_png.name
+            page_text = per_page_text.get(page_key, "")
+            blocks = parsed.get(page_idx, [])
+            if not blocks:
+                # Fallback for that page only
+                records.extend(_heuristic_chunks(page_text, page_idx, page_png, max_chars, overlap, min_par_len))
+            else:
+                # Use blocks as paragraph-ish anchors; chunk inside them
+                block_texts = _split_text_by_blocks(page_text, len(blocks)) if page_text else []
+                for bi, bt in enumerate(block_texts or []):
+                    for ch in _sliding_chunks(bt, max_chars, overlap, min_par_len):
+                        records.append(_mk_rec(ch, page_idx, page_png, block_id=bi))
+    else:
+        # Global fallback
+        for page_idx, page_png in enumerate(pages, start=1):
+            page_key = page_png.name
+            page_text = per_page_text.get(page_key, "")
+            records.extend(_heuristic_chunks(page_text, page_idx, page_png, max_chars, overlap, min_par_len))
 
-        if not blocks:
-            # Make a single TEXT block spanning the page; heuristics will chunk the text.
-            blocks = [{
-                "label": "TEXT",
-                "bbox": None,
-                "lines": _split_lines(page_text),
-            }]
-
-        # Convert blocks + OCR text into chunks, bounded by max_chars/overlap
-        page_chunks = _blocks_to_chunks(
-            blocks=blocks,
-            page_text=page_text,
-            page_no=page_no,
-            img_path=img_path,
-            ocr_model=ocr_model,
-            max_chars=max_chars,
-            overlap=overlap,
-            min_par_len=min_par_len,
-        )
-        all_chunks.extend(page_chunks)
-
-    # Write chunks.jsonl at run root
+    # Write JSONL with stable IDs
     out_path = run_dir / "chunks.jsonl"
     with out_path.open("w", encoding="utf-8") as f:
-        for ch in all_chunks:
-            f.write(ch.to_json() + "\n")
-    print(f"Wrote {out_path} with {len(all_chunks)} chunks")
+        for i, rec in enumerate(records):
+            rec.setdefault("id", f"chunk_{i:06d}")
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
-    return all_chunks
+    print(f"Wrote {out_path} with {len(records)} chunks")
+    return out_path
 
 
-# ====== HURIDOCS HTTP client ======
+# ---------------------------
+# Data structures
+# ---------------------------
 
-def _huridocs_analyze_page(
-    api_url: str,
-    api_key: Optional[str],
-    page_image: Path,
-    timeout: int = 60,
-) -> List[Dict[str, Any]]:
+@dataclass
+class BlockCandidate:
+    bbox: Tuple[float, float, float, float]
+    label: str = "block"
+    score: Optional[float] = None
+
+
+# ---------------------------
+# HURIDOCS integration
+# ---------------------------
+
+def _fetch_layout_with_cache(pdf_path: Path, cache_path: Path) -> Optional[Dict[str, Any]]:
     """
-    Calls HURIDOCS PDF Document Layout Analysis API (VGT-backed) for a single *image* page.
-    Expected response (per their examples) is a list of blocks with at least:
-      - label: str (TEXT, TITLE, LIST, TABLE, FIGURE, etc.)
-      - bbox: [x1, y1, x2, y2]  (pixel coordinates)
-      - lines: [ "text line 1", "text line 2", ... ]    (optional; we’ll be robust if absent)
-
-    This function accepts images because our pipeline has already rasterized the PDF.
+    POST the PDF to HURIDOCS analyzer (default: POST /) and cache the JSON.
+    Environment (all optional):
+      HURIDOCS_API_URL  (default: http://127.0.0.1:5060)
+      HURIDOCS_API_PATH (default: /)
+      HURIDOCS_API_KEY  (Bearer token)
     """
-    url = _join_url(api_url, "/analyze")
+    api_url = os.getenv("HURIDOCS_API_URL", "http://127.0.0.1:5060").rstrip("/")
+    api_path = os.getenv("HURIDOCS_API_PATH", "/")  # Confirmed by your openapi.json
+    url = api_url + api_path
+
+    if cache_path.exists():
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass  # ignore cache errors
+
     headers = {}
+    api_key = os.getenv("HURIDOCS_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    # Read image bytes
-    with open(page_image, "rb") as fp:
-        files = {"file": (page_image.name, fp, "image/png")}
-        resp = requests.post(url, files=files, headers=headers, timeout=timeout)
-
+    files = {"file": (pdf_path.name, pdf_path.open("rb"), "application/pdf")}
+    resp = requests.post(url, headers=headers, files=files, timeout=120)
     if resp.status_code != 200:
-        raise RuntimeError(f"HURIDOCS API {url} returned {resp.status_code}: {resp.text[:300]}")
+        raise RuntimeError(
+            f"HURIDOCS API {url} returned {resp.status_code}: {resp.text[:200]}"
+        )
 
     data = resp.json()
-    # Normalize: some deployments wrap blocks under {"blocks": [...]}
-    blocks = data.get("blocks") if isinstance(data, dict) else data
-    if not isinstance(blocks, list):
-        raise ValueError("Unexpected HURIDOCS response format; expected a list of blocks or {'blocks': [...]}")
-
-    # Defensive: ensure minimal keys exist
-    norm: List[Dict[str, Any]] = []
-    for b in blocks:
-        label = b.get("label") or "TEXT"
-        bbox = b.get("bbox")  # list of four ints/floats
-        lines = b.get("lines") or []
-        if isinstance(lines, str):
-            lines = _split_lines(lines)
-        norm.append({"label": label, "bbox": _coerce_bbox(bbox), "lines": lines})
-    return norm
+    cache_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
 
 
-def _join_url(base: str, path: str) -> str:
-    if base.endswith("/"):
-        base = base[:-1]
-    return f"{base}{path}"
-
-
-def _coerce_bbox(b: Any) -> Optional[Tuple[int, int, int, int]]:
-    if not b or not isinstance(b, (list, tuple)) or len(b) != 4:
-        return None
-    try:
-        x1, y1, x2, y2 = b
-        return (int(x1), int(y1), int(x2), int(y2))
-    except Exception:
-        return None
-
-
-# ====== OCR outputs + text utilities ======
-
-def _index_ocr_outputs(run_dir: Path) -> Dict[str, Dict[str, Path]]:
+def _parse_huridocs_layout(data: Dict[str, Any]) -> Dict[int, List[BlockCandidate]]:
     """
-    Returns mapping: { page_name -> { model_name -> md_path } }
-    where md_path is dev/runs/<stamp>/outputs/<model>/<page>.md
-    """
-    out_dir = run_dir / "outputs"
-    per_page: Dict[str, Dict[str, Path]] = {}
-    if not out_dir.exists():
-        return per_page
+    Tries several plausible shapes from the HURIDOCS service, returning:
+      { page_index(int 1-based): [BlockCandidate, ...], ... }
 
-    for model_dir in out_dir.iterdir():
+    We’re intentionally permissive: if unknown, return {} and caller will fallback.
+    """
+    out: Dict[int, List[BlockCandidate]] = {}
+
+    # Common shape A:
+    # { "pages": [ { "page": 1, "blocks": [ { "bbox":[x0,y0,x1,y1], "label":"text", "score":0.98 }, ...] }, ...] }
+    pages = data.get("pages")
+    if isinstance(pages, list) and pages:
+        for page_entry in pages:
+            page_idx = page_entry.get("page") or page_entry.get("page_index") or page_entry.get("index")
+            try:
+                page_idx = int(page_idx)
+            except Exception:
+                continue
+            blocks = []
+            for b in page_entry.get("blocks", []):
+                bbox = _extract_bbox(b)
+                if bbox:
+                    blocks.append(BlockCandidate(bbox=bbox, label=str(b.get("label", "block")), score=b.get("score")))
+            if blocks:
+                out[page_idx] = blocks
+
+    if out:
+        return out
+
+    # Common shape B: flat list with page info on each block
+    # { "blocks": [ { "page": 1, "bbox":[...], ...}, ...] }
+    flat_blocks = data.get("blocks")
+    if isinstance(flat_blocks, list) and flat_blocks:
+        tmp: Dict[int, List[BlockCandidate]] = {}
+        for b in flat_blocks:
+            page_idx = b.get("page") or b.get("page_index") or b.get("index")
+            bbox = _extract_bbox(b)
+            if page_idx and bbox:
+                try:
+                    pg = int(page_idx)
+                    tmp.setdefault(pg, []).append(
+                        BlockCandidate(bbox=bbox, label=str(b.get("label", "block")), score=b.get("score"))
+                    )
+                except Exception:
+                    pass
+        if tmp:
+            return tmp
+
+    # Unknown shape
+    return {}
+
+
+def _extract_bbox(b: Dict[str, Any]) -> Optional[Tuple[float, float, float, float]]:
+    # Accept a variety of bbox field spellings
+    bb = b.get("bbox") or b.get("box") or b.get("rect")
+    if isinstance(bb, list) and len(bb) == 4:
+        try:
+            return (float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))
+        except Exception:
+            return None
+    return None
+
+
+# ---------------------------
+# Heuristic & chunking helpers
+# ---------------------------
+
+def _collect_page_texts(run_dir: Path) -> Dict[str, str]:
+    """
+    Find per-page OCR text from the run’s outputs.
+    Preference order (first match wins): nanonets-ocr2-3b, nanonets-ocr-s, qwen2-vl-ocr-2b-instruct, any.
+    """
+    outputs = run_dir / "outputs"
+    if not outputs.exists():
+        return {}
+    model_order = ["nanonets-ocr2-3b", "nanonets-ocr-s", "qwen2-vl-ocr-2b-instruct"]
+    # Collect all candidate files
+    by_page: Dict[str, Dict[str, Path]] = {}
+    for model_dir in outputs.glob("*"):
         if not model_dir.is_dir():
             continue
         model = model_dir.name
-        for md_path in model_dir.glob("page-*.md"):
-            per_page.setdefault(md_path.name.replace(".md", ".png"), {})[model] = md_path
-    return per_page
+        for md in model_dir.glob("page-*.md"):
+            by_page.setdefault(md.name, {})[model] = md
+
+    page_texts: Dict[str, str] = {}
+    for page, model_map in by_page.items():
+        chosen = None
+        for m in model_order:
+            if m in model_map:
+                chosen = model_map[m]
+                break
+        if not chosen:
+            # pick any
+            chosen = next(iter(model_map.values()))
+        try:
+            page_texts[page] = chosen.read_text(encoding="utf-8")
+        except Exception:
+            page_texts[page] = ""
+    return page_texts
 
 
-def _select_page_text(ocr_map: Dict[str, Dict[str, Path]], page_png_name: str) -> Tuple[str, str]:
-    """
-    Preference order: nanonets-ocr2-3b → nanonets-ocr-s → qwen2-vl-ocr-2b-instruct → anything available.
-    Returns (model_used, text_md).
-    """
-    pref = ["nanonets-ocr2-3b", "nanonets-ocr-s", "qwen2-vl-ocr-2b-instruct"]
-    models = ocr_map.get(page_png_name, {})
-    for m in pref:
-        if m in models:
-            return m, models[m].read_text(encoding="utf-8")
-    # fallback: first available
-    if models:
-        m, p = next(iter(models.items()))
-        return m, p.read_text(encoding="utf-8")
-    # last resort: empty
-    return "unknown", ""
-
-
-def _split_lines(text: str) -> List[str]:
-    # Normalize newlines and split
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    return [ln.strip() for ln in text.split("\n")]
-
-
-def _simple_paragraphs(text: str) -> List[str]:
-    """
-    Heuristic paragraph splitter: blank-line separation with a guard to merge tiny fragments.
-    """
-    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    parts = [p.strip() for p in re.split(r"\n\s*\n+", text) if p.strip()]
-    # Merge very small parts with neighbors
-    merged: List[str] = []
-    buf = ""
-    for p in parts:
-        if len(p) < 60:
-            buf = (buf + "\n\n" + p).strip()
-        else:
-            if buf:
-                merged.append(buf)
-                buf = ""
-            merged.append(p)
-    if buf:
-        merged.append(buf)
-    return merged
-
-
-# ====== Chunking helpers ======
-
-def _blocks_to_chunks(
-    blocks: List[Dict[str, Any]],
+def _heuristic_chunks(
     page_text: str,
-    page_no: int,
-    img_path: Path,
-    ocr_model: str,
+    page_idx: int,
+    page_png: Path,
     max_chars: int,
     overlap: int,
     min_par_len: int,
-) -> List[Chunk]:
-    """
-    Converts HURIDOCS blocks + OCR text to overlapped chunks.
-    If a block has "lines", we join them; otherwise we fallback to paragraph heuristics on the full page text.
-    """
-    chunks: List[Chunk] = []
-    base_id = f"p{page_no:04d}"
-
-    if not blocks or not any((b.get("lines") for b in blocks)):
-        # No structured lines → apply paragraph heuristics on whole page text
-        paragraphs = _simple_paragraphs(page_text)
-        seq = 0
-        for para in paragraphs:
-            for sub in _window_text(para, max_chars, overlap):
-                chunks.append(Chunk(
-                    id=f"{base_id}-h{seq:03d}",
-                    page=page_no,
-                    label="TEXT",
-                    text=sub,
-                    source_image=str(img_path),
-                    ocr_model=ocr_model,
-                    bbox=None,
-                    meta={"strategy": "heuristic"},
-                ))
-                seq += 1
-        return chunks
-
-    # Structured: one chunk window per block (respecting min_par_len + windows)
-    seq = 0
-    for b in blocks:
-        label = b.get("label", "TEXT")
-        bbox = _coerce_bbox(b.get("bbox"))
-        lines = b.get("lines") or []
-        block_text = "\n".join(l for l in lines if isinstance(l, str)).strip()
-
-        if not block_text:
-            continue
-
-        # If block too short, we may merge neighboring small blocks of the same label;
-        # here we keep it simple and just skip sub-min blocks, unless it’s TITLE.
-        if label != "TITLE" and len(block_text) < min_par_len:
-            continue
-
-        for sub in _window_text(block_text, max_chars, overlap):
-            chunks.append(Chunk(
-                id=f"{base_id}-b{seq:03d}",
-                page=page_no,
-                label=label,
-                text=sub,
-                source_image=str(img_path),
-                ocr_model=ocr_model,
-                bbox=bbox,
-                meta={"strategy": "layout"},
-            ))
-            seq += 1
-
-    # If nothing survived filters, ensure we still emit something
-    if not chunks and page_text.strip():
-        for i, sub in enumerate(_window_text(page_text, max_chars, overlap)):
-            chunks.append(Chunk(
-                id=f"{base_id}-f{i:03d}",
-                page=page_no,
-                label="TEXT",
-                text=sub,
-                source_image=str(img_path),
-                ocr_model=ocr_model,
-                bbox=None,
-                meta={"strategy": "fallback-page"},
-            ))
-    return chunks
+) -> List[Dict[str, Any]]:
+    paragraphs = _segment_paragraphs(page_text)
+    recs: List[Dict[str, Any]] = []
+    for pi, par in enumerate(paragraphs):
+        for ch in _sliding_chunks(par, max_chars, overlap, min_par_len):
+            recs.append(_mk_rec(ch, page_idx, page_png, block_id=pi))
+    return recs
 
 
-def _window_text(text: str, max_chars: int, overlap: int) -> Iterable[str]:
-    """
-    Sliding window over characters with overlap; respects word boundaries where possible.
-    """
-    text = " ".join(text.split())  # collapse whitespace
+def _segment_paragraphs(text: str) -> List[str]:
     if not text:
         return []
-    if max_chars <= 0:
-        yield text
-        return
+    # Split on blank lines; merge short lines; keep bullets
+    lines = [ln.strip() for ln in text.splitlines()]
+    paras: List[str] = []
+    buf: List[str] = []
+    def _flush():
+        if buf:
+            paras.append(" ".join(buf).strip())
+            buf.clear()
+    for ln in lines:
+        if not ln:
+            _flush()
+            continue
+        if _is_bullet(ln):
+            _flush()
+            paras.append(ln)
+        else:
+            buf.append(ln)
+    _flush()
+    # Drop tiny paragraphs that are just noise
+    return [p for p in paras if len(p) >= 10]
 
+
+def _is_bullet(ln: str) -> bool:
+    return ln.startswith(("-", "*", "\u2022")) or bool(re.match(r"^\d+[\.\)]\s", ln))
+
+
+def _sliding_chunks(text: str, max_chars: int, overlap: int, min_par_len: int) -> List[str]:
+    text = text.strip()
+    if not text:
+        return []
+    # If already short, return as-is
+    if len(text) <= max_chars:
+        return [text] if len(text) >= min_par_len else []
+    # Otherwise sliding window
+    out: List[str] = []
     start = 0
-    n = len(text)
-    while start < n:
-        end = min(start + max_chars, n)
-        # try to end on a word boundary (space/punct) without going backwards too far
-        if end < n:
-            back = text.rfind(" ", start + int(max_chars * 0.6), end)
-            if back > start:
-                end = back
-        yield text[start:end].strip()
-        if end == n:
+    step = max_chars - overlap
+    while start < len(text):
+        end = min(len(text), start + max_chars)
+        chunk = text[start:end].strip()
+        if len(chunk) >= min_par_len:
+            out.append(chunk)
+        if end == len(text):
             break
-        start = max(0, end - overlap)
+        start += step
+    return out
 
 
-def _page_number_from_name(name: str) -> Optional[int]:
-    m = re.search(r"page-(\d+)\.png$", name)
-    if not m:
-        return None
-    try:
-        return int(m.group(1))
-    except ValueError:
-        return None
+def _split_text_by_blocks(full_text: str, n_blocks: int) -> List[str]:
+    """
+    Extremely simple splitter: divide the page text into N contiguous parts.
+    A proper alignment would require OCR line coords; this keeps it robust.
+    """
+    if not full_text or n_blocks <= 0:
+        return []
+    avg = max(1, len(full_text) // n_blocks)
+    parts = []
+    i = 0
+    for _ in range(n_blocks - 1):
+        parts.append(full_text[i : i + avg])
+        i += avg
+    parts.append(full_text[i:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _mk_rec(text: str, page_idx: int, page_png: Path, block_id: int) -> Dict[str, Any]:
+    return {
+        "text": text,
+        "page": page_idx,
+        "source_png": str(page_png),
+        "block_id": block_id,
+    }

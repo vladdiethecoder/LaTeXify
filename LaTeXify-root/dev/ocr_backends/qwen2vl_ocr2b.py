@@ -1,102 +1,118 @@
-# Qwen2-VL OCR backend (2B Instruct)
-# Works with transformers >= 4.43 and qwen-vl-utils==0.0.8
-
+# dev/ocr_backends/qwen2vl_ocr2b.py
+from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List
-
-import torch
-from PIL import Image
+import os, torch
 from transformers import (
-    AutoProcessor,             # or Qwen2VLProcessor
+    AutoProcessor,
     Qwen2VLForConditionalGeneration,
 )
 
-from dev.ocr_backends.base import OCRResult, OCRBackend  # your shared types
+# Preferred → fallback repo IDs (override with QWEN_VL_MODEL_ID)
+PREFERRED_MODELS = [
+    "Qwen/Qwen2.5-VL-2B-Instruct",   # may be gated; requires login/accept
+    "Qwen/Qwen2-VL-2B-Instruct",     # public fallback
+]
+MODEL_ID = os.getenv("QWEN_VL_MODEL_ID") or PREFERRED_MODELS[0]
 
+# Tokens: transformers reads HUGGINGFACE_HUB_TOKEN; we also accept HF_TOKEN for convenience
+HF_TOKEN = os.getenv("HUGGINGFACE_HUB_TOKEN") or os.getenv("HF_TOKEN")
 
-MODEL_ID = "prithivMLmods/Qwen2-VL-OCR-2B-Instruct"  # fine-tuned for OCR
-# You can swap to the official base if you prefer:
-# MODEL_ID = "Qwen/Qwen2-VL-2B-Instruct"
-
-
-PROMPT = (
-    "You are an OCR assistant specialized in math/science documents. "
-    "Return clean Markdown with LaTeX for formulas ($ ... $ or $$ ... $$). "
-    "Preserve headings, bullet lists, tables, and equation blocks. "
-    "Do not add commentary beyond the text on the page."
-)
-
+def _best_dtype(user_dtype: str) -> torch.dtype:
+    if user_dtype == "bf16":
+        return torch.bfloat16
+    if user_dtype == "fp16":
+        return torch.float16
+    # auto: Ampere loves fp16; allow override via env QWEN_DTYPE
+    env = os.getenv("QWEN_DTYPE", "").lower()
+    if env in ("fp16", "float16"): return torch.float16
+    if env in ("bf16", "bfloat16"): return torch.bfloat16
+    return torch.float16
 
 @dataclass
-class Backend(OCRBackend):
+class OCRResult:
+    model: str
+    page: str
+    text_md: str
+    blocks: list | None = None
+
+@dataclass
+class Backend:
     name: str = "qwen2-vl-ocr-2b-instruct"
+    dtype: str = "auto"
+    _ready: bool = False
 
     def __post_init__(self):
-        # Processor builds tokens + handles chat templates
-        self.processor = AutoProcessor.from_pretrained(
-            MODEL_ID,
-            trust_remote_code=True,
-        )
-        # Correct model class for VL
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-            MODEL_ID,
-            torch_dtype="auto",
-            device_map="auto",
-            attn_implementation="sdpa",  # keeps us off Flash-Attn 2
-        ).eval()
+        self.torch_dtype = _best_dtype(self.dtype)
+        self.device = "cuda"
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA required: Qwen2-VL backend forbids CPU fallback.")
 
-        # Small stability tweaks
-        torch.set_grad_enabled(False)
-        if torch.cuda.is_available():
-            torch.backends.cuda.matmul.allow_tf32 = True
+        self.model = None
+        self.processor = None
+        last_err = None
 
-    def recognize_page(self, image_path: str, page: int = 1) -> OCRResult:
-        # 1) Load page image
-        img = Image.open(image_path).convert("RGB")
+        # Try preferred → fallback
+        for repo in [MODEL_ID] + [m for m in PREFERRED_MODELS if m != MODEL_ID]:
+            try:
+                self.processor = AutoProcessor.from_pretrained(
+                    repo, trust_remote_code=True, token=HF_TOKEN
+                )
+                self.model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    repo,
+                    trust_remote_code=True,
+                    torch_dtype=self.torch_dtype,
+                    device_map="auto",          # will bind within visible GPU
+                    attn_implementation="sdpa", # avoid Flash-Attn dep
+                    token=HF_TOKEN,
+                ).eval()
+                self.repo_id = repo
+                self._ready = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
 
-        # 2) Compose chat with explicit image item
+        if not self._ready:
+            raise RuntimeError(
+                f"Failed to load any Qwen2 VL model. Last error: {last_err}\n"
+                "If using Qwen2.5, ensure you are logged in and have access."
+            )
+
+        # Modest cap to prevent OOM while keeping quality
+        self.max_new_tokens = int(os.getenv("QWEN_MAX_NEW_TOKENS", "1024"))
+
+    def recognize_page(self, page_path: str, page: int = 1) -> OCRResult:
+        # Qwen2-VL expects [(image, prompt)] within chat template
+        from qwen_vl_utils import process_vision_info  # lightweight helper
+        prompt = "Read this page as markdown. Preserve lists, headings, and math."
         messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": img},    # IMPORTANT: real image object
-                    {"type": "text",  "text": PROMPT},
-                ],
-            }
+            {"role": "user", "content": [
+                {"type": "image", "image": Path(page_path).as_posix()},
+                {"type": "text", "text": prompt},
+            ]}
         ]
-
-        # 3) Build inputs the Qwen2-VL way
-        # NOTE: new-ish processors can inline vision, but qwen-vl-utils is robust
-        from qwen_vl_utils import process_vision_info
+        chat = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(messages)
-
-        chat = self.processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
 
         inputs = self.processor(
             text=[chat],
             images=image_inputs,
             videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        ).to(self.model.device)
+            return_tensors="pt"
+        ).to(self.model.device, dtype=self.torch_dtype)
 
-        # 4) Generate
-        out = self.model.generate(
-            **inputs,
-            max_new_tokens=1200,
-            do_sample=False,
-        )
+        with torch.no_grad():
+            out = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                temperature=0.0,
+            )
 
-        # 5) Slice off the prompt tokens and decode
-        prompt_len = inputs["input_ids"].shape[1]
-        gen_tokens = out[:, prompt_len:]
-        text = self.processor.batch_decode(
-            gen_tokens, skip_special_tokens=True
-        )[0].strip()
-
-        return OCRResult(model=self.name, page=page, text_md=text, blocks=[])
+        text = self.processor.batch_decode(out, skip_special_tokens=True)[0]
+        # Qwen chat formats often include the prompt again; strip prelude if present
+        sep = "</s>"
+        if sep in text:
+            text = text.split(sep)[-1].strip()
+        return OCRResult(model=self.name, page=Path(page_path).name, text_md=text, blocks=None)

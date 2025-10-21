@@ -1,0 +1,6 @@
+# Hugging Face / tokens / env
+.env
+.env.*
+*.env
+# CLI credentials dir (if you prefer to block it)
+# .huggingface/

@@ -1,77 +1,78 @@
-# dev/ocr_backends/nanonets_ocr2.py
 from __future__ import annotations
+import os, json
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import torch
-from dataclasses import dataclass
-from typing import Any, Dict, List
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-MODEL_ID = "nanonets/Nanonets-OCR2-3B"
+# ======================= GPU / DTYPE ENFORCEMENT =======================
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA required: Nanonets backends forbid CPU fallback.")
+DEVICE = torch.device("cuda:0")
+_DTYPE_MAP = {"auto": None, "fp16": torch.float16, "bf16": torch.bfloat16}
+
+# ============================ MODEL CHOICE =============================
+# Let env override; default keeps prior naming convention.
+MODEL_ID = os.getenv("NANONETS_OCR2_3B_ID", "nanonets/nanonets-ocr2-3b")
 
 
 @dataclass
 class OCRResult:
     model: str
-    page: int
+    page: str
     text_md: str
-    blocks: List[Dict[str, Any]]
+    blocks: Optional[List[Dict[str, Any]]] = None
 
 
 class Backend:
     """
-    Nanonets OCR2: Image-Text-to-Text pipeline that emits Markdown + LaTeX.
-    Matches the model card's recommended usage: AutoProcessor + apply_chat_template,
-    pass images=[PIL.Image], generate, then trim prompt tokens before decode.
+    Nanonets OCR2 3B — text-only causal LM that outputs Markdown transcript
+    given an OCR prompt instruction. We keep it minimal and GPU-only.
     """
+    name = "nanonets-ocr2-3b"
 
-    def __init__(self) -> None:
-        self.name = "nanonets-ocr2-3b"
-        self.processor = AutoProcessor.from_pretrained(MODEL_ID)
-        self.model = AutoModelForImageTextToText.from_pretrained(
+    def __init__(self, dtype: str = "auto") -> None:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
+        dtype_torch = _DTYPE_MAP.get(dtype, None)
+
+        self.model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
-            torch_dtype="auto",
             device_map="auto",
+            torch_dtype=dtype_torch,
+            attn_implementation="sdpa",
+            trust_remote_code=True,
         ).eval()
 
-    def recognize_page(self, image_path: str, page: int = 1) -> OCRResult:
-        img = Image.open(image_path).convert("RGB")
-
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image", "image": f"file://{image_path}"},
-                {"type": "text", "text": (
-                    "Transcribe this page faithfully. "
-                    "Use Markdown for structure (headings, lists, tables). "
-                    "Keep every formula in LaTeX (inline \\( ... \\) or display $$ ... $$). "
-                    "Do not translate. Preserve reading order."
-                )},
-            ],
-        }]
-
-        # Build chat prompt, then encode with image
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+    def _prompt(self, image_path: str) -> str:
+        return (
+            "You are an OCR-to-Markdown converter. The user provides an image path. "
+            "Return clean, readable Markdown preserving headings, math, bullet lists, "
+            "tables, and inline formatting. Do NOT add explanations.\n"
+            f"IMAGE_PATH: {image_path}\n"
+            "OUTPUT (Markdown only):"
         )
-        inputs = self.processor(
-            text=[text],
-            images=[img],
-            padding=True,
-            return_tensors="pt",
-        ).to(self.model.device)
 
-        with torch.inference_mode():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=2048,
-                do_sample=False,
-            )
+    @torch.inference_mode()
+    def recognize_page(self, image_path: str, page: int = 1) -> OCRResult:
+        # sanity read
+        _ = Image.open(image_path).convert("RGB")
 
-        # Trim the input/prompt tokens before decoding generated tokens
-        trimmed = [gen[len(inp):] for inp, gen in zip(inputs.input_ids, output_ids)]
-        md = self.processor.batch_decode(
-            trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-        )[0]
-
-        return OCRResult(model=self.name, page=page, text_md=md.strip(), blocks=[])
+        prompt = self._prompt(image_path)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(DEVICE)
+        out = self.model.generate(
+            **inputs,
+            max_new_tokens=2048,
+            do_sample=False,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+        )
+        text = self.tokenizer.decode(out[0], skip_special_tokens=True)
+        # Strip the prompt echo if present
+        if "OUTPUT (Markdown only):" in text:
+            text = text.split("OUTPUT (Markdown only):", 1)[-1].strip()
+        return OCRResult(model=self.name, page=os.path.basename(image_path), text_md=text, blocks=None)

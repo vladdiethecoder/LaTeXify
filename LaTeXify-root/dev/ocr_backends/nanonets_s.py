@@ -1,31 +1,74 @@
-from .base import OCRBackend, OCRResult
-from PIL import Image
+from __future__ import annotations
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+
 import torch
-from transformers import AutoTokenizer, AutoProcessor, AutoModelForImageTextToText
+from PIL import Image
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
-MODEL_ID = "nanonets/Nanonets-OCR-s"
+# ======================= GPU / DTYPE ENFORCEMENT =======================
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA required: Nanonets backends forbid CPU fallback.")
+DEVICE = torch.device("cuda:0")
+_DTYPE_MAP = {"auto": None, "fp16": torch.float16, "bf16": torch.bfloat16}
 
-class Backend(OCRBackend):
+# ============================ MODEL CHOICE =============================
+MODEL_ID = os.getenv("NANONETS_OCR_S_ID", "nanonets/nanonets-ocr-small")
+
+
+@dataclass
+class OCRResult:
+    model: str
+    page: str
+    text_md: str
+    blocks: Optional[List[Dict[str, Any]]] = None
+
+
+class Backend:
+    """
+    Nanonets OCR (small) — faster, lower-VRAM variant for cross-check vs 3B.
+    GPU-only; identical calling surface.
+    """
     name = "nanonets-ocr-s"
-    def __init__(self):
-        self.tok = AutoTokenizer.from_pretrained(MODEL_ID)
-        self.proc = AutoProcessor.from_pretrained(MODEL_ID)
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            MODEL_ID, torch_dtype="auto", device_map="auto",
-            attn_implementation="sdpa"
-        ).eval()
-        self.prompt = r"""Extract the text from the page as **complete, readable markdown**.
-                        - Equations → LaTeX (inline \( ... \), display \[ ... \] or $$ ... $$).
-                        - Tables → HTML <table>...</table> with rows/cols preserved.
-                        - Preserve headings, lists, figure captions, footnotes, page numbers.
-                        - Transcribe verbatim; do not summarize or omit content."""
 
-    def recognize_page(self, image_path: str, page:int=1) -> OCRResult:
-        img = Image.open(image_path).convert("RGB")
-        messages = [{"role":"user","content":[{"type":"image","image":f"file://{image_path}"},
-                                             {"type":"text","text": self.prompt}]}]
-        chat = self.proc.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.proc(text=[chat], images=[img], padding=True, return_tensors="pt").to(self.model.device)
-        out = self.model.generate(**inputs, max_new_tokens=3000, do_sample=False)
-        gen = self.proc.batch_decode(out[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
-        return OCRResult(model=self.name, page=page, text_md=gen, blocks=[])
+    def __init__(self, dtype: str = "auto") -> None:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, use_fast=True)
+        dtype_torch = _DTYPE_MAP.get(dtype, None)
+
+        self.model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            device_map="auto",
+            torch_dtype=dtype_torch,
+            attn_implementation="sdpa",
+            trust_remote_code=True,
+        ).eval()
+
+    def _prompt(self, image_path: str) -> str:
+        return (
+            "OCR the given page image into clean Markdown. "
+            "Preserve structure (headings, lists, formulas) with minimal hallucinations.\n"
+            f"IMAGE_PATH: {image_path}\n"
+            "OUTPUT:"
+        )
+
+    @torch.inference_mode()
+    def recognize_page(self, image_path: str, page: int = 1) -> OCRResult:
+        _ = Image.open(image_path).convert("RGB")
+
+        prompt = self._prompt(image_path)
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(DEVICE)
+        out = self.model.generate(
+            **inputs,
+            max_new_tokens=1536,
+            do_sample=False,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+        )
+        text = self.tokenizer.decode(out[0], skip_special_tokens=True)
+        if "OUTPUT:" in text:
+            text = text.split("OUTPUT:", 1)[-1].strip()
+        return OCRResult(model=self.name, page=os.path.basename(image_path), text_md=text, blocks=None)
