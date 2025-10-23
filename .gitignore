@@ -8,3 +8,13 @@ dev/**/pages/
 dev/**/outputs/
 *.faiss
 *.index
+__pycache__/
+*.py[cod]
+.venv*/
+.env
+.env.*
+dev/runs/
+dev/**/pages/
+dev/**/outputs/
+*.faiss
+*.index
