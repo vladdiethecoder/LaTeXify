@@ -18,3 +18,17 @@ dev/**/pages/
 dev/**/outputs/
 *.faiss
 *.index
+__pycache__/
+*.py[cod]
+.venv*/
+.env
+.env.*
+# generated artifacts
+dev/runs/
+dev/**/pages/
+dev/**/outputs/
+*.faiss
+*.index
+# local models / third_party checkouts (publish code, not weights)
+models/
+third_party/
