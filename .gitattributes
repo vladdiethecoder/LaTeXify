@@ -1208,3 +1208,6 @@
 /LaTeXify-root/.venv-cu126/lib/python3.11/site-packages/yarl-1.22.0.dist-info/WHEEL filter=lfs diff=lfs merge=lfs -text
 /LaTeXify-root/.venv-cu126/lib/python3.11/site-packages/yarl-1.22.0.dist-info/licenses/LICENSE filter=lfs diff=lfs merge=lfs -text
 /LaTeXify-root/.venv-cu126/lib/python3.11/site-packages/yarl-1.22.0.dist-info/licenses/NOTICE filter=lfs diff=lfs merge=lfs -text
+*.bundle filter=lfs diff=lfs merge=lfs -text
+/LaTeXify-root/nanonets/Nanonets-OCR2-3B/LICENSE filter=lfs diff=lfs merge=lfs -text
+*.toml filter=lfs diff=lfs merge=lfs -text
