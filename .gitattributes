@@ -1212,3 +1212,11 @@
 /LaTeXify-root/nanonets/Nanonets-OCR2-3B/LICENSE filter=lfs diff=lfs merge=lfs -text
 *.toml filter=lfs diff=lfs merge=lfs -text
 *.sty filter=lfs diff=lfs merge=lfs -text
+/LaTeXify-root/kb/online/github/LiX-master/LICENSE filter=lfs diff=lfs merge=lfs -text
+*.code-snippets filter=lfs diff=lfs merge=lfs -text
+*.cls filter=lfs diff=lfs merge=lfs -text
+/LaTeXify-root/kb/online/github/LiX-master/classes/custom_classes/resources filter=lfs diff=lfs merge=lfs -text
+/LaTeXify-root/kb/online/github/LiX-master/classes/popular_classes/resources filter=lfs diff=lfs merge=lfs -text
+/LaTeXify-root/kb/online/github/LiX-master/classes/standard_classes/resources filter=lfs diff=lfs merge=lfs -text
+*.svg filter=lfs diff=lfs merge=lfs -text
+*.bib filter=lfs diff=lfs merge=lfs -text
