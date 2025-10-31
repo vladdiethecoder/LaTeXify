@@ -1,0 +1,4 @@
+{"id": "row-p1-y0-chunk-p1-00", "text": "***", "page": 1, "bbox": null, "block_type": "TableRow", "source_backend": "nanonets-ocr-s", "semantic_id": "row-p1-y0", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "row-p2-y0-chunk-p2-00", "text": "***", "page": 2, "bbox": null, "block_type": "TableRow", "source_backend": "nanonets-ocr-s", "semantic_id": "row-p2-y0", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "row-p3-y0-chunk-p3-00", "text": "***", "page": 3, "bbox": null, "block_type": "TableRow", "source_backend": "nanonets-ocr-s", "semantic_id": "row-p3-y0", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "row-p4-y0-chunk-p4-00", "text": "***", "page": 4, "bbox": null, "block_type": "TableRow", "source_backend": "nanonets-ocr-s", "semantic_id": "row-p4-y0", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}

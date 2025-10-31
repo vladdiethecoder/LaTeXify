@@ -1,0 +1,20 @@
+{
+  "task_id": "Q1",
+  "question": {
+    "text": "Question 1",
+    "meta": {
+      "anchors": [
+        "Q1"
+      ],
+      "pages": []
+    }
+  },
+  "rubric": {
+    "criteria": []
+  },
+  "assignment_rules": [],
+  "user_answer": {
+    "chunks": [],
+    "flags": []
+  }
+}

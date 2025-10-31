@@ -1,0 +1,15 @@
+{
+  "doc_class": "lix_textbook",
+  "title": "Basic Skills Review Unit",
+  "author": "Student X",
+  "course": "MATH 101",
+  "date": "\\today",
+  "questions": [
+    "Q1a",
+    "Q1b"
+  ],
+  "question_texts": {
+    "Q1a": "Answer the question Q1a clearly with steps.",
+    "Q1b": "Answer the question Q1b clearly with steps."
+  }
+}

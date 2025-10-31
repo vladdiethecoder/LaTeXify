@@ -1,0 +1,49 @@
+# Artifacts (scope PDFs to outputs; tweak paths as needed)
+# Run/Build Files
+**/__pycache__/**
+dev/inputs/**
+LiX/**
+models/**
+kb/online/**
+.venv-*/**
+
+# Images & media likely to be large
+*.webp
+*.avif
+assets/**
+
+# Models / checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+*.ggml
+*.tflite
+*.h5
+*.pb
+*.weights
+*.engine
+*.plan
+
+# Archives (each on its own line)
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.zst
+*.bz2
+*.xz
+
+# Shared libs (versioned)
+*.so
+*.so.[0-9]*
+
+# Index/data blobs you said can get big
+*.npy
+*.npz
+*.parquet
+*.pkl
+

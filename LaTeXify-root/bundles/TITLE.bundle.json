@@ -1,0 +1,20 @@
+{
+  "task_id": "TITLE",
+  "question": {
+    "text": "TITLE",
+    "meta": {
+      "anchors": [
+        "TITLE"
+      ],
+      "pages": []
+    }
+  },
+  "rubric": {
+    "criteria": []
+  },
+  "assignment_rules": [],
+  "user_answer": {
+    "chunks": [],
+    "flags": []
+  }
+}

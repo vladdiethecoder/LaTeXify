@@ -1,0 +1,7 @@
+{
+  "count": 5,
+  "mode": "assessment",
+  "max_chars": 1100,
+  "overlap": 150,
+  "min_par_len": 40
+}

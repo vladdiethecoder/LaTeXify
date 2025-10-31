@@ -1,0 +1,379 @@
+{
+  "dim": 384,
+  "size": 37,
+  "ids": [
+    "0001:000000-000057",
+    "0002:000000-000109",
+    "0002:000000-000120",
+    "0002:000000-000110",
+    "0002:000000-000166",
+    "0002:000000-000128",
+    "0002:000000-000100",
+    "0002:000000-000109",
+    "0004:000000-000200",
+    "0004:000000-000148",
+    "0004:000000-000094",
+    "0004:000000-000090",
+    "0004:000000-000134",
+    "0004:000000-000170",
+    "0004:000000-000092",
+    "0004:000000-000084",
+    "0004:000000-000134",
+    "0006:000000-000615",
+    "0007:000000-000131",
+    "0007:000000-000086",
+    "0007:000000-000257",
+    "0007:000000-000056",
+    "0008:000000-000127",
+    "0008:000000-000187",
+    "0008:000000-000171",
+    "0008:000000-000155",
+    "0008:000000-000182",
+    "0008:000000-000140",
+    "0008:000000-000159",
+    "0008:000000-000178",
+    "0008:000000-000202",
+    "0008:000000-000156",
+    "0009:000000-000290",
+    "0009:000000-000083",
+    "0009:000000-000044",
+    "0009:000000-000081",
+    "0009:000000-000056"
+  ],
+  "metas": [
+    {
+      "id": "0001:000000-000057",
+      "text": "Basic Advanced Functions — Part 1: Communication Problems",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000109",
+      "text": "Rewrite each relationship using function notation. All given text retained; one “=” per line; equals aligned.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000120",
+      "text": "An airplane must travel 400 km. Let \\( t \\) be the travel time (in hours) and let \\( s(t) \\) denote the speed (in km/h).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000110",
+      "text": "\\[\n\\begin{align*}\n\\text{Speed} &= \\frac{\\text{Distance}}{\\text{Time}} \\\\\ns(t) &= \\frac{400}{t}\n\\end{align*}\n\\]",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000166",
+      "text": "An ice cream cone starts at 125 mL and loses half its volume every 5 min. Let \\( t \\) be in minutes and \\( v(t) \\) be the volume (mL); the discrete half-life model is",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000128",
+      "text": "\\[\n\\begin{align*}\nv(t) &= v_0 \\left(\\frac{1}{2}\\right)^{t/T_{1/2}} \\\\\nv(t) &= 125 \\left(\\frac{1}{2}\\right)^{t/5}\n\\end{align*}\n\\]",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000100",
+      "text": "Scott drives at a constant speed of 50 km/h. If \\( d(t) \\) is the distance (km) after \\( t \\) hours,",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0002:000000-000109",
+      "text": "Formatting: parts (a) and (b) are side by side with a clean divider; all “=” signs aligned inside each block.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000200",
+      "text": "Using graphs, decide whether each inverse is a function. Figures are side by side (uniform size) with concise captions. Below each pair, the reasoning lines up the “→” arrows and the verdict is boxed.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000148",
+      "text": "![Inverse (reflection across \\( y = x \\)).](i) Inverse (reflection across \\( y = x \\).)\n![Vertical line test: fails.](ii) Vertical line test: fails.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000094",
+      "text": "Construct inverse : reflect graph of \\( y = p(x) \\) across \\( y = x \\) → graph of \\( p^{-1} \\)",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000090",
+      "text": "Apply VLT to \\( p^{-1} \\) : some verticals cut the graph twice → Inverse is not a function",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000134",
+      "text": "Domain/Range swap : \\( \\operatorname{Dom}(p^{-1}) = \\operatorname{Ran}(p) \\), \\( \\operatorname{Ran}(p^{-1}) = \\operatorname{Dom}(p) \\)",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000170",
+      "text": "![Inverse of a line (reflection across \\( y = x \\)).](i) Inverse of a line (reflection across \\( y = x \\).)\n![Vertical line test: passes.](ii) Vertical line test: passes.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000092",
+      "text": "Construct inverse : reflect non-vertical line across \\( y = x \\) → another non-vertical line",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000084",
+      "text": "Apply VLT to \\( f^{-1} \\) : each vertical meets at most once → Inverse is a function",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0004:000000-000134",
+      "text": "Domain/Range swap : \\( \\operatorname{Dom}(f^{-1}) = \\operatorname{Ran}(f) \\), \\( \\operatorname{Ran}(f^{-1}) = \\operatorname{Dom}(f) \\)",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0006:000000-000615",
+      "text": "Domain & Range & Restrictions & Increasing / Decreasing & x-intercepts (roots) & y-intercepts & Vertex / Notes\nDomain : {x ∈ R} & Range : {y ∈ R | y ≥ -8} & Domain : None & Range : y ≥ -8 & Decreasing : (-∞, 0) & Increasing : (0, +∞) & f(x) = 0 & (2, 0), (-2, 0) & 0 = 2x^2 - 8 & 8 = x^2 & x = ±2 & F(0) = 2(0)^2 - 8 & (0, -8) & x = -8 & Vertex / Notes & x = -b & x = 0 & y = 2(0)^2 - 8 & y = -8 & Domain : {x ∈ R | x ≥ 2} & Range : {y ∈ R | y ≥ 0} & Domain : x ≥ 2 & Range : y ≥ 0 & Decreasing : N/A & Increasing : [2, +∞) & f(x) = 0 & (2, 0) & 0 = +√x - 2 & x = 2 & F(0) = +√0 - 2 & (0, -8) & x = 0 & No vertices.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0007:000000-000131",
+      "text": "The point (1, -2) is on the graph of \\( f \\). Describe the following transformations on \\( f \\), and determine the resulting point.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0007:000000-000086",
+      "text": "We use\n\\[\ng(x) = a f(k(x - d)) + c,\n\\quad\nx' = \\frac{x}{k} + d,\n\\quad\ny' = a y + c.\n\\]",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0007:000000-000257",
+      "text": "The \\( a = 2 \\) indicates a vertical stretch by a factor of 2 and the \\( c = 3 \\) indicates a vertical translation of 3 units up.\n\\[\n\\begin{align*}\nx' &= \\frac{x}{k} + d \\\\\n&= \\frac{1}{1} + 0 \\\\\n&= 1 \\\\\ny' &= a y + c \\\\\n&= 2(-2) + 3 \\\\\n&= -1\n\\end{align*}\n\\]",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0007:000000-000056",
+      "text": "Therefore, the resulting point is \\( \\boxed{(1, -1)} \\).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000127",
+      "text": "The given text is a mathematical problem involving transformations of functions. Here is the logical reading order of the text:",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000187",
+      "text": "1. **b) \\( g(x) = f(x + 1) - 3 \\)**:\n   - The function \\( g(x) \\) is defined as the result of applying the transformation \\( f(x + 1) \\) to \\( x \\) and then subtracting 3 from the result.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000171",
+      "text": "2. **The transformation \\( f(x + 1) \\) indicates a horizontal translation of 1 unit to the left**.\n   - This means that the input \\( x \\) is shifted to the left by 1 unit.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000155",
+      "text": "3. **The transformation \\( -3 \\) indicates a vertical translation of 3 units down**.\n   - This means that the output \\( g(x) \\) is shifted down by 3 units.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000182",
+      "text": "4. **Therefore, the resulting point is \\( \\boxed{(0, -5)} \\)**:\n   - This is the final transformed point after applying the given transformations to the original function \\( f(x) \\).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000140",
+      "text": "5. **c) \\( g(x) = -f(2x) \\)**:\n   - The function \\( g(x) \\) is defined as the result of applying the transformation \\( -f(2x) \\) to \\( x \\).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000159",
+      "text": "6. **The transformation \\( -f(2x) \\) indicates a reflection in the \\( x \\)-axis**.\n   - This means that the input \\( x \\) is reflected across the \\( x \\)-axis.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000178",
+      "text": "7. **The transformation \\( k = 2 \\) indicates a horizontal compression by a factor of 1/2**.\n   - This means that the input \\( x \\) is compressed horizontally by a factor of 1/2.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000202",
+      "text": "8. **Therefore, the resulting point is \\( \\boxed{\\left(\\frac{1}{2}, 2\\right)} \\)**:\n   - This is the final transformed point after applying the given transformations to the original function \\( f(x) \\).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0008:000000-000156",
+      "text": "The text provides a step-by-step explanation of how to transform a given function using horizontal and vertical translations, reflections, and compressions.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0009:000000-000290",
+      "text": "- \\( a = -1 \\) indicates a reflection in the \\( x \\)-axis.\n- \\( k = -1 \\) indicates a reflection in the \\( y \\)-axis.\n- \\( d = -1 \\) (from \\( x - d = x - (-1) = x + 1 \\)) indicates a horizontal translation of 1 unit to the left.\n- \\( c = 3 \\) indicates a vertical translation of 3 units up.",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0009:000000-000083",
+      "text": "The transformation equations are:\n- \\( x' = \\frac{x}{k} + d \\)\n- \\( y' = a y + c \\)",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0009:000000-000044",
+      "text": "Let's calculate the transformed coordinates:",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0009:000000-000081",
+      "text": "1. \\( x' = \\frac{x}{-1} + (-1) \\)\n2. \\( y' = -1 \\cdot (-2) + 3 \\)\n3. \\( y' = 5 \\)",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    },
+    {
+      "id": "0009:000000-000056",
+      "text": "Therefore, the resulting point is \\( \\boxed{(-2, 5)} \\).",
+      "page": null,
+      "bbox": null,
+      "ocr_model": null,
+      "label": null,
+      "image": null
+    }
+  ],
+  "model": "sentence-transformers/all-MiniLM-L6-v2"
+}

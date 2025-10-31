@@ -1,0 +1,5 @@
+{"id": "p1-chunk-p1-00", "text": "***", "page": 1, "bbox": null, "block_type": "Text", "source_backend": "nanonets-ocr-s", "semantic_id": "p1", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "p2-chunk-p2-00", "text": "***", "page": 2, "bbox": null, "block_type": "Text", "source_backend": "nanonets-ocr-s", "semantic_id": "p2", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "p3-chunk-p3-00", "text": ":", "page": 3, "bbox": null, "block_type": "Text", "source_backend": "nanonets-ocr-s", "semantic_id": "p3", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "p4-chunk-p4-00", "text": "***", "page": 4, "bbox": null, "block_type": "Text", "source_backend": "nanonets-ocr-s", "semantic_id": "p4", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}
+{"id": "p5-chunk-p5-00", "text": ":", "page": 5, "bbox": null, "block_type": "Text", "source_backend": "nanonets-ocr-s", "semantic_id": "p5", "flags": {"high_ocr_disagreement": false, "low_confidence": false}}

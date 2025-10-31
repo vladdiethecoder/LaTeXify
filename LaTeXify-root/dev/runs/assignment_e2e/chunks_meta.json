@@ -1,0 +1,7 @@
+{
+  "count": 10,
+  "mode": "assignment",
+  "max_chars": 700,
+  "overlap": 120,
+  "min_par_len": 20
+}
