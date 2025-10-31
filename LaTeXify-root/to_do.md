@@ -38,3 +38,45 @@ This file tracks the development, refinement, and future ambitions for the LaTeX
 -   [ ] **Support .docx and .md:** Add ingestion pipelines for Word documents and Markdown files, not just PDFs.
 -   [ ] **Batch Processing:** Add support for processing entire directories of documents at once.
 -   [ ] **Interactive Mode:** Create an "interactive" mode where the user can correct the LaTeX output in a live-preview environment.
+
+
+
+
+
+# LaTeXify Project: To-Do List (tracksheet)
+
+This file tracks the project's priorities, focusing on robustness and building a self-improving system.
+
+## Completed Goals
+
+-   [x] **Core Pipeline Architecture:** The multi-agent "Plan, Retrieve, Synthesize, Aggregate" pipeline is implemented and functional.
+-   [x] **Document Planner:** The `planner_scaffold.py` agent successfully creates `plan.json` blueprints.
+-   [x] **RAG System:** The LaTeX KB (`/kb/latex/`) is indexed with FAISS, and the `retrieval_agent.py` creates data bundles.
+-   [x] **Advanced Layout Analysis:** The `/pdf-document-layout-analysis/` submodule is integrated for sophisticated document parsing.
+-   [x] **Multi-Agent Framework:** The `tasks/` directory and agent scripts (`synth_latex.py`, etc.) provide a "prompt-as-code" framework.
+-   [x] **LFS Issue Resolution:** Replaced root LFS pointers with text files.
+
+## Priority Tasks (NEED to be done)
+
+-   [ ] **Final Compilation Loop:** Implement a robust `pdflatex` compilation loop in the pipeline. It must detect errors (by parsing the `.log`) and identify the failing snippet.
+-   [ ] **Synthesis Agent (Complex Content):** Enhance `synth_latex.py` to reliably handle complex layouts, multi-column text, figures (`graphicx`), and tables (`tabular`, `booktabs`).
+-   [ ] **Integrate Evaluation Metric:** Finalize and integrate `dev/eval/metrics.py`. Automatically score all test runs in `/dev/runs/` against their ground truth.
+-   [ ] **Dependency Management:** Consolidate `dev/requirements-ocr.txt` and other dependencies into a single root `requirements.txt`.
+
+## Robustness & Accuracy (The "Self-Improving" Loop)
+
+-   [ ] **Self-Correction Agent:** This is the top priority for robustness.
+    -   **Task:** If the compilation loop fails, a new 'correction' agent should be triggered.
+    -   **Input:** The failing `.tex` snippet, the `pdflatex` error log, and the original data bundle.
+    -   **Action:** The agent will read the error, query the LaTeX KB for solutions, and attempt to re-synthesize *only* the failing snippet.
+-   [ ] **Auto-Expanding KB:** Create a feedback loop to make the system smarter over time.
+    -   **Task:** When the `metrics.py` score is high *and* a human validator approves, or when a "self-correction" is successful, add the novel (e.g., a complex table) snippet and its solution back to the `data/latex_docs.jsonl` for re-indexing.
+-   [ ] **Dynamic Preamble:** Make `gate6_preamble.py` dynamic. It should select packages based on the *actual* synthesized content (e.g., add `amsmath` only if `align` or `equation` environments are used).
+-   [ ] **OCR Consensus:** Refine `scripts/consensus.py` to implement a robust voting/merging mechanism for the different OCR backends, improving text accuracy.
+-   [ ] **Retrieval Reranking:** Implement `scripts/rerankers.py` in the `retrieval_agent.py` to improve the quality and relevance of RAG context.
+
+## Future Ambitions (v2.0)
+
+-   [ ] **Web UI:** Create a simple Flask/Streamlit interface to upload a PDF and receive a compiled `.tex` file and PDF.
+-   [ ] **Multi-Format Ingestion:** Add support for `.docx` and `.md` files, not just PDFs.
+-   [ ] **Interactive Mode:** A "human-in-the-loop" UI where a user can approve/reject/edit the planner's `plan.json` or correct a failing `.tex` snippet in a live-preview environment.
