@@ -26,11 +26,27 @@ def test_aggregator_writes_main(tmp_path: Path):
     out_dir = tmp_path / "build"
     res = run_aggregator(tmp_path / "plan.json", snip_dir, out_dir, no_compile=True, simulate=True)
 
-    assert (out_dir / "main.tex").exists()
-    tex = (out_dir / "main.tex").read_text(encoding="utf-8")
-    assert "\\documentclass{lix_article}" in tex
-    assert "\\usepackage{amsmath}" in tex
+    main_tex = out_dir / "main.tex"
+    assert main_tex.exists()
+    tex = main_tex.read_text(encoding="utf-8")
+    assert f"\\documentclass{{{res['doc_class']}}}" in tex
+    assert "\\input{preamble.tex}" in tex
     assert "\\maketitle" in tex
-    # Dedup label should not trigger here, only one label present
-    assert "\\label{sec:T03-introduction}" in tex
+
+    # Ensure frontmatter input appears before \maketitle
+    first_input = tex.split("\\maketitle", 1)[0]
+    assert "sections/00_title_metadata.tex" in first_input
+
+    sections_dir = out_dir / "sections"
+    assert sections_dir.exists()
+    section_files = sorted(p.name for p in sections_dir.glob("*.tex"))
+    assert "00_title_metadata.tex" in section_files
+    assert "01_introduction.tex" in section_files
+
+    frontmatter_text = (sections_dir / "00_title_metadata.tex").read_text(encoding="utf-8")
+    assert "\\title{Demo Title}" in frontmatter_text
+    assert "\\author{You}" in frontmatter_text
+
+    intro_text = (sections_dir / "01_introduction.tex").read_text(encoding="utf-8")
+    assert "\\label{sec:T03-introduction}" in intro_text
     assert res["compile_attempted"] is False

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -25,8 +26,14 @@ DEFAULT_LIX_CLASSES = {
 
 def _log_event(log_path: Path, event: str, **details) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    serializable = {}
+    for key, value in details.items():
+        if isinstance(value, Path):
+            serializable[key] = str(value)
+        else:
+            serializable[key] = value
     with log_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"event": event, **details}, ensure_ascii=False) + "\n")
+        f.write(json.dumps({"event": event, **serializable}, ensure_ascii=False) + "\n")
 
 def _read_plan(path: Path) -> Dict:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -83,10 +90,28 @@ def latexmk_flags_for_engine(engine: str) -> List[str]:
 # ------------------------------------------
 
 @dataclass
+class SectionEntry:
+    task_id: str
+    title: str
+    filename: Path
+    content: str
+    is_placeholder: bool
+    is_frontmatter: bool
+
+
+@dataclass
 class AssembleResult:
-    tex: str
-    used_bib: bool
     doc_class: str
+    used_bib: bool
+    preamble_lines: List[str]
+    sections: List[SectionEntry]
+
+
+def _slugify(value: str, fallback: str) -> str:
+    value = value.lower()
+    value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
+    return value or fallback.lower()
+
 
 def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> AssembleResult:
     tid_to_title = {t["id"]: t["title"] for t in plan.get("tasks", [])}
@@ -99,49 +124,119 @@ def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> As
     if fell_back:
         _log_event(evidence_log, "doc_class_fallback", requested=doc_class_raw, used=doc_class)
 
-    preamble = [f"\\documentclass{{{doc_class}}}"]
-    for pkg in ALLOWLIST_PACKAGES:
-        preamble.append(f"\\usepackage{{{pkg}}}")
-    preamble.append("\\hypersetup{hidelinks}\n")
+    preamble_lines = [f"\\usepackage{{{pkg}}}" for pkg in ALLOWLIST_PACKAGES]
+    preamble_lines.append("\\hypersetup{hidelinks}")
 
-    body_lines: List[str] = []
-    body_lines.append("\\begin{document}")
-    body_lines.append("% aggregator: \\maketitle after frontmatter")
-    body_lines.append("\\maketitle\n")
-
+    sections: List[SectionEntry] = []
     used_bib = False
-    for task in sorted(plan.get("tasks", []), key=lambda t: (t.get("order", 0), t["id"])):
+    ordered_tasks = sorted(plan.get("tasks", []), key=lambda t: (t.get("order", 0), t["id"]))
+    for idx, task in enumerate(ordered_tasks):
         tid = task["id"]
         title = tid_to_title.get(tid, tid)
+        anchor = task.get("anchor", "") or ""
+        is_frontmatter = anchor.startswith("frontmatter")
+        slug_source = task.get("title") or anchor or tid
+        filename = Path("sections") / f"{idx:02d}_{_slugify(slug_source, tid)}.tex"
         sp = snippets_dir / f"{tid}.tex"
         if not sp.exists():
             _log_event(evidence_log, "snippet_missing_placeholder_injected",
                        task_id=tid, path=str(sp))
-            placeholder = (
+            content = (
                 f"% Placeholder for {tid}\n"
                 f"\\section{{{title}}}\n"
                 f"\\label{{sec:{tid}-placeholder}}\n"
-                f"\\todo{{Write content.}}\n\n"
+                f"\\todo{{Write content.}}\n"
             )
-            body_lines.append(f"% --- {tid} ---\n{placeholder}")
+            is_placeholder = True
         else:
             _log_event(evidence_log, "snippet_found", task_id=tid, path=str(sp))
-            body = sp.read_text(encoding="utf-8")
+            body = sp.read_text(encoding="utf-8").rstrip()
             if (r"\cite{" in body) or (r"\addbibresource" in body):
                 used_bib = True
-            body_lines.append(f"% --- {tid} ---\n{body.strip()}\n\n")
-
+            content = body
+            is_placeholder = False
+        sections.append(
+            SectionEntry(
+                task_id=tid,
+                title=title,
+                filename=filename,
+                content=content,
+                is_placeholder=is_placeholder,
+                is_frontmatter=is_frontmatter,
+            )
+        )
     _log_event(evidence_log, "bib_detection", use_biblatex=used_bib)
-    body_lines.append("\\end{document}\n")
+    return AssembleResult(
+        doc_class=doc_class,
+        used_bib=used_bib,
+        preamble_lines=preamble_lines,
+        sections=sections,
+    )
 
-    tex = "\n".join(preamble) + "\n" + "\n".join(body_lines)
-    return AssembleResult(tex=tex, used_bib=used_bib, doc_class=doc_class)
+def _write_preamble(lines: List[str], out_dir: Path, evidence_log: Path) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    preamble = out_dir / "preamble.tex"
+    header = [
+        "% Auto-generated by scripts.aggregator",
+        "% This file is intentionally a fragment to be \\input{} after \\documentclass",
+        "",
+    ]
+    text = "\n".join(header + lines) + "\n"
+    preamble.write_text(text, encoding="utf-8")
+    _log_event(evidence_log, "preamble_written", path=preamble, bytes=preamble.stat().st_size)
+    return preamble
 
-def _write_main(tex: str, out_dir: Path, evidence_log: Path) -> Path:
+
+def _write_sections(sections: List[SectionEntry], out_dir: Path, evidence_log: Path) -> None:
+    for entry in sections:
+        target = out_dir / entry.filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = entry.content.rstrip() + "\n"
+        target.write_text(text, encoding="utf-8")
+        _log_event(
+            evidence_log,
+            "section_written",
+            task_id=entry.task_id,
+            path=target,
+            placeholder=entry.is_placeholder,
+        )
+
+
+def _build_main(doc_class: str, sections: List[SectionEntry], used_bib: bool) -> str:
+    frontmatter_blocks: List[str] = []
+    body_blocks: List[str] = []
+    for entry in sections:
+        block = [f"% --- {entry.task_id} ---", f"\\input{{{entry.filename.as_posix()}}}", ""]
+        if entry.is_frontmatter:
+            frontmatter_blocks.extend(block)
+        else:
+            body_blocks.extend(block)
+
+    lines: List[str] = [
+        f"\\documentclass{{{doc_class}}}",
+        "\\input{preamble.tex}",
+        "",
+        "\\begin{document}",
+    ]
+    lines.extend(frontmatter_blocks)
+    lines.append("% aggregator: \\maketitle after frontmatter")
+    lines.append("\\maketitle")
+    lines.append("")
+    lines.extend(body_blocks)
+    if used_bib:
+        lines.append("\\printbibliography")
+        lines.append("")
+    lines.append("\\end{document}")
+    return "\n".join(lines) + "\n"
+
+
+def _write_main(doc_class: str, sections: List[SectionEntry], used_bib: bool,
+                out_dir: Path, evidence_log: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     main_tex = out_dir / "main.tex"
+    tex = _build_main(doc_class, sections, used_bib)
     main_tex.write_text(tex, encoding="utf-8")
-    _log_event(evidence_log, "main_written", path=str(main_tex), bytes=main_tex.stat().st_size)
+    _log_event(evidence_log, "main_written", path=main_tex, bytes=main_tex.stat().st_size)
     return main_tex
 
 def _run_latexmk(main_tex: Path, engine: str, verbose: bool) -> Tuple[bool, str, str]:
@@ -163,9 +258,12 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
                    no_compile: bool, simulate: bool,
                    engine_override: str | None = None, verbose: bool = False) -> Dict:
     plan = _read_plan(Path(plan_path))
-    evidence_log = Path("build") / "aggregate.log.jsonl"
+    out_dir_path = Path(out_dir)
+    evidence_log = out_dir_path / "aggregate.log.jsonl"
     res = _assemble_document(plan, Path(snippets_dir), evidence_log)
-    main_tex = _write_main(res.tex, Path(out_dir), evidence_log)
+    _write_preamble(res.preamble_lines, out_dir_path, evidence_log)
+    _write_sections(res.sections, out_dir_path, evidence_log)
+    main_tex = _write_main(res.doc_class, res.sections, res.used_bib, out_dir_path, evidence_log)
 
     compile_attempted = False
     compile_ok = False

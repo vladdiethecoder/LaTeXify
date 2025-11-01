@@ -19,7 +19,7 @@ def test_placeholder_branch_no_collision(tmp_path: Path):
     res = run_aggregator(tmp_path / "plan.json", tmp_path / "snippets", out_dir, no_compile=True, simulate=True)
 
     assert (out_dir / "main.tex").exists()
-    log = (Path("evidence") / "aggregate.log.jsonl")
+    log = out_dir / "aggregate.log.jsonl"
     assert log.exists()
     data = log.read_text(encoding="utf-8")
     assert "snippet_missing_placeholder_injected" in data

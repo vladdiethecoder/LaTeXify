@@ -35,6 +35,10 @@ Notes:
 """
 
 from __future__ import annotations
+<<<<<<< ours
+=======
+
+>>>>>>> theirs
 import argparse
 import json
 import os
@@ -42,7 +46,15 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+<<<<<<< ours
 from typing import Iterable, List, Optional, Tuple
+=======
+from typing import Any, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+>>>>>>> theirs
 
 # ---------- Utilities: PDF -> PIL Images ----------
 def pdf_to_images(pdf_path: Path, dpi: int = 300) -> List["Image.Image"]:
@@ -67,6 +79,7 @@ def pdf_to_images(pdf_path: Path, dpi: int = 300) -> List["Image.Image"]:
         except Exception as e:
             raise RuntimeError(f"Failed to render PDF (need pdf2image+poppler or PyMuPDF): {e}")
 
+<<<<<<< ours
 def load_images_from_dir(img_dir: Path) -> List["Image.Image"]:
     exts = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
     files = sorted([p for p in img_dir.glob("**/*") if p.suffix.lower() in exts])
@@ -74,9 +87,13 @@ def load_images_from_dir(img_dir: Path) -> List["Image.Image"]:
         raise RuntimeError(f"No images found under {img_dir}")
     from PIL import Image
     return [Image.open(p).convert("RGB") for p in files]
+=======
+RUN_STAMP = time.strftime("%Y-%m-%dT%H-%M-%S")
+>>>>>>> theirs
 
 # ---------- Engines ----------
 @dataclass
+<<<<<<< ours
 class EngineSpec:
     name: str
     required: bool
@@ -310,6 +327,238 @@ def main() -> None:
         sys.exit(3)
 
     print(f"[ocr] Wrote {wrote} records to {out_path}")
+=======
+class BackendSpec:
+    name: str  # registry key, e.g. qwen2-vl-ocr-2b
+    module: str  # python module path
+    cls: str  # class name
+    device: Optional[str]  # which GPU id in this worker (string)
+    dtype: str  # fp16/bf16
+
+    def instantiate(self):
+        mod = __import__(self.module, fromlist=[self.cls])
+        Backend = getattr(mod, self.cls)
+        return Backend(dtype=self.dtype)
+
+# Registry of available backends
+REGISTRY: Dict[str, Dict[str, str]] = {
+    "qwen2-vl-ocr-2b": {"module": "dev.ocr_backends.qwen2vl_ocr2b", "cls": "Backend"},
+    "nanonets-ocr2-3b": {"module": "dev.ocr_backends.nanonets_ocr2", "cls": "Backend"},
+    "nanonets-ocr-s": {"module": "dev.ocr_backends.nanonets_s", "cls": "Backend"},
+    # Extend with paddleocr later: "paddleocr": {...}
+}
+
+def _parse_device_map(s: Optional[str], backends: List[str]) -> Dict[str, Optional[str]]:
+    """
+    Parse "name:gpu,name2:gpu" into dict; accepts numeric or string ids.
+    Missing entries -> None (worker will still have isolated CUDA_VISIBLE_DEVICES).
+    """
+    d: Dict[str, Optional[str]] = {b: None for b in backends}
+    if not s:
+        return d
+    for kv in s.split(","):
+        if ":" not in kv:
+            continue
+        k, v = kv.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if k in d:
+            d[k] = v
+    return d
+
+def _spawn_backend_worker(spec: BackendSpec, pages_dir: Path, run_dir: Path) -> List[Dict[str, Any]]:
+    """
+    Single-process worker:
+    - isolates the desired GPU via CUDA_VISIBLE_DEVICES
+    - instantiates backend with dtype
+    - runs all pages sequentially for that backend
+    """
+    # Isolate GPU in this process
+    prev_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if spec.device is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(spec.device)
+    # Safe defaults for FP16 & Flash-SDP/FA2 (global)
+    try:
+        import torch
+
+        torch.set_float32_matmul_precision("medium")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        try:
+            from torch.backends.cuda import sdp_kernel
+
+            sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        be = spec.instantiate()
+    except ModuleNotFoundError as exc:
+        missing = exc.name or str(exc)
+        print(
+            f"[warn] {spec.name}: missing optional dependency '{missing}'. Skipping backend.",
+            file=sys.stderr,
+        )
+        return []
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[warn] {spec.name}: failed to initialize ({exc}). Skipping backend.", file=sys.stderr)
+        return []
+    results: List[Dict[str, Any]] = []
+    try:
+        for page_png in sorted((pages_dir).glob("*.png")):
+            rec: Dict[str, Any] = {"model": spec.name, "page": page_png.name}
+            try:
+                r = be.recognize_page(str(page_png), page=1)
+                text_md = (r.text_md or "").strip()
+                rec["text_len"] = len(text_md)
+                out_md = _dump_markdown(run_dir, spec.name, page_png, text_md)
+                rec["out_md"] = str(out_md)
+                if getattr(r, "blocks", None):
+                    blocks_path = out_md.with_suffix(".blocks.json")
+                    blocks_path.write_text(
+                        json.dumps(r.blocks, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    rec["blocks_json"] = str(blocks_path)
+                print(f"{spec.name:23s} page={page_png.name} len={rec.get('text_len', 0):5d}")
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:  # pragma: no cover - backend failure diagnostics
+                rec["error"] = str(e)
+                print(f"{spec.name:23s} FAILED on {page_png}: {e}")
+            results.append(rec)
+        return results
+    finally:
+        if spec.device is not None:
+            if prev_cuda is None:
+                os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+            else:
+                os.environ["CUDA_VISIBLE_DEVICES"] = prev_cuda
+
+def _dump_markdown(run_dir: Path, model: str, page_png: Path, text_md: str) -> Path:
+    out_dir = run_dir / "outputs" / model
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / (page_png.name.replace(".png", ".md"))
+    out_path.write_text(text_md or "", encoding="utf-8")
+    return out_path
+
+def _load_first_pdf_if_needed(args_pdf: Optional[str]) -> Path:
+    if args_pdf:
+        p = Path(args_pdf)
+        if not p.is_file():
+            raise SystemExit(f"PDF not found: {p}")
+        return p
+    inbox = Path("data/inbox")
+    pdfs = sorted(inbox.glob("*.pdf"))
+    if not pdfs:
+        raise SystemExit("No PDF in data/inbox/. Pass --pdf <file.pdf>.")
+    return pdfs[0]
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--pdf", type=str, default=None)
+    p.add_argument("--dpi", type=int, default=400)
+    p.add_argument("--dtype", type=str, default="fp16")
+    p.add_argument(
+        "--backends",
+        "--engines",
+        dest="backends",
+        type=str,
+        default="qwen2-vl-ocr-2b,nanonets-ocr2-3b,nanonets-ocr-s",
+        help="Comma-separated list of OCR backends to run.",
+    )
+    p.add_argument("--device_map", type=str, default=None,
+                   help="Comma list: name:gpu_id,... (e.g., qwen2-vl-ocr-2b:0,nanonets-ocr2-3b:1)")
+    p.add_argument("--concurrent", type=int, default=1)
+    p.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Optional directory for intermediate outputs (defaults to dev/runs/<timestamp>).",
+    )
+    p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="Optional JSONL path to store per-backend page results.",
+    )
+    args = p.parse_args()
+
+    run_dir = args.run_dir or (Path("dev/runs") / RUN_STAMP)
+    run_dir = run_dir.resolve()
+
+    # Prepare run folders
+    (run_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (run_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    summary = {
+        "pdf": None,
+        "pages": 0,
+        "run_dir": str(run_dir),
+        "per_page": [],
+        "checks": {},
+    }
+
+    # Resolve PDF & rasterize
+    pdf_path = _load_first_pdf_if_needed(args.pdf)
+    summary["pdf"] = str(pdf_path)
+    page_paths = pdf_to_images(pdf_path, out_dir=run_dir / "pages", dpi=args.dpi, prefix="page")
+    summary["pages"] = len(page_paths)
+
+    # Build spec list
+    names = [s.strip() for s in args.backends.split(",") if s.strip()]
+    devmap = _parse_device_map(args.device_map, names)
+    specs: List[BackendSpec] = []
+    for name in names:
+        reg = REGISTRY.get(name)
+        if not reg:
+            print(f"[warn] unknown backend: {name}")
+            continue
+        specs.append(
+            BackendSpec(
+                name=name,
+                module=reg["module"],
+                cls=reg["cls"],
+                device=devmap.get(name),
+                dtype=args.dtype,
+            )
+        )
+
+    # Serial per-GPU worker model (simple, reliable); spawn per spec
+    all_results: List[Dict[str, Any]] = []
+    for spec in specs:
+        print(
+            f"[worker] {spec.name} -> GPU {spec.device if spec.device is not None else '(auto)'} ; dtype={spec.dtype}"
+        )
+        results = _spawn_backend_worker(spec, run_dir / "pages", run_dir)
+        all_results.extend(results)
+
+    # Compute per-page structure for the summary
+    per_page = []
+    by_page: Dict[str, List[Dict[str, Any]]] = {}
+    for rec in all_results:
+        by_page.setdefault(rec["page"], []).append(rec)
+    for page_png in sorted((run_dir / "pages").glob("*.png")):
+        per_page.append({"page": page_png.name, "results": by_page.get(page_png.name, [])})
+
+    summary["per_page"] = per_page
+    summary["checks"] = {
+        "text_from_2_plus_models": any(
+            sum(1 for r in p["results"] if "text_len" in r and r["text_len"] > 0) >= 2 for p in per_page
+        ),
+        "pages_processed": len(per_page),
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        with args.out.open("w", encoding="utf-8") as fh:
+            for rec in all_results:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        print(f"[write] {len(all_results)} records → {args.out}")
+
+    print(f"\n=== SUMMARY ===\n{json.dumps(summary, indent=2)}")
+>>>>>>> theirs
 
 if __name__ == "__main__":
     main()

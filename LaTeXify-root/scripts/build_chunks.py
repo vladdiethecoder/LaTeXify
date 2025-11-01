@@ -12,9 +12,9 @@ Creates semantically-structured chunks from OCR/layout blocks, per role:
 Resilient: if a strategy still yields zero chunks, it retries with relaxed
 thresholds and, as a last resort, emits a deterministic rolled chunk.
 
-Outputs:
-  <run_dir>/chunks.jsonl
-  <run_dir>/chunks_meta.json
+Outputs (per run_dir):
+  <prefix>.chunks.jsonl (defaults to chunks.jsonl)
+  <prefix>.chunks_meta.json (defaults to chunks_meta.json)
 """
 from __future__ import annotations
 
@@ -67,16 +67,21 @@ def main():
     ap.add_argument("--overlap", type=int, default=150)
     ap.add_argument("--min_par_len", type=int, default=40)
     ap.add_argument("--prefer", type=str, default="", help="comma list of OCR backend names in priority order")
+    ap.add_argument("--prefix", type=str, default="", help="Optional filename prefix (e.g., 'user' → user.chunks.jsonl)")
     args = ap.parse_args()
 
     prefer = [p.strip() for p in args.prefer.split(",") if p.strip()] if args.prefer else None
     mode = infer_mode(args.run_dir, args.pdf) if args.mode == "auto" else args.mode
 
+    prefix = args.prefix.strip().lower().replace(" ", "_") if args.prefix else ""
+    chunks_name = f"{prefix + '.' if prefix else ''}chunks.jsonl"
+    meta_name = f"{prefix + '.' if prefix else ''}chunks_meta.json"
+
     blocks = load_blocks(args.run_dir, prefer_backends=prefer)
     if not blocks:
         print(f"[chunker] no blocks available in {args.run_dir}")
-        write_jsonl(Path(args.run_dir) / "chunks.jsonl", [])
-        (Path(args.run_dir) / "chunks_meta.json").write_text(
+        write_jsonl(Path(args.run_dir) / chunks_name, [])
+        (Path(args.run_dir) / meta_name).write_text(
             json.dumps({"count": 0, "mode": mode, "max_chars": args.max_chars,
                         "overlap": args.overlap, "min_par_len": args.min_par_len}, indent=2),
             encoding="utf-8"
@@ -106,14 +111,14 @@ def main():
                                      min_par_len=1,
                                      semantic_id="misc")
 
-    write_jsonl(Path(args.run_dir) / "chunks.jsonl", chunks)
-    (Path(args.run_dir) / "chunks_meta.json").write_text(
+    write_jsonl(Path(args.run_dir) / chunks_name, chunks)
+    (Path(args.run_dir) / meta_name).write_text(
         json.dumps({"count": len(chunks), "mode": mode, "max_chars": args.max_chars,
                     "overlap": args.overlap, "min_par_len": args.min_par_len}, indent=2),
         encoding="utf-8"
     )
-    print(f"[chunker] wrote {Path(args.run_dir) / 'chunks.jsonl'} ({len(chunks)} chunks)")
-    print(f"[chunker] wrote {Path(args.run_dir) / 'chunks_meta.json'}")
+    print(f"[chunker] wrote {Path(args.run_dir) / chunks_name} ({len(chunks)} chunks)")
+    print(f"[chunker] wrote {Path(args.run_dir) / meta_name}")
 
 
 if __name__ == "__main__":
