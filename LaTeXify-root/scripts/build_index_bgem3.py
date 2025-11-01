@@ -5,8 +5,9 @@ build_index_bgem3.py
 
 Build a FAISS index from chunks produced by build_chunks.py using BGE-M3 embeddings.
 
-- Input:  <run_dir>/chunks.jsonl  (list of {"id","text",...})
-- Output: <out_dir>/faiss.index, <out_dir>/faiss.meta.json
+- Input:  <run_dir>/<prefix>.chunks.jsonl  (list of {"id","text",...})
+- Output: <run_dir>/<prefix>.faiss.index, <run_dir>/<prefix>.faiss.meta.json
+          (or <out_dir>/faiss.* when --out is provided)
 
 Defaults:
 - Model:  BAAI/bge-m3  (1024-dim)
@@ -77,6 +78,57 @@ def read_chunks(chunks_path: Path) -> List[Dict[str, Any]]:
     return rows
 
 
+def _sanitize_prefix(raw: str) -> str:
+    keep = [c if c.isalnum() or c in {"-", "_"} else "-" for c in raw.strip().lower()]
+    prefix = "".join(keep).strip("-_")
+    return prefix or "chunks"
+
+
+def _prefix_from_chunks_file(path: Path) -> str:
+    name = path.name
+    if name.endswith(".chunks.jsonl"):
+        return name[: -len(".chunks.jsonl")]
+    return path.stem
+
+
+def determine_chunks_path(run_path: Path, explicit_prefix: Optional[str]) -> Tuple[Path, str]:
+    if explicit_prefix:
+        prefix = _sanitize_prefix(explicit_prefix)
+        chunk_path = run_path / f"{prefix}.chunks.jsonl"
+        if not chunk_path.exists():
+            raise SystemExit(f"[index] expected {chunk_path} (from --prefix {prefix})")
+        return chunk_path, prefix
+
+    legacy = run_path / "chunks.jsonl"
+    if legacy.exists():
+        if legacy.is_symlink():
+            try:
+                target = legacy.resolve(strict=True)
+                return target, _prefix_from_chunks_file(target)
+            except FileNotFoundError:
+                pass
+        return legacy, _prefix_from_chunks_file(legacy)
+
+    candidates = sorted(p for p in run_path.glob("*.chunks.jsonl") if p.name != "chunks.jsonl")
+    if len(candidates) == 1:
+        chunk_path = candidates[0]
+        return chunk_path, _prefix_from_chunks_file(chunk_path)
+
+    if len(candidates) > 1:
+        run_hint = _sanitize_prefix(run_path.name)
+        preferred = [p for p in candidates if _prefix_from_chunks_file(p) == run_hint]
+        if len(preferred) == 1:
+            chunk_path = preferred[0]
+            return chunk_path, _prefix_from_chunks_file(chunk_path)
+        names = ", ".join(p.name for p in candidates)
+        raise SystemExit(
+            f"[index] multiple chunk files found in {run_path}: {names}. "
+            "Pass --prefix to disambiguate."
+        )
+
+    raise SystemExit(f"[index] no *.chunks.jsonl found in {run_path}. Run build_chunks.py first.")
+
+
 def ensure_out_dir(run_dir: str, out: Optional[str]) -> Path:
     """
     Treat --out as a DIRECTORY always (directories may contain dots, e.g., *.index).
@@ -99,7 +151,10 @@ def ensure_out_dir(run_dir: str, out: Optional[str]) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
-def resolve_output_paths(run_dir: str, out: Optional[str], prefix: Optional[str]) -> Tuple[Path, Path]:
+def resolve_output_paths(run_dir: str,
+                         out: Optional[str],
+                         prefix: Optional[str],
+                         inferred_prefix: str) -> Tuple[Path, Path]:
     """
     Returns (index_path, meta_path).
     If prefix is provided, files are written inside run_dir using the prefix:
@@ -113,9 +168,15 @@ def resolve_output_paths(run_dir: str, out: Optional[str], prefix: Optional[str]
         meta_path = run_path / f"{prefix}.faiss.meta.json"
         return index_path, meta_path
 
-    out_dir = ensure_out_dir(run_dir, out)
-    index_path = out_dir / "faiss.index"
-    meta_path = out_dir / "faiss.meta.json"
+    if not out and inferred_prefix and inferred_prefix != "chunks":
+        run_path = Path(run_dir)
+        run_path.mkdir(parents=True, exist_ok=True)
+        index_path = run_path / f"{inferred_prefix}.faiss.index"
+        meta_path = run_path / f"{inferred_prefix}.faiss.meta.json"
+    else:
+        out_dir = ensure_out_dir(run_dir, out)
+        index_path = out_dir / "faiss.index"
+        meta_path = out_dir / "faiss.meta.json"
     return index_path, meta_path
 
 def load_model(model_name: str = "BAAI/bge-m3") -> SentenceTransformer:
@@ -179,9 +240,15 @@ def write_meta(meta_path: Path,
             "page": _pick_meta(chunk, "page"),
             "bbox": _pick_meta(chunk, "bbox"),
             "block_type": _pick_meta(chunk, "block_type"),
+            "label": _pick_meta(chunk, "label"),
+            "labels": _pick_meta(chunk, "labels"),
+            "page_span": _pick_meta(chunk, "page_span"),
+            "pages": _pick_meta(chunk, "pages"),
+            "block_ids": _pick_meta(chunk, "block_ids"),
             "semantic_id": _pick_meta(chunk, "semantic_id"),
             "flags": _coerce_flags(_pick_meta(chunk, "flags")),
             "source_backend": _pick_meta(chunk, "source_backend"),
+            "source_backends": _pick_meta(chunk, "source_backends"),
             "metadata": meta,
         })
 
@@ -211,12 +278,10 @@ def main():
     args = ap.parse_args()
 
     run_dir = args.run_dir
-    index_path, meta_path = resolve_output_paths(run_dir, args.out, args.prefix)
     run_path = Path(run_dir)
-    if args.prefix:
-        chunks_path = run_path / f"{args.prefix}.chunks.jsonl"
-    else:
-        chunks_path = run_path / "chunks.jsonl"
+    explicit_prefix = args.prefix if args.prefix else None
+    chunks_path, chunk_prefix = determine_chunks_path(run_path, explicit_prefix)
+    index_path, meta_path = resolve_output_paths(run_dir, args.out, chunk_prefix if explicit_prefix else None, chunk_prefix)
     chunks = read_chunks(chunks_path)
 
     if not chunks:

@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # =========================
@@ -260,6 +260,51 @@ def _merge_flags(blocks: List[dict]) -> dict:
     return flags
 
 
+def _collect_metadata(blocks: List[dict],
+                      page: Optional[int],
+                      bbox: Optional[List[float]],
+                      block_type: Optional[str],
+                      label: Optional[str],
+                      source_backend: Optional[str],
+                      semantic_id: Optional[str],
+                      flags: dict) -> Dict[str, Any]:
+    pages = [b.get("page") for b in blocks if b.get("page") is not None]
+    page_values: List[int] = []
+    for p in pages:
+        try:
+            page_values.append(int(p))
+        except Exception:
+            continue
+    unique_pages = sorted(set(page_values))
+    block_ids = [
+        str(b.get("block_id") or b.get("id") or b.get("row_id"))
+        for b in blocks if b.get("block_id") or b.get("id") or b.get("row_id")
+    ]
+    backend_candidates = {
+        str(b.get("source_backend") or b.get("backend") or b.get("ocr_backend"))
+        for b in blocks if b.get("source_backend") or b.get("backend") or b.get("ocr_backend")
+    }
+    label_candidates = {
+        str(b.get("label") or b.get("block_type"))
+        for b in blocks if b.get("label") or b.get("block_type")
+    }
+    meta: Dict[str, Any] = {
+        "page": page,
+        "pages": unique_pages or None,
+        "page_span": [unique_pages[0], unique_pages[-1]] if unique_pages else None,
+        "bbox": bbox,
+        "block_type": block_type,
+        "label": label,
+        "semantic_id": semantic_id,
+        "block_ids": block_ids or None,
+        "source_backend": source_backend,
+        "source_backends": sorted(backend_candidates) or None,
+        "labels": sorted(label_candidates) or None,
+        "flags": flags if any(flags.values()) else None,
+    }
+    return {k: v for k, v in meta.items() if v not in (None, [], {})}
+
+
 def _make_chunk_id(semantic_id: Optional[str], page: Optional[int], idx: int) -> str:
     sid = (semantic_id or "auto").lower().replace(" ", "-")
     p = f"p{page}" if page is not None else "px"
@@ -297,6 +342,8 @@ def rolling_pack_blocks(blocks: List[dict],
             bbox = _span_bbox([b.get("bbox") for b in buf])
             block_type = _majority([b.get("block_type") for b in buf])
             source_backend = _majority([b.get("source_backend") for b in buf])
+            label = _majority([b.get("label") or b.get("block_type") for b in buf])
+            flags = _merge_flags(buf)
             chunk_id = _make_chunk_id(semantic_id, page, len(chunks))
             chunks.append({
                 "id": chunk_id,
@@ -304,9 +351,11 @@ def rolling_pack_blocks(blocks: List[dict],
                 "page": page,
                 "bbox": bbox,
                 "block_type": block_type,
+                "label": label,
                 "source_backend": source_backend,
                 "semantic_id": semantic_id,
-                "flags": _merge_flags(buf),
+                "flags": flags,
+                "metadata": _collect_metadata(buf, page, bbox, block_type, label, source_backend, semantic_id, flags),
             })
             tail = _tail_text(text, overlap)
             buf, total = [], 0

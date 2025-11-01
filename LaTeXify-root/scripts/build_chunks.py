@@ -13,15 +13,26 @@ Resilient: if a strategy still yields zero chunks, it retries with relaxed
 thresholds and, as a last resort, emits a deterministic rolled chunk.
 
 Outputs (per run_dir):
-  <prefix>.chunks.jsonl (defaults to chunks.jsonl)
-  <prefix>.chunks_meta.json (defaults to chunks_meta.json)
+  <prefix>.chunks.jsonl (defaults to <pdf-basename>.chunks.jsonl)
+  <prefix>.chunks_meta.json (defaults to <pdf-basename>.chunks_meta.json)
+
+For backwards compatibility, a chunks.jsonl/chunks_meta.json alias is only
+written when no conflicting file already exists. This prevents role-specific
+chunks from overwriting each other when sharing a run directory.
 """
 from __future__ import annotations
 
 import json
+import shutil
 import argparse
 from pathlib import Path
 from typing import List, Optional
+
+
+def _sanitize_prefix(raw: str) -> str:
+    keep = [c if c.isalnum() or c in {"-", "_"} else "-" for c in raw.strip().lower()]
+    prefix = "".join(keep).strip("-_")
+    return prefix or "chunks"
 
 from chunk_strategies import (
     load_blocks,
@@ -73,9 +84,13 @@ def main():
     prefer = [p.strip() for p in args.prefer.split(",") if p.strip()] if args.prefer else None
     mode = infer_mode(args.run_dir, args.pdf) if args.mode == "auto" else args.mode
 
-    prefix = args.prefix.strip().lower().replace(" ", "_") if args.prefix else ""
-    chunks_name = f"{prefix + '.' if prefix else ''}chunks.jsonl"
-    meta_name = f"{prefix + '.' if prefix else ''}chunks_meta.json"
+    if args.prefix:
+        prefix = _sanitize_prefix(args.prefix)
+    else:
+        prefix = _sanitize_prefix(Path(args.pdf).stem)
+
+    chunks_name = f"{prefix}.chunks.jsonl"
+    meta_name = f"{prefix}.chunks_meta.json"
 
     blocks = load_blocks(args.run_dir, prefer_backends=prefer)
     if not blocks:
@@ -111,14 +126,33 @@ def main():
                                      min_par_len=1,
                                      semantic_id="misc")
 
-    write_jsonl(Path(args.run_dir) / chunks_name, chunks)
-    (Path(args.run_dir) / meta_name).write_text(
+    run_path = Path(args.run_dir)
+    chunks_path = run_path / chunks_name
+    meta_path = run_path / meta_name
+
+    write_jsonl(chunks_path, chunks)
+    meta_path.write_text(
         json.dumps({"count": len(chunks), "mode": mode, "max_chars": args.max_chars,
                     "overlap": args.overlap, "min_par_len": args.min_par_len}, indent=2),
         encoding="utf-8"
     )
-    print(f"[chunker] wrote {Path(args.run_dir) / chunks_name} ({len(chunks)} chunks)")
-    print(f"[chunker] wrote {Path(args.run_dir) / meta_name}")
+    print(f"[chunker] wrote {chunks_path} ({len(chunks)} chunks)")
+    print(f"[chunker] wrote {meta_path}")
+
+    # Maintain optional compatibility aliases without clobbering existing files.
+    legacy_chunks = run_path / "chunks.jsonl"
+    legacy_meta = run_path / "chunks_meta.json"
+    if not args.prefix:
+        if not legacy_chunks.exists():
+            try:
+                legacy_chunks.symlink_to(chunks_path.name)
+            except OSError:
+                shutil.copy2(chunks_path, legacy_chunks)
+        if not legacy_meta.exists():
+            try:
+                legacy_meta.symlink_to(meta_path.name)
+            except OSError:
+                shutil.copy2(meta_path, legacy_meta)
 
 
 if __name__ == "__main__":

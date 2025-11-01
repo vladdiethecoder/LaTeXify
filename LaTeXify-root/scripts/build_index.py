@@ -49,6 +49,47 @@ def infer_role(run_dir: str) -> str:
     return "assignment"
 
 
+def _sanitize_prefix(raw: str) -> str:
+    keep = [c if c.isalnum() or c in {"-", "_"} else "-" for c in raw.strip().lower()]
+    prefix = "".join(keep).strip("-_")
+    return prefix or "chunks"
+
+
+def _prefix_from_chunks_file(path: Path) -> str:
+    name = path.name
+    if name.endswith(".chunks.jsonl"):
+        return name[: -len(".chunks.jsonl")]
+    return path.stem
+
+
+def find_chunks_file(run_dir: Path) -> Path:
+    legacy = run_dir / "chunks.jsonl"
+    if legacy.exists():
+        if legacy.is_symlink():
+            try:
+                return legacy.resolve(strict=True)
+            except FileNotFoundError:
+                pass
+        return legacy
+
+    candidates = sorted(p for p in run_dir.glob("*.chunks.jsonl") if p.name != "chunks.jsonl")
+    if len(candidates) == 1:
+        return candidates[0]
+
+    if len(candidates) > 1:
+        run_hint = _sanitize_prefix(run_dir.name)
+        preferred = [p for p in candidates if _prefix_from_chunks_file(p) == run_hint]
+        if len(preferred) == 1:
+            return preferred[0]
+        names = ", ".join(p.name for p in candidates)
+        raise SystemExit(
+            f"Multiple chunk files found in {run_dir}: {names}. "
+            "Move unwanted files or pass --prefix via build_chunks.py."
+        )
+
+    raise SystemExit(f"No *.chunks.jsonl files found in {run_dir}.")
+
+
 def load_chunks(path: Path) -> List[dict]:
     out = []
     if not path.exists():
@@ -87,8 +128,14 @@ def write_meta(run_dir: Path, ids: List[str], texts: List[str], chunks: List[dic
             "page": ch.get("page"),
             "bbox": ch.get("bbox"),
             "block_type": ch.get("block_type"),
+            "label": ch.get("label"),
+            "labels": (ch.get("metadata") or {}).get("labels") if isinstance(ch.get("metadata"), dict) else None,
+            "page_span": (ch.get("metadata") or {}).get("page_span") if isinstance(ch.get("metadata"), dict) else None,
+            "pages": (ch.get("metadata") or {}).get("pages") if isinstance(ch.get("metadata"), dict) else None,
+            "block_ids": (ch.get("metadata") or {}).get("block_ids") if isinstance(ch.get("metadata"), dict) else None,
             "semantic_id": ch.get("semantic_id"),
             "source_backend": ch.get("source_backend"),
+            "source_backends": (ch.get("metadata") or {}).get("source_backends") if isinstance(ch.get("metadata"), dict) else None,
             "flags": ch.get("flags", {}),
         }
     meta = {"dim": dim, "n": len(ids), "id_to_ref": id_to_ref}
@@ -111,7 +158,7 @@ def main():
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
-    chunks_path = run_dir / "chunks.jsonl"
+    chunks_path = find_chunks_file(run_dir)
     chunks = load_chunks(chunks_path)
     if not chunks:
         print("No chunks to index.")
