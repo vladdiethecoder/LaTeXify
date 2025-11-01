@@ -36,6 +36,10 @@ Notes:
 
 from __future__ import annotations
 <<<<<<< ours
+<<<<<<< ours
+=======
+
+>>>>>>> theirs
 =======
 
 >>>>>>> theirs
@@ -47,9 +51,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 <<<<<<< ours
+<<<<<<< ours
 from typing import Iterable, List, Optional, Tuple
 =======
 from typing import Any, Dict, List, Optional
+=======
+from typing import Any, Dict, List, Optional
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+>>>>>>> theirs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -89,6 +101,9 @@ def load_images_from_dir(img_dir: Path) -> List["Image.Image"]:
     return [Image.open(p).convert("RGB") for p in files]
 =======
 RUN_STAMP = time.strftime("%Y-%m-%dT%H-%M-%S")
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 
 # ---------- Engines ----------
@@ -373,12 +388,16 @@ def _spawn_backend_worker(spec: BackendSpec, pages_dir: Path, run_dir: Path) -> 
     - instantiates backend with dtype
     - runs all pages sequentially for that backend
     """
+<<<<<<< ours
     # Isolate GPU in this process
+=======
+>>>>>>> theirs
     prev_cuda = os.environ.get("CUDA_VISIBLE_DEVICES")
     if spec.device is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(spec.device)
-    # Safe defaults for FP16 & Flash-SDP/FA2 (global)
+
     try:
+<<<<<<< ours
         import torch
 
         torch.set_float32_matmul_precision("medium")
@@ -387,11 +406,24 @@ def _spawn_backend_worker(spec: BackendSpec, pages_dir: Path, run_dir: Path) -> 
             from torch.backends.cuda import sdp_kernel
 
             sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True)
+=======
+        # Safe defaults for FP16 & Flash-SDP/FA2 (global)
+        try:
+            import torch
+
+            torch.set_float32_matmul_precision("medium")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            try:
+                from torch.backends.cuda import sdp_kernel
+
+                sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True)
+            except Exception:
+                pass
+>>>>>>> theirs
         except Exception:
             pass
-    except Exception:
-        pass
 
+<<<<<<< ours
     try:
         be = spec.instantiate()
     except ModuleNotFoundError as exc:
@@ -410,6 +442,29 @@ def _spawn_backend_worker(spec: BackendSpec, pages_dir: Path, run_dir: Path) -> 
             rec: Dict[str, Any] = {"model": spec.name, "page": page_png.name}
             try:
                 r = be.recognize_page(str(page_png), page=1)
+=======
+        try:
+            be = spec.instantiate()
+        except ModuleNotFoundError as exc:
+            missing = exc.name or str(exc)
+            print(
+                f"[warn] {spec.name}: missing optional dependency '{missing}'. Skipping backend.",
+                file=sys.stderr,
+            )
+            return []
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"[warn] {spec.name}: failed to initialize ({exc}). Skipping backend.",
+                file=sys.stderr,
+            )
+            return []
+
+        results: List[Dict[str, Any]] = []
+        for page_num, page_png in enumerate(sorted(pages_dir.glob("*.png")), start=1):
+            rec: Dict[str, Any] = {"model": spec.name, "page": page_png.name}
+            try:
+                r = be.recognize_page(str(page_png), page=page_num)
+>>>>>>> theirs
                 text_md = (r.text_md or "").strip()
                 rec["text_len"] = len(text_md)
                 out_md = _dump_markdown(run_dir, spec.name, page_png, text_md)
@@ -468,9 +523,18 @@ def main() -> None:
         default="qwen2-vl-ocr-2b,nanonets-ocr2-3b,nanonets-ocr-s",
         help="Comma-separated list of OCR backends to run.",
     )
+<<<<<<< ours
     p.add_argument("--device_map", type=str, default=None,
                    help="Comma list: name:gpu_id,... (e.g., qwen2-vl-ocr-2b:0,nanonets-ocr2-3b:1)")
     p.add_argument("--concurrent", type=int, default=1)
+=======
+    p.add_argument(
+        "--device_map",
+        type=str,
+        default=None,
+        help="Comma list: name:gpu_id,... (e.g., qwen2-vl-ocr-2b:0,nanonets-ocr2-3b:1)",
+    )
+>>>>>>> theirs
     p.add_argument(
         "--run-dir",
         type=Path,
