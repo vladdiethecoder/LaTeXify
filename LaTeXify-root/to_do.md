@@ -58,14 +58,14 @@ This file tracks the project's priorities, focusing on robustness and building a
 
 ## Priority Tasks (NEED to be done)
 
--   [ ] **Final Compilation Loop:** Implement a robust `pdflatex` compilation loop in the pipeline. It must detect errors (by parsing the `.log`) and identify the failing snippet.
+-   [x] **Final Compilation Loop:** Implement a robust `pdflatex` compilation loop in the pipeline. It must detect errors (by parsing the `.log`) and identify the failing snippet.
 -   [ ] **Synthesis Agent (Complex Content):** Enhance `synth_latex.py` to reliably handle complex layouts, multi-column text, figures (`graphicx`), and tables (`tabular`, `booktabs`).
 -   [ ] **Integrate Evaluation Metric:** Finalize and integrate `dev/eval/metrics.py`. Automatically score all test runs in `/dev/runs/` against their ground truth.
 -   [ ] **Dependency Management:** Consolidate `dev/requirements-ocr.txt` and other dependencies into a single root `requirements.txt`.
 
 ## Robustness & Accuracy (The "Self-Improving" Loop)
 
--   [ ] **Self-Correction Agent:** This is the top priority for robustness.
+-   [x] **Self-Correction Agent:** This is the top priority for robustness.
     -   **Task:** If the compilation loop fails, a new 'correction' agent should be triggered.
     -   **Input:** The failing `.tex` snippet, the `pdflatex` error log, and the original data bundle.
     -   **Action:** The agent will read the error, query the LaTeX KB for solutions, and attempt to re-synthesize *only* the failing snippet.

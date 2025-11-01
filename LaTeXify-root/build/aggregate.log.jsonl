@@ -1,0 +1,27 @@
+{"event": "aggregate_start", "plan": "plan.json", "resolved_plan": "plan.json", "snippets": "build/snippets", "out_dir": "build"}
+{"event": "doc_class_fallback", "requested": "lix_textbook", "used": "scrartcl"}
+{"event": "snippet_found", "task_id": "PREAMBLE", "path": "build/snippets/PREAMBLE.tex"}
+{"event": "snippet_found", "task_id": "TITLE", "path": "build/snippets/TITLE.tex"}
+{"event": "snippet_missing_placeholder_injected", "task_id": "12", "path": "build/snippets/12.tex"}
+{"event": "bib_detection", "use_biblatex": false}
+{"event": "main_written", "path": "build/main.tex", "bytes": 615}
+{"event": "engine_selected", "engine": "pdflatex", "doc_class": "scrartcl"}
+{"event": "aggregate_done", "compile_attempted": true, "compile_ok": false, "used_bib": false, "out": "build", "engine": "pdflatex"}
+{"event": "aggregate_start", "plan": "plan.json", "resolved_plan": "plan.json", "snippets": "build/snippets", "out_dir": "build"}
+{"event": "doc_class_fallback", "requested": "lix_textbook", "used": "scrartcl"}
+{"event": "snippet_found", "task_id": "PREAMBLE", "path": "build/snippets/PREAMBLE.tex"}
+{"event": "snippet_found", "task_id": "TITLE", "path": "build/snippets/TITLE.tex"}
+{"event": "snippet_missing_placeholder_injected", "task_id": "12", "path": "build/snippets/12.tex"}
+{"event": "bib_detection", "use_biblatex": false}
+{"event": "main_written", "path": "build/main.tex", "bytes": 615}
+{"event": "engine_selected", "engine": "pdflatex", "doc_class": "scrartcl"}
+{"event": "aggregate_done", "compile_attempted": true, "compile_ok": false, "used_bib": false, "out": "build", "engine": "pdflatex"}
+{"event": "aggregate_start", "plan": "plan.json", "resolved_plan": "plan.json", "snippets": "build/snippets", "out_dir": "build"}
+{"event": "doc_class_fallback", "requested": "lix_textbook", "used": "scrartcl"}
+{"event": "snippet_found", "task_id": "PREAMBLE", "path": "build/snippets/PREAMBLE.tex"}
+{"event": "snippet_found", "task_id": "TITLE", "path": "build/snippets/TITLE.tex"}
+{"event": "snippet_missing_placeholder_injected", "task_id": "12", "path": "build/snippets/12.tex"}
+{"event": "bib_detection", "use_biblatex": false}
+{"event": "main_written", "path": "build/main.tex", "bytes": 615}
+{"event": "engine_selected", "engine": "pdflatex", "doc_class": "scrartcl"}
+{"event": "aggregate_done", "compile_attempted": true, "compile_ok": false, "used_bib": false, "out": "build", "engine": "pdflatex"}

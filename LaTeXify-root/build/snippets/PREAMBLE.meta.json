@@ -1,0 +1,7 @@
+{
+  "id": "PREAMBLE",
+  "route": "override",
+  "model_path": "/run/media/vdubrov/Active Storage/huggingface_cache/hub/models--TheBloke--CodeLlama-70B-Instruct-GGUF/snapshots/c5f150c9750d3106575920d616f06eaecb2fe125/codellama-70b-instruct.Q4_K_M.gguf",
+  "seed": 4242,
+  "capabilities": []
+}

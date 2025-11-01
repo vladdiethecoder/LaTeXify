@@ -1,150 +1,75 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-End-to-end DCL pipeline (planner -> synth_dcl -> checks -> aggregate).
 
-Usage (example):
-  python scripts/pipeline_dcl.py \
-    --assignment indexes/assignment.index \
-    --assessment indexes/assessment.index \
-    --rubric indexes/rubric.index \
-    --user indexes/user.index \
-    --latexkb indexes/latex_docs.index \
-    --out build_dcl/ \
-    --doc_class lix_textbook \
-    --title " " --author " " --course " " --date " " \
-    --qid_min 1 --qid_max 400 --fallback_user_ids \
-    --init_topk 3 --expand_topk 2 --max_rounds 1 --final_k 4 \
-    --reranker none --rerank_k 8 --max_ctx_tokens 1200 \
-    --model none \
-    --compile
 """
+pipeline_dcl.py — Orchestrator variant (Document Class / DCL flow)
+
+This variant is identical in spirit to pipeline.py but is a separate entrypoint if you
+have a DCL-specific builder. It calls the Final Compilation Loop to compile build/main.tex.
+"""
+
 from __future__ import annotations
-
 import argparse
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent
+SCRIPTS = ROOT / "scripts"
+BUILD = ROOT / "build"
+RUNS_ROOT = ROOT / "dev" / "runs"
 
-def run_cmd(args):
-    print(f"[dcl-pipeline] $ {' '.join(args)}")
-    subprocess.run(args, check=True)
+def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
+    print(f"[run] {' '.join(map(str, cmd))}")
+    subprocess.check_call(cmd, cwd=str(cwd or ROOT), env=env)
 
+def ensure_dirs() -> None:
+    BUILD.mkdir(parents=True, exist_ok=True)
+    RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
-def main():
+def make_tex_env() -> dict:
+    env = os.environ.copy()
+    env["TEXINPUTS"] = env.get("TEXINPUTS", "") + (":" if env.get("TEXINPUTS") else "") + str(ROOT) + ":."
+    return env
+
+def main() -> int:
     ap = argparse.ArgumentParser()
-    # indexes
-    ap.add_argument("--assignment", required=True)
-    ap.add_argument("--assessment", required=True)
-    ap.add_argument("--rubric", required=True)
-    ap.add_argument("--user", required=True)
-    ap.add_argument("--latexkb", required=True)
-
-    # plan metadata
-    ap.add_argument("--out", required=True)
-    ap.add_argument("--doc_class", default="lix_textbook")
-    ap.add_argument("--title", default="")
-    ap.add_argument("--author", default="")
-    ap.add_argument("--course", default="")
-    ap.add_argument("--date", default="")
-
-    # planner knobs
-    ap.add_argument("--qid_min", type=int, default=None)
-    ap.add_argument("--qid_max", type=int, default=None)
-    ap.add_argument("--fallback_user_ids", action="store_true")
-
-    # DCL budgets + reranker
-    ap.add_argument("--init_topk", type=int, default=3)
-    ap.add_argument("--expand_topk", type=int, default=2)
-    ap.add_argument("--max_rounds", type=int, default=1)
-    ap.add_argument("--final_k", type=int, default=4)
-    ap.add_argument("--max_ctx_tokens", type=int, default=1200)
-    ap.add_argument("--reranker", type=str, default="none")
-    ap.add_argument("--rerank_k", type=int, default=8)
-
-    # model hook
-    ap.add_argument("--device", type=str, default=None)
-    ap.add_argument("--model", type=str, default="none")
-
-    # compile
-    ap.add_argument("--compile", action="store_true")
-
+    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--run-id", type=str, default=None)
+    ap.add_argument("--skip-aggregate", action="store_true",
+                    help="Skip Aggregation; just compile existing build/main.tex")
     args = ap.parse_args()
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    plan_path = out_dir / "plan.json"
-    snippets_dir = out_dir / "snippets"
-    checks_dir = out_dir / "checks"
-    checks_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dirs()
+    tex_env = make_tex_env()
+    run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
 
-    # 1) planner
-    planner_cmd = [
-        "python", "scripts/planner_scaffold.py",
-        "--assessment", args.assessment,
-        "--rubric", args.rubric,
-        "--assignment", args.assignment,
-        "--user", args.user,
-        "--out", str(plan_path),
-        "--doc_class", args.doc_class,
-        "--title", args.title,
-        "--author", args.author,
-        "--course", args.course,
-        "--date", args.date,
-    ]
-    if args.qid_min is not None:
-        planner_cmd += ["--qid_min", str(args.qid_min)]
-    if args.qid_max is not None:
-        planner_cmd += ["--qid_max", str(args.qid_max)]
-    if args.fallback_user_ids:
-        planner_cmd += ["--fallback_user_ids"]
-    run_cmd(planner_cmd)
+    if not args.skip_aggregate:
+        # Example: if DCL pipeline produces build/main.tex here; adapt if needed.
+        # run([sys.executable, str(SCRIPTS / "aggregator.py"), "--plan", str(BUILD / "plan.json"), "--snippets", str(BUILD / "snippets"), "--out", str(BUILD)], env=tex_env)
+        pass
 
-    # 2) synth (DCL)
-    synth_cmd = [
-        "python", "scripts/synth_latex_dcl.py",
-        "--plan", str(plan_path),
-        "--user", args.user,
-        "--assessment", args.assessment,
-        "--rubric", args.rubric,
-        "--assignment", args.assignment,
-        "--latexkb", args.latexkb,
-        "--out_dir", str(snippets_dir),
-        "--device", args.device or "",
-        "--model", args.model or "none",
-        "--init_topk", str(args.init_topk),
-        "--expand_topk", str(args.expand_topk),
-        "--max_rounds", str(args.max_rounds),
-        "--final_k", str(args.final_k),
-        "--max_ctx_tokens", str(args.max_ctx_tokens),
-        "--reranker", args.reranker,
-        "--rerank_k", str(args.rerank_k),
-    ]
-    run_cmd(synth_cmd)
+    main_tex = BUILD / "main.tex"
+    if not main_tex.exists():
+        print(f"[pipeline_dcl] Expected {main_tex} but it does not exist. Did Aggregation run?")
+        return 1
 
-    # 3) postflight checks (inject/report)
-    checks_cmd = [
-        "python", "scripts/postflight_tex_checks.py",
-        "--snippets", str(snippets_dir),
-        "--out", str(checks_dir / "report.json"),
-        "--plan", str(plan_path),
-    ]
-    run_cmd(checks_cmd)
+    # Clean → Compile → (Auto-Fix once)
+    run([sys.executable, str(SCRIPTS / "clean_build.py")], env=tex_env)
+    run([
+        sys.executable, str(SCRIPTS / "compile_loop.py"),
+        "--main-tex", str(main_tex),
+        "--build-dir", str(BUILD),
+        "--runs-root", str(RUNS_ROOT),
+        "--run-id", run_id,
+        "--auto-fix", "1",
+        "--seed", str(args.seed),
+    ], env=tex_env)
 
-    # 4) aggregate + compile
-    agg_cmd = [
-        "python", "scripts/aggregate_tex.py",
-        "--plan", str(plan_path),
-        "--snippets", str(snippets_dir),
-        "--out_dir", str(out_dir),
-    ]
-    if args.compile:
-        agg_cmd.append("--compile")
-    run_cmd(agg_cmd)
-
-    print("[dcl-pipeline] Done.")
-
+    print(f"[pipeline_dcl] Done → {BUILD / 'main.pdf'}")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

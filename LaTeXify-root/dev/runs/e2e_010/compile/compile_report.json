@@ -1,0 +1,27 @@
+{
+  "status": "fail",
+  "main_tex": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/main.tex",
+  "build_dir": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build",
+  "passes": 2,
+  "retry_policy": {
+    "max_retries": 1,
+    "auto_fix_attempted": true
+  },
+  "seed": 4242,
+  "errors": [],
+  "artifacts": {
+    "log_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/main.log",
+    "stdout_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/dev/runs/e2e_010/compile/latexmk.stdout.txt",
+    "stderr_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/dev/runs/e2e_010/compile/latexmk.stderr.txt",
+    "pdf_file": null
+  },
+  "auto_fix": {
+    "status": "skipped",
+    "changed_file": null,
+    "rationale": "Category=unknown_error. ",
+    "what_changed": "No safe rule-based fix for this category.",
+    "debug": {
+      "notes": "ok"
+    }
+  }
+}

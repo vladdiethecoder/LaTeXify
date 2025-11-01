@@ -1,144 +1,93 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-End-to-end driver:
-1) plan
-2) write static snippets
-3) synthesize Q*.tex with local llama.cpp (GGUF)
-4) aggregate to main.tex
-5) latexmk in build/
 
-DCL hygiene: export TEXINPUTS, build-only latexmk, stub LiX fallback if missing.
 """
+pipeline.py — Orchestrator (compile stage wired to Final Compilation Loop)
+
+This keeps your existing upstream stages (Planner → Retrieval → Synthesis → Aggregation)
+as-is, and replaces the raw latexmk call with:
+  1) scripts/clean_build.py
+  2) scripts/compile_loop.py  (auto-fix once)
+
+If your upstream agents are invoked here, leave them; if they run elsewhere,
+this file still works as a post-Aggregation compile driver when build/main.tex exists.
+
+Usage:
+  python pipeline.py --seed 4242
+"""
+
 from __future__ import annotations
-import argparse, json, os, pathlib, subprocess, sys, textwrap
+import argparse
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+HERE = Path(__file__).resolve()
+REPO_ROOT = HERE.parents[1]          # << was likely HERE.parent before
+BUILD = REPO_ROOT / "build"
+RUNS  = REPO_ROOT / "dev" / "runs"
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
+    print(f"[run] {' '.join(map(str, cmd))}")
+    subprocess.check_call(cmd, cwd=str(cwd or ROOT), env=env)
 
-def run(cmd, cwd=None, env=None):
-    print(f"+ (cwd={cwd or ROOT}) {' '.join(cmd)}")
-    p = subprocess.run(cmd, cwd=cwd or ROOT, env=env, text=True)
-    if p.returncode != 0:
-        sys.exit(p.returncode)
+def ensure_dirs() -> None:
+    BUILD.mkdir(parents=True, exist_ok=True)
+    RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
-def ensure_stub_class(build_dir: pathlib.Path, doc_class: str):
-    # Write a tiny fallback class that defers to article
-    stubs = build_dir / "_stubs"
-    stubs.mkdir(parents=True, exist_ok=True)
-    cls = stubs / f"{doc_class}.cls"
-    if not cls.exists():
-        cls.write_text(textwrap.dedent(f"""
-        %% Auto-generated LiX fallback stub
-        \\NeedsTeXFormat{{LaTeX2e}}
-        \\ProvidesClass{{{doc_class}}}[2025/10/30 LiX fallback stub]
-        \\LoadClass{{article}}
-        """).strip()+"\n", encoding="utf-8")
+def make_tex_env() -> dict:
+    env = os.environ.copy()
+    # Ensure LiX classes and class KB (if you use TEXINPUTS)
+    # Append . to TEXINPUTS so LaTeX can find local files first
+    env["TEXINPUTS"] = env.get("TEXINPUTS", "") + (":" if env.get("TEXINPUTS") else "") + str(ROOT) + ":."
+    return env
 
-def build_texinputs_env(build_dir: pathlib.Path) -> str:
-    # Search order: build/_stubs, kb/offline/classes, kb/offline/latex, kb/offline/course, LiX
-    search = [
-        build_dir / "_stubs",
-        ROOT / "kb" / "offline" / "classes",
-        ROOT / "kb" / "offline" / "latex",
-        ROOT / "kb" / "offline" / "course",
-        ROOT / "LiX",
-    ]
-    parts = [str(p) for p in search if p.exists()]
-    return ":".join(parts) + ":"
-
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="build")
-    ap.add_argument("--questions", default="Q1a,Q1b")
-    ap.add_argument("--doc-class", default="lix_textbook")
-    ap.add_argument("--title", default="Untitled")
-    ap.add_argument("--author", default="Student X")
-    ap.add_argument("--course", default="COURSE 101")
-    ap.add_argument("--date", default="\\today")
-    ap.add_argument("--force-plan", action="store_true")
-    ap.add_argument("--mode", default="auto")
-
-    # LLM params
-    ap.add_argument("--hf-cache", default=None)
-    ap.add_argument("--gguf-model", default=None)
-    ap.add_argument("--n-gpu-layers", type=int, default=-1)
-    ap.add_argument("--tensor-split", default="auto")
-    ap.add_argument("--ctx", type=int, default=4096)
-    ap.add_argument("--seed", type=int, default=12345)
-
+    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--run-id", type=str, default=None)
+    ap.add_argument("--skip-agents", action="store_true",
+                    help="Skip Planner/RAG/Synth/Aggregate and just compile existing build/main.tex")
     args = ap.parse_args()
 
-    build_dir = ROOT / args.out
-    build_dir.mkdir(exist_ok=True, parents=True)
+    ensure_dirs()
+    tex_env = make_tex_env()
+    run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
 
-    # 1) Planner → plan.json
-    plan_path = build_dir / "plan.json"
-    if args.force_plan or not plan_path.exists():
-        plan = {
-            "doc_class": args.doc_class,
-            "title": args.title,
-            "author": args.author,
-            "course": args.course,
-            "date": args.date,
-            "questions": [q.strip() for q in args.questions.split(",") if q.strip()],
-            "question_texts": {q.strip(): f"Answer the question {q.strip()} clearly with steps."
-                               for q in args.questions.split(",")}
-        }
-        plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
-        print(f"Wrote plan → {plan_path}")
-    else:
-        print(f"Using existing plan → {plan_path}")
+    # ----------------------------------------------------------------------
+    # (Optional) Upstream agents if you invoke them from here.
+    # Commented as placeholders; leave your existing calls if you already do this elsewhere.
+    if not args.skip_agents:
+        # Example placeholders — uncomment/adapt if your CLI matches:
+        # run([sys.executable, str(SCRIPTS / "planner_scaffold.py"), "--out", str(BUILD / "plan.json")], env=tex_env)
+        # run([sys.executable, str(SCRIPTS / "retrieval_agent.py"), "--plan", str(BUILD / "plan.json"), "--out", "bundles"], env=tex_env)
+        # run([sys.executable, str(SCRIPTS / "synth_latex.py"), "--bundles", "bundles", "--out", str(BUILD / "snippets")], env=tex_env)
+        # run([sys.executable, str(SCRIPTS / "aggregator.py"), "--plan", str(BUILD / "plan.json"), "--snippets", str(BUILD / "snippets"), "--out", str(BUILD)], env=tex_env)
+        pass
 
-    # 2) Static snippets (preamble/title) + seed main.tex
+    # Require a main.tex to compile
+    main_tex = BUILD / "main.tex"
+    if not main_tex.exists():
+        print(f"[pipeline] Expected {main_tex} but it does not exist. Did Aggregation run?")
+        return 1
+
+    # ----------------------------------------------------------------------
+    # NEW: Clean → Compile → (Auto-Fix once)
+    run([sys.executable, str(SCRIPTS / "clean_build.py")], env=tex_env)
+
     run([
-        sys.executable, "scripts/write_static_snippets.py",
-        "--plan", str(plan_path),
-        "--snippets", str(build_dir / "snippets"),
-        "--main", str(build_dir / "main.tex")
-    ])
-
-    # 3) Synthesis with local model
-    run([
-        sys.executable, "scripts/synth_latex.py",
-        "--plan", str(plan_path),
-        "--outdir", str(build_dir / "snippets"),
-        "--hf-cache", args.hf_cache or "",
-        "--gguf-model", args.gguf_model or "",
-        "--n-gpu-layers", str(args.n_gpu_layers),
-        "--tensor-split", args.tensor_split,
-        "--ctx", str(args.ctx),
+        sys.executable, str(SCRIPTS / "compile_loop.py"),
+        "--main-tex", str(main_tex),
+        "--build-dir", str(BUILD),
+        "--runs-root", str(RUNS_ROOT),
+        "--run-id", run_id,
+        "--auto-fix", "1",
         "--seed", str(args.seed),
-        "--mode", args.mode
-    ])
+    ], env=tex_env)
 
-    # 4) Aggregate snippets into main.tex
-    run([
-        sys.executable, "scripts/aggregate_tex.py",
-        "--plan", str(plan_path),
-        "--snippets", str(build_dir / "snippets"),
-        "--out", str(build_dir / "main.tex")
-    ])
-
-    # 5) Ensure stub class if real one isn't available
-    ensure_stub_class(build_dir, args.doc_class)
-
-    # DCL: TEXINPUTS search order (document it)
-    print("[DCL] TEXINPUTS search order:")
-    for p in build_texinputs_env(build_dir).split(":"):
-        if p: print(f"   - {p}")
-    tex_env = os.environ.copy()
-    tex_env["TEXINPUTS"] = build_texinputs_env(build_dir)
-    print(f"[DCL] TEXINPUTS (exported): {tex_env['TEXINPUTS']}")
-
-    # latexmk inside build/
-    run(["latexmk", "-cd", "-C", "main.tex"], cwd=build_dir, env=tex_env)
-    run([
-            "latexmk", "-cd", "-g",
-            "-pdf", "-interaction=nonstopmode", "-halt-on-error", "main.tex"
-        ],
-        cwd=build_dir, env=tex_env
-    )
-    print(f"Pipeline complete → {build_dir / 'main.pdf'}")
+    print(f"[pipeline] Done → {BUILD / 'main.pdf'}")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

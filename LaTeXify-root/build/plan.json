@@ -1,15 +1,29 @@
 {
   "doc_class": "lix_textbook",
-  "title": "Basic Skills Review Unit",
-  "author": "Student X",
-  "course": "MATH 101",
-  "date": "\\today",
-  "questions": [
-    "Q1a",
-    "Q1b"
-  ],
-  "question_texts": {
-    "Q1a": "Answer the question Q1a clearly with steps.",
-    "Q1b": "Answer the question Q1b clearly with steps."
-  }
+  "frontmatter": {
+    "title": "Basic Skills Review — USER",
+    "author": "Auto",
+    "course": "Auto",
+    "date": "2025-11-01"
+  },
+  "tasks": [
+    {
+      "id": "PREAMBLE",
+      "type": "preamble",
+      "order": 0,
+      "title": "PREAMBLE"
+    },
+    {
+      "id": "TITLE",
+      "type": "titlepage",
+      "order": 1,
+      "title": "Title"
+    },
+    {
+      "id": "12",
+      "type": "question",
+      "title": "12",
+      "order": 2
+    }
+  ]
 }

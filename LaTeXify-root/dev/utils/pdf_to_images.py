@@ -1,22 +1,46 @@
-# dev/utils/pdf_to_images.py
 from __future__ import annotations
-import pathlib
-import fitz  # PyMuPDF
+import subprocess
+from pathlib import Path
 from typing import List
 
-def pdf_to_images(pdf_path: str, out_dir: str, dpi: int = 400, prefix: str = "page") -> List[str]:
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+def _pdftoppm(pdf: Path, out_dir: Path, dpi: int) -> List[Path]:
+    _ensure_dir(out_dir)
+    # pdftoppm writes page-000001.png, etc.
+    prefix = out_dir / "page"
+    cmd = ["pdftoppm", "-png", "-r", str(dpi), str(pdf), str(prefix)]
+    subprocess.run(cmd, check=True)
+    paths = sorted(out_dir.glob("page-*.png"))
+    if not paths:
+        # some pdftoppm versions use page-000001.png or page-1.png
+        paths = sorted(out_dir.glob("page*.png"))
+    return [p.resolve() for p in paths]
+
+def pdf_to_images(pdf_path: str | Path, out_dir: str | Path, dpi: int = 300) -> List[Path]:
     """
-    Convert all pages of a PDF to PNGs at the requested DPI.
-    Returns the list of image paths in reading order.
+    Convert a PDF to per-page PNG images and return their absolute paths.
+
+    Prefers pdf2image (Pillow pipeline). Falls back to system 'pdftoppm'
+    for robustness.
     """
-    pdf = pathlib.Path(pdf_path)
-    out = pathlib.Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    doc = fitz.open(str(pdf))
-    paths: List[str] = []
-    for i in range(doc.page_count):
-        pix = doc[i].get_pixmap(dpi=dpi)  # 300+ dpi improves OCR fidelity
-        img_path = out / f"{prefix}-{i+1:04d}.png"
-        pix.save(img_path)
-        paths.append(str(img_path))
-    return paths
+    pdf = Path(pdf_path).resolve()
+    out = Path(out_dir).resolve()
+    _ensure_dir(out)
+    # Try pdf2image first
+    try:
+        from pdf2image import convert_from_path  # type: ignore
+        images = convert_from_path(str(pdf), dpi=dpi)
+        paths: List[Path] = []
+        for i, img in enumerate(images, start=1):
+            p = out / f"page_{i:04d}.png"
+            img.save(str(p), "PNG")
+            paths.append(p.resolve())
+        if paths:
+            return paths
+    except Exception:
+        pass  # fall back to pdftoppm
+
+    # Fallback to pdftoppm
+    return _pdftoppm(pdf, out, dpi)

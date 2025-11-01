@@ -26,7 +26,7 @@ import json
 import argparse
 import random
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import faiss  # type: ignore
@@ -99,6 +99,24 @@ def ensure_out_dir(run_dir: str, out: Optional[str]) -> Path:
     p.mkdir(parents=True, exist_ok=True)
     return p
 
+def resolve_output_paths(run_dir: str, out: Optional[str], prefix: Optional[str]) -> Tuple[Path, Path]:
+    """
+    Returns (index_path, meta_path).
+    If prefix is provided, files are written inside run_dir using the prefix:
+        <run_dir>/<prefix>.faiss.index, <run_dir>/<prefix>.faiss.meta.json
+    Otherwise, fall back to ensure_out_dir semantics.
+    """
+    if prefix:
+        run_path = Path(run_dir)
+        run_path.mkdir(parents=True, exist_ok=True)
+        index_path = run_path / f"{prefix}.faiss.index"
+        meta_path = run_path / f"{prefix}.faiss.meta.json"
+        return index_path, meta_path
+
+    out_dir = ensure_out_dir(run_dir, out)
+    index_path = out_dir / "faiss.index"
+    meta_path = out_dir / "faiss.meta.json"
+    return index_path, meta_path
 
 def load_model(model_name: str = "BAAI/bge-m3") -> SentenceTransformer:
     device = "cuda" if (torch is not None and torch.cuda.is_available()) else "cpu"
@@ -127,7 +145,26 @@ def build_faiss(embeddings: np.ndarray) -> faiss.Index:
     return index
 
 
-def write_meta(out_dir: Path,
+def _coerce_flags(flags: Any) -> Dict[str, bool]:
+    if isinstance(flags, dict):
+        return {str(k): bool(v) for k, v in flags.items()}
+    if isinstance(flags, list):
+        return {str(k): True for k in flags}
+    if isinstance(flags, str):
+        return {flags: True}
+    return {}
+
+
+def _pick_meta(chunk: Dict[str, Any], key: str) -> Any:
+    if key in chunk and chunk[key] is not None:
+        return chunk[key]
+    meta = chunk.get("metadata")
+    if isinstance(meta, dict):
+        return meta.get(key)
+    return None
+
+
+def write_meta(meta_path: Path,
                model_name: str,
                dim: int,
                ids: List[str],
@@ -135,14 +172,17 @@ def write_meta(out_dir: Path,
                run_dir: str) -> None:
     id_to_ref: List[Dict[str, Any]] = []
     for i, chunk in enumerate(chunks):
+        meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else None
         id_to_ref.append({
             "id": ids[i],
             "text": chunk.get("text"),
-            "page": chunk.get("page"),
-            "bbox": chunk.get("bbox"),
-            "block_type": chunk.get("block_type"),
-            "semantic_id": chunk.get("semantic_id"),
-            "flags": chunk.get("flags", {}),
+            "page": _pick_meta(chunk, "page"),
+            "bbox": _pick_meta(chunk, "bbox"),
+            "block_type": _pick_meta(chunk, "block_type"),
+            "semantic_id": _pick_meta(chunk, "semantic_id"),
+            "flags": _coerce_flags(_pick_meta(chunk, "flags")),
+            "source_backend": _pick_meta(chunk, "source_backend"),
+            "metadata": meta,
         })
 
     meta = {
@@ -155,8 +195,8 @@ def write_meta(out_dir: Path,
         "id_to_ref": id_to_ref,
         "run_dir": run_dir,
     }
-    (out_dir / "faiss.meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 def main():
     set_determinism(42)
@@ -164,13 +204,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_dir", required=True, help="Per-PDF run dir containing chunks.jsonl")
     ap.add_argument("--out", default=None, help="Output directory for index (defaults inferred from run_dir)")
+    ap.add_argument("--prefix", default=None,
+                help="If set, write <run_dir>/<prefix>.faiss.index + .meta.json instead of directory outputs")
     ap.add_argument("--model_name", default="BAAI/bge-m3", help="Embedding model (default: BAAI/bge-m3)")
     ap.add_argument("--batch_size", type=int, default=64)
     args = ap.parse_args()
 
     run_dir = args.run_dir
-    out_dir = ensure_out_dir(run_dir, args.out)
-    chunks_path = Path(run_dir) / "chunks.jsonl"
+    index_path, meta_path = resolve_output_paths(run_dir, args.out, args.prefix)
+    run_path = Path(run_dir)
+    if args.prefix:
+        chunks_path = run_path / f"{args.prefix}.chunks.jsonl"
+    else:
+        chunks_path = run_path / "chunks.jsonl"
     chunks = read_chunks(chunks_path)
 
     if not chunks:
@@ -184,11 +230,11 @@ def main():
     embeddings = embed_texts(model, texts, batch_size=args.batch_size)
     index = build_faiss(embeddings)
 
-    faiss.write_index(index, str(out_dir / "faiss.index"))
-    write_meta(out_dir, args.model_name, embeddings.shape[1], ids, chunks, run_dir)
+    faiss.write_index(index, str(index_path))
+    write_meta(meta_path, args.model_name, embeddings.shape[1], ids, chunks, run_dir)
 
-    print(f"[index] wrote {out_dir / 'faiss.index'}")
-    print(f"[index] wrote {out_dir / 'faiss.meta.json'}")
+    print(f"[index] wrote {index_path}")
+    print(f"[index] wrote {meta_path}")
     print(f"[index] dim={embeddings.shape[1]} count={len(ids)}")
 
 
