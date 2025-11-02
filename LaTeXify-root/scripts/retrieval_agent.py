@@ -20,7 +20,9 @@ Usage:
     --out_dir build/context
 
   # options
-  --k 6 --mmr_lambda 0.6 --mmr_pool 20 --reranker BAAI/bge-reranker-v2-m3
+  --config scripts/retrieval_config.json \
+  --k 6 --stage1_topk 24 --mmr_lambda 0.6 \
+  --reranker BAAI/bge-reranker-v2-m3
 """
 from __future__ import annotations
 
@@ -46,6 +48,59 @@ try:
     import torch
 except Exception:
     torch = None  # type: ignore
+
+
+DEFAULT_CONFIG: Dict[str, Any] = {
+    "vector": {"top_k_stage1": 24},
+    "reranker": {
+        "model": "BAAI/bge-reranker-v2-m3",
+        "top_k_stage2": 6,
+        "device": None,
+        "batch_size": 8,
+    },
+    "fallback": {"strategy": "mmr", "lambda": 0.6},
+}
+
+
+def _merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_dicts(result[key], value)  # type: ignore[arg-type]
+        else:
+            result[key] = value
+    return result
+
+
+def load_config(path: Optional[str]) -> Dict[str, Any]:
+    cfg_path: Optional[Path] = None
+    if path:
+        cfg_path = Path(path)
+    else:
+        default_path = Path(__file__).with_name("retrieval_config.json")
+        if default_path.exists():
+            cfg_path = default_path
+
+    if cfg_path and cfg_path.exists():
+        try:
+            text = cfg_path.read_text(encoding="utf-8")
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                try:
+                    import yaml  # type: ignore
+                except Exception as exc:  # pragma: no cover - optional dep
+                    raise RuntimeError(
+                        "PyYAML is required to load YAML retrieval configs"
+                    ) from exc
+                data = yaml.safe_load(text) or {}
+        except Exception as e:
+            print(f"[retrieval] warning: could not load config {cfg_path}: {e}")
+            data = {}
+        if isinstance(data, dict):
+            return _merge_dicts(DEFAULT_CONFIG, data)
+        return dict(DEFAULT_CONFIG)
+    return dict(DEFAULT_CONFIG)
 
 
 def set_determinism(seed: int = 42) -> None:
@@ -199,6 +254,37 @@ def _text(r: dict) -> str:
     return str(r.get("text") or "")
 
 
+def _compact_entry(row: dict,
+                   *,
+                   max_len: int = 1000,
+                   include_label: bool = False) -> Optional[dict]:
+    text = _text(row).strip()
+    if not text:
+        return None
+    entry: Dict[str, Any] = {"text": text[:max_len]}
+    if row.get("page") is not None:
+        entry["page"] = row.get("page")
+    if include_label:
+        label = row.get("semantic_id") or row.get("label")
+        if label:
+            entry["label"] = label
+    doc_class = row.get("doc_class")
+    if not doc_class and isinstance(row.get("metadata"), dict):
+        doc_class = row["metadata"].get("doc_class")
+    if doc_class:
+        entry["doc_class"] = doc_class
+    return entry
+
+
+def _compact_list(rows: List[dict], *, max_len: int, include_label: bool = False) -> List[dict]:
+    out: List[dict] = []
+    for row in rows:
+        entry = _compact_entry(row, max_len=max_len, include_label=include_label)
+        if entry:
+            out.append(entry)
+    return out
+
+
 def build_for_task(task_id: str,
                    model: SentenceTransformer,
                    assess_idx: faiss.Index, assess_meta: dict,
@@ -206,7 +292,10 @@ def build_for_task(task_id: str,
                    assignment_idx: faiss.Index, assignment_meta: dict,
                    user_idx: faiss.Index, user_meta: dict,
                    reranker: BaseReranker,
-                   k: int, mmr_pool: int, mmr_lambda: float,
+                   stage1_topk: int,
+                   stage2_topk: int,
+                   fallback_strategy: str,
+                   fallback_lambda: float,
                    plan_doc_class: Optional[str]) -> dict:
     # Seed anchor rows via semantic_id
     q_rows = filter_by_semantic(assess_meta, task_id)
@@ -217,6 +306,11 @@ def build_for_task(task_id: str,
 
     # Search each index, gather a pool, rerank (fallback to MMR)
     plan_doc_class_norm = (plan_doc_class or "").strip().lower()
+    fallback_kind = (fallback_strategy or "mmr").lower()
+    final_k = stage2_topk if stage2_topk > 0 else stage1_topk
+    final_k = max(final_k, 0)
+    pool_fetch = max(stage1_topk, final_k, 1)
+    use_reranker = reranker.available() and stage2_topk > 0
 
     def _matches_doc_class(row: dict) -> bool:
         if not plan_doc_class_norm:
@@ -229,51 +323,70 @@ def build_for_task(task_id: str,
         return str(cand).strip().lower() == plan_doc_class_norm
 
     def pool_pick(idx: faiss.Index, meta: dict) -> List[dict]:
-        pool_size = max(mmr_pool, k, 20)
-        _, ids = _search(idx, q_vec, topk=pool_size)
+        _, ids = _search(idx, q_vec, topk=pool_fetch)
         cands = [r for r in _gather_candidates(meta, ids) if _matches_doc_class(r)]
         if not cands:
             return []
-        reranked = reranker.rerank(question_text, cands, top_k=k)
-        if reranker.available():
-            return [s.payload for s in reranked]
-        doc_vecs = _encode_passages(model, [_text(r) for r in cands])
-        sel = mmr_select(doc_vecs, q_vec[0], k=min(k, len(cands)), lam=mmr_lambda)
-        return [cands[i] for i in sel]
+        limit = min(final_k if final_k > 0 else len(cands), len(cands))
+        if limit <= 0:
+            return []
+        if use_reranker:
+            reranked = reranker.rerank(question_text, cands, top_k=limit)
+            payloads = [s.payload for s in reranked if s.payload]
+            if payloads:
+                return payloads[:limit]
+        if fallback_kind == "mmr":
+            doc_vecs = _encode_passages(model, [_text(r) for r in cands])
+            if getattr(doc_vecs, "size", 0) > 0:
+                sel = mmr_select(doc_vecs, q_vec[0], k=min(limit, len(cands)), lam=fallback_lambda)
+                return [cands[i] for i in sel]
+        return cands[:limit]
 
     assess_sel = pool_pick(assess_idx, assess_meta)
     rubric_sel = pool_pick(rubric_idx, rubric_meta)
-    assign_sel = _assignment_headers(assignment_meta) or pool_pick(assignment_idx, assignment_meta)
+    assign_limit = max(final_k, 1)
+    assign_sel = _assignment_headers(assignment_meta, k=assign_limit) or pool_pick(assignment_idx, assignment_meta)
     user_sel = pool_pick(user_idx, user_meta)
 
     # Flags from user
-    flags = []
+    flag_notes: List[Dict[str, Any]] = []
     for r in user_sel:
         f = r.get("flags") or {}
         if f.get("low_confidence") or f.get("high_ocr_disagreement"):
-            flags.append({"page": r.get("page"), "span": "", "reason": "uncertain OCR"})
+            flag_notes.append({"page": r.get("page"), "reason": "uncertain OCR"})
+
+    flags: Dict[str, Any] = {"ocr_uncertain": bool(flag_notes)}
+    if flag_notes:
+        flags["notes"] = flag_notes
+
+    rubric_source = rubric_sel if rubric_sel else rubric_meta.get("id_to_ref", [])[:max(final_k, 0)]
+    assignment_entries = _compact_list(assign_sel[:assign_limit], max_len=800)
+    user_entries = _compact_list(user_sel, max_len=1200)
+    assessment_entries = _compact_list(assess_sel or q_rows, max_len=1200)
+    rubric_entries = _compact_list(rubric_source, max_len=1200, include_label=True)
 
     bundle = {
         "task_id": task_id,
-        "question": {
-            "text": " ".join(_text(r) for r in (assess_sel or q_rows))[:4000],
-            "meta": {
-                "anchors": [task_id],
-                "pages": list({r.get("page") for r in (assess_sel or q_rows) if r.get("page") is not None})
-            }
-        },
-        "rubric": {
-            "criteria": [
-                {"id": f"R{i+1}", "label": (r.get("semantic_id") or "criterion"),
-                 "verbatim": _text(r)[:2000]}
-                for i, r in enumerate(rubric_sel if rubric_sel else rubric_meta.get("id_to_ref", [])[:k])
-            ]
-        },
-        "assignment_rules": [_text(r)[:1000] for r in assign_sel[:k]],
+        "doc_class": plan_doc_class,
+        "question": " ".join(_text(r) for r in (assess_sel or q_rows))[:4000] or task_id,
+        "assessment": assessment_entries,
+        "rubric": rubric_entries,
+        "assignment_rules": assignment_entries,
         "user_answer": {
-            "chunks": [{"page": r.get("page"), "text": _text(r)[:1200]} for r in user_sel],
+            "chunks": user_entries,
             "flags": flags
-        }
+        },
+        "diagnostics": {
+            "vector_top_k": stage1_topk,
+            "stage2_top_k": stage2_topk,
+            "fallback_strategy": fallback_kind,
+            "reranker": {
+                "name": getattr(reranker, "name", "none"),
+                "available": reranker.available(),
+                "status": reranker.status() if hasattr(reranker, "status") else "unknown",
+                "used": use_reranker,
+            },
+        },
     }
     return bundle
 
@@ -298,6 +411,7 @@ def main():
     set_determinism(42)
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", required=True)
+    ap.add_argument("--config", default=None, help="Path to retrieval config (JSON or YAML).")
     ap.add_argument("--task_id", default=None)
     ap.add_argument("--all_tasks", action="store_true")
     ap.add_argument("--assessment", required=True)
@@ -305,11 +419,16 @@ def main():
     ap.add_argument("--assignment", required=True)
     ap.add_argument("--user", required=True)
     ap.add_argument("--out_dir", required=True)
-    ap.add_argument("--k", type=int, default=6, help="MMR top-k per source")
-    ap.add_argument("--mmr_pool", type=int, default=20, help="FAISS pool size before rerank/MMR fallback")
-    ap.add_argument("--mmr_lambda", type=float, default=0.6, help="MMR relevance weight")
-    ap.add_argument("--reranker", default="BAAI/bge-reranker-v2-m3", help="Cross-encoder reranker model name or 'none'")
+    ap.add_argument("--stage1_topk", type=int, default=None, help="Override vector search top_k before rerank.")
+    ap.add_argument("--k", type=int, default=None, help="Override reranker top_k after rerank.")
+    ap.add_argument("--mmr_pool", type=int, default=None, help="Deprecated alias for --stage1_topk.")
+    ap.add_argument("--mmr_lambda", type=float, default=None, help="Override fallback lambda for MMR.")
+    ap.add_argument("--reranker", default=None, help="Cross-encoder reranker model name or 'none'.")
+    ap.add_argument("--reranker_device", default=None, help="Override reranker device (cpu/cuda).")
+    ap.add_argument("--reranker_batch_size", type=int, default=None, help="Override reranker batch size.")
     args = ap.parse_args()
+
+    config = load_config(args.config)
 
     plan = load_plan(args.plan)
 
@@ -324,7 +443,56 @@ def main():
     user_idx = load_index(args.user)
 
     model = load_model("BAAI/bge-m3")
-    reranker = get_reranker(args.reranker)
+    vector_cfg = config.get("vector", {}) if isinstance(config.get("vector"), dict) else {}
+    rerank_cfg = config.get("reranker", {}) if isinstance(config.get("reranker"), dict) else {}
+    fallback_cfg = config.get("fallback", {}) if isinstance(config.get("fallback"), dict) else {}
+
+    stage1_cfg_val = vector_cfg.get("top_k_stage1") if isinstance(vector_cfg, dict) else None
+    stage1_topk = stage1_cfg_val if stage1_cfg_val is not None else 24
+    if args.stage1_topk is not None:
+        stage1_topk = args.stage1_topk
+    elif args.mmr_pool is not None:
+        stage1_topk = args.mmr_pool
+    stage1_topk = max(int(stage1_topk), 1)
+
+    stage2_cfg_val = rerank_cfg.get("top_k_stage2") if isinstance(rerank_cfg, dict) else None
+    stage2_topk = stage2_cfg_val if stage2_cfg_val is not None else 6
+    if args.k is not None:
+        stage2_topk = args.k
+    stage2_topk = int(stage2_topk)
+    if stage2_topk < 0:
+        stage2_topk = 0
+
+    fallback_lambda_cfg = fallback_cfg.get("lambda") if isinstance(fallback_cfg, dict) else None
+    fallback_lambda = fallback_lambda_cfg if fallback_lambda_cfg is not None else 0.6
+    if args.mmr_lambda is not None:
+        fallback_lambda = args.mmr_lambda
+    fallback_lambda = float(fallback_lambda)
+
+    fallback_strategy_val = fallback_cfg.get("strategy") if isinstance(fallback_cfg, dict) else None
+    fallback_strategy = str(fallback_strategy_val or "mmr")
+
+    reranker_name_val = rerank_cfg.get("model") if isinstance(rerank_cfg, dict) else None
+    reranker_name = reranker_name_val if reranker_name_val is not None else "none"
+    if args.reranker is not None:
+        reranker_name = args.reranker
+
+    reranker_device = args.reranker_device or rerank_cfg.get("device")
+    reranker_batch_size = args.reranker_batch_size or rerank_cfg.get("batch_size")
+    reranker_batch_size = int(reranker_batch_size) if reranker_batch_size not in (None, "") else None
+
+    stage1_topk = max(stage1_topk, stage2_topk if stage2_topk > 0 else stage1_topk, 1)
+
+    reranker = get_reranker(reranker_name, device=reranker_device, batch_size=reranker_batch_size)
+
+    skip_reasons = []
+    if stage2_topk <= 0:
+        skip_reasons.append("top_k_stage2<=0")
+    if not reranker.available():
+        skip_reasons.append(reranker.status() if hasattr(reranker, "status") else "unavailable")
+    if skip_reasons:
+        joined = "; ".join(skip_reasons)
+        print(f"[retrieval] reranker skipped ({joined}); fallback={fallback_strategy}")
 
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -337,7 +505,10 @@ def main():
             assignment_idx, assignment_meta,
             user_idx, user_meta,
             reranker=reranker,
-            k=args.k, mmr_pool=args.mmr_pool, mmr_lambda=args.mmr_lambda,
+            stage1_topk=stage1_topk,
+            stage2_topk=stage2_topk,
+            fallback_strategy=fallback_strategy,
+            fallback_lambda=fallback_lambda,
             plan_doc_class=plan.get("doc_class")
         )
         (out_dir / f"{tid}.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")

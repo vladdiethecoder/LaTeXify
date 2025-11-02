@@ -1,0 +1,15 @@
+{
+  "vector": {
+    "top_k_stage1": 24
+  },
+  "reranker": {
+    "model": "BAAI/bge-reranker-v2-m3",
+    "top_k_stage2": 6,
+    "device": null,
+    "batch_size": 8
+  },
+  "fallback": {
+    "strategy": "mmr",
+    "lambda": 0.6
+  }
+}
