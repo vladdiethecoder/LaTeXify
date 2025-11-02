@@ -26,7 +26,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -34,11 +34,59 @@ PROJECT_ROOT = HERE.parent
 SAFE_PREAMBLE_ALLOWLIST = {
     "amsmath": r"\usepackage{amsmath}",
     "amssymb": r"\usepackage{amssymb}",
+    "booktabs": r"\usepackage{booktabs}",
+    "caption": r"\usepackage{caption}",
+    "cleveref": r"\usepackage{cleveref}",
     "graphicx": r"\usepackage{graphicx}",
-    "xcolor": r"\usepackage{xcolor}",
     "hyperref": r"\usepackage{hyperref}",
+    "mathtools": r"\usepackage{mathtools}",
+    "physics": r"\usepackage{physics}",
+    "siunitx": r"\usepackage{siunitx}",
+    "xcolor": r"\usepackage{xcolor}",
+    "bm": r"\usepackage{bm}",
+    "cancel": r"\usepackage{cancel}",
 }
 MAIN_TEX_CANDIDATES = ["main.tex", "paper.tex"]
+
+PACKAGE_TO_CAPABILITY = {
+    "amsmath": "amsmath",
+    "amssymb": "amssymb",
+    "mathtools": "mathtools",
+    "graphicx": "graphicx",
+    "booktabs": "booktabs",
+    "siunitx": "siunitx",
+    "xcolor": "xcolor",
+    "hyperref": "hyperref",
+    "caption": "caption",
+    "cleveref": "cleveref",
+    "bm": "bm",
+    "physics": "physics",
+    "cancel": "cancel",
+}
+
+MACRO_CAPABILITY_HINTS = {
+    "\\mathbb": "amssymb",
+    "\\mathcal": "amssymb",
+    "\\mathfrak": "amssymb",
+    "\\bm": "bm",
+    "\\boldsymbol": "amsmath",
+    "\\qty": "physics",
+    "\\dv": "physics",
+    "\\pdv": "physics",
+    "\\abs": "physics",
+    "\\norm": "physics",
+    "\\toprule": "booktabs",
+    "\\midrule": "booktabs",
+    "\\bottomrule": "booktabs",
+    "\\includegraphics": "graphicx",
+    "\\SI": "siunitx",
+    "\\si": "siunitx",
+    "\\cancel": "cancel",
+    "\\textcolor": "xcolor",
+    "\\autoref": "hyperref",
+    "\\cref": "cleveref",
+    "\\Cref": "cleveref",
+}
 
 
 # ----------- Robust emitter: write JSON to FD 1 and hard-exit ----------------
@@ -74,6 +122,186 @@ def detect_main_tex(build_dir: Path) -> Optional[Path]:
     files = list(build_dir.glob("*.tex"))
     return files[0] if files else None
 
+# --------------------------- Capability helpers ------------------------------
+
+def capabilities_from_context(context: str) -> Set[str]:
+    caps: Set[str] = set()
+    if not context:
+        return caps
+    for pkg, cap in PACKAGE_TO_CAPABILITY.items():
+        if f"\\usepackage{{{pkg}}}" in context:
+            caps.add(cap)
+    return caps
+
+
+def update_meta_capabilities(snippet_path: Path, new_caps: Set[str]) -> Tuple[bool, List[str]]:
+    if not new_caps:
+        return False, []
+    meta_path = snippet_path.with_suffix(".meta.json")
+    data: Dict = {}
+    if meta_path.exists():
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    caps = set(data.get("capabilities", []) or [])
+    before = sorted(caps)
+    caps.update(new_caps)
+    after = sorted(caps)
+    if after != before:
+        data["capabilities"] = after
+        meta_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True, after
+    return False, after
+
+
+def extract_macro_from_message(message: str) -> Optional[str]:
+    if not message:
+        return None
+    match = re.search(r"(\\[A-Za-z@]+)", message)
+    return match.group(1) if match else None
+
+
+def macro_from_snippet_line(text: str, line_no: Optional[int]) -> Optional[str]:
+    if not text or not line_no:
+        return None
+    lines = text.splitlines()
+    if not (1 <= line_no <= len(lines)):
+        return None
+    candidate_line = lines[line_no - 1]
+    match = re.search(r"(\\[A-Za-z@]+)", candidate_line)
+    return match.group(1) if match else None
+
+
+MACRO_FALLBACK_DEFINITIONS = {
+    "\\toprule": {
+        "marker": "\\providecommand{\\toprule}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\toprule",
+            r"\\providecommand{\\toprule}{\\hline}",
+        ],
+    },
+    "\\midrule": {
+        "marker": "\\providecommand{\\midrule}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\midrule",
+            r"\\providecommand{\\midrule}{\\hline}",
+        ],
+    },
+    "\\bottomrule": {
+        "marker": "\\providecommand{\\bottomrule}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\bottomrule",
+            r"\\providecommand{\\bottomrule}{\\hline}",
+        ],
+    },
+    "\\bm": {
+        "marker": "\\providecommand{\\bm}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\bm",
+            r"\\providecommand{\\bm}[1]{\\mathbf{#1}}",
+        ],
+    },
+    "\\autoref": {
+        "marker": "\\providecommand{\\autoref}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\autoref",
+            r"\\providecommand{\\autoref}[1]{\\ref{#1}}",
+        ],
+    },
+    "\\cref": {
+        "marker": "\\providecommand{\\cref}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\cref",
+            r"\\providecommand{\\cref}[1]{\\ref{#1}}",
+        ],
+    },
+    "\\Cref": {
+        "marker": "\\providecommand{\\Cref}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\Cref",
+            r"\\providecommand{\\Cref}[1]{\\ref{#1}}",
+        ],
+    },
+    "\\todo": {
+        "marker": "\\providecommand{\\todo}",
+        "lines": [
+            "% [auto-fix] fallback definition for \\todo",
+            r"\\providecommand{\\todo}[1]{\\textbf{TODO: }#1}",
+        ],
+    },
+}
+
+
+def ensure_fallback_definition(
+    snippet_path: Path,
+    text: str,
+    macro: Optional[str],
+) -> Tuple[bool, str, str]:
+    if not macro:
+        return False, text, "No macro identified for fallback."
+    fallback = MACRO_FALLBACK_DEFINITIONS.get(macro)
+    if not fallback:
+        return False, text, f"No fallback available for {macro}."
+    marker = fallback["marker"]
+    if marker in text:
+        return False, text, "Fallback already present."
+    lines = text.splitlines()
+    insert_at = 0
+    while insert_at < len(lines) and lines[insert_at].strip().startswith("%"):
+        insert_at += 1
+    insertion = list(fallback["lines"])
+    new_lines = lines[:insert_at] + insertion + lines[insert_at:]
+    if insertion and insert_at + len(insertion) < len(new_lines):
+        if new_lines[insert_at + len(insertion)].strip():
+            new_lines.insert(insert_at + len(insertion), "")
+    new_text = "\n".join(new_lines)
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+    save_text(snippet_path, new_text)
+    return True, new_text, f"Inserted fallback definition for {macro}."
+
+
+def retrieve_kb_context(kb_root: Path, query: str, limit: int = 3) -> str:
+    docs_path = kb_root / "latex_docs.jsonl"
+    if not docs_path.exists():
+        return ""
+    tokens = [tok for tok in re.findall(r"[A-Za-z@]+", query.lower()) if tok]
+    scored: List[Tuple[int, str]] = []
+    try:
+        with docs_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                body_parts = [
+                    rec.get("title") or "",
+                    rec.get("question") or "",
+                    rec.get("answer") or "",
+                    "\n".join(rec.get("code_blocks") or []),
+                ]
+                body = "\n".join(part for part in body_parts if part)
+                text_lower = body.lower()
+                score = sum(text_lower.count(tok) for tok in tokens)
+                if score > 0:
+                    scored.append((score, body))
+    except Exception:
+        return ""
+    scored.sort(key=lambda t: -t[0])
+    return "\n\n".join(body for _, body in scored[:limit])
+
+
+def macro_capabilities(macro: Optional[str]) -> Set[str]:
+    if not macro:
+        return set()
+    cap = MACRO_CAPABILITY_HINTS.get(macro)
+    return {cap} if cap else set()
+
+
 
 # --------------------------- Optional KB lookup ------------------------------
 def try_kb_hint(error_category: str, message: str) -> Optional[str]:
@@ -99,42 +327,43 @@ def try_kb_hint(error_category: str, message: str) -> Optional[str]:
     return None
 
 
+def gather_capability_hints(
+    message: str,
+    snippet_text: str,
+    line_no: Optional[int],
+    kb_context: str,
+    primary_macro: Optional[str],
+) -> Set[str]:
+    caps = set()
+    macro = primary_macro or extract_macro_from_message(message)
+    caps.update(macro_capabilities(macro))
+    caps.update(capabilities_from_context(kb_context))
+    if not caps and snippet_text:
+        extra_macro = macro_from_snippet_line(snippet_text, line_no)
+        if extra_macro:
+            caps.update(macro_capabilities(extra_macro))
+    return caps
+
+
 # ------------------------------- Fixers --------------------------------------
-def fix_undefined_control_sequence(file_path: Path, line_no: Optional[int]) -> Tuple[bool, str]:
-    """
-    Minimal safe fix:
-    - If line number available: comment out offending line.
-    - Else: cautious replacements of deprecated shorthands.
-    """
+def fix_undefined_control_sequence(
+    file_path: Path,
+    line_no: Optional[int],
+    message: str,
+    kb_context: str,
+) -> Tuple[bool, str, List[str]]:
     text = load_text(file_path)
-    lines = text.splitlines()
-    changed = False
-    note = ""
-
-    if line_no is not None and 1 <= line_no <= len(lines):
-        i = line_no - 1
-        if not lines[i].lstrip().startswith("%"):
-            lines[i] = "% [auto-fix] commented unknown command\n" + "% " + lines[i]
-            changed = True
-            note = f"Commented line {line_no} due to undefined control sequence."
-    else:
-        repl = {r"\\bf\s+": r"\\textbf{", r"\\it\s+": r"\\textit{"}
-        new_text = text
-        for pat, sub in repl.items():
-            new_text2 = re.sub(pat, sub, new_text)
-            if new_text2 != new_text:
-                new_text = new_text2
-                changed = True
-        if changed:
-            if not new_text.strip().endswith("}"):
-                new_text += "}"
-            save_text(file_path, new_text)
-            return True, "Replaced deprecated shorthands with textbf/textit."
-        note = "No line number; skipped aggressive edits."
-
-    if changed:
-        save_text(file_path, "\n".join(lines))
-    return changed, note or "No-op."
+    macro = extract_macro_from_message(message) or macro_from_snippet_line(text, line_no)
+    fallback_changed, text, fallback_note = ensure_fallback_definition(file_path, text, macro)
+    caps = gather_capability_hints(message, text, line_no, kb_context, macro)
+    meta_changed, updated_caps = update_meta_capabilities(file_path, caps)
+    notes: List[str] = []
+    if meta_changed:
+        notes.append(f"meta capabilities -> {updated_caps}")
+    if fallback_changed:
+        notes.append(fallback_note)
+    changed = meta_changed or fallback_changed
+    return changed, "; ".join(notes) if notes else "No capability change.", updated_caps
 
 
 def ensure_preamble_package(main_tex: Path, pkg: str) -> Tuple[bool, str]:
@@ -188,14 +417,18 @@ def fix_missing_file_or_package(message: str, build_dir: Path, main_tex: Path) -
 # ------------------------------- Driver --------------------------------------
 def _run() -> dict:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--error-category", required=True)
-    ap.add_argument("--message", required=True)
-    ap.add_argument("--project-root", type=Path, required=True)
-    ap.add_argument("--build-dir", type=Path, required=True)
-    ap.add_argument("--run-dir", type=Path, required=True)
-    ap.add_argument("--file", type=Path)
-    ap.add_argument("--line", type=int)
-    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument('--error-category', required=True)
+    ap.add_argument('--message', required=True)
+    ap.add_argument('--project-root', type=Path, required=True)
+    ap.add_argument('--build-dir', type=Path, required=True)
+    ap.add_argument('--run-dir', type=Path, required=True)
+    ap.add_argument('--file', type=Path)
+    ap.add_argument('--line', type=int)
+    ap.add_argument('--seed', type=int, default=1337)
+    ap.add_argument('--snippet', type=Path, help='Direct path to snippet that should be rewritten')
+    ap.add_argument('--section', type=Path, help='Section file associated with the error (informational)')
+    ap.add_argument('--log-path', type=Path, help='Path to the LaTeX compiler log')
+    ap.add_argument('--kb-root', type=Path, default=PROJECT_ROOT / 'kb' / 'latex')
     args = ap.parse_args()
 
     kb_hint = try_kb_hint(args.error_category, args.message)
@@ -203,49 +436,63 @@ def _run() -> dict:
     if kb_hint:
         rationale += f"KB hint: {kb_hint[:180]}..."
 
-    target = args.file if args.file else (detect_main_tex(args.build_dir) or None)
+    snippet = args.snippet or args.file
+    if snippet is None:
+        snippet = detect_main_tex(args.build_dir)
+
+    kb_context = retrieve_kb_context(args.kb_root, args.message)
+    if kb_context:
+        rationale += ' Retrieved KB context.'
+
+    target = snippet if snippet else None
     if not target or not target.exists():
         return {
-            "status": "skipped",
-            "changed_file": None,
-            "rationale": "No target file to edit.",
-            "what_changed": "",
-            "debug": {"notes": "missing target"},
+            'status': 'skipped',
+            'changed_file': None,
+            'rationale': 'No target file to edit.',
+            'what_changed': '',
+            'capabilities': [],
+            'kb_context': kb_context,
+            'debug': {'notes': 'missing target'},
         }
 
-    status = "skipped"
-    what_changed = ""
+    status = 'skipped'
+    what_changed = ''
     changed_file: Optional[Path] = None
+    capabilities: List[str] = []
 
-    if args.error_category == "undefined_control_sequence":
-        ok, note = fix_undefined_control_sequence(target, args.line)
+    if args.error_category == 'undefined_control_sequence':
+        ok, note, caps = fix_undefined_control_sequence(target, args.line, args.message, kb_context)
         changed_file = target if ok else None
         what_changed = note
-        status = "fixed" if ok else "skipped"
+        capabilities = caps
+        status = 'fixed' if ok else 'skipped'
 
-    elif args.error_category in ("env_mismatch", "runaway_argument", "emergency_stop"):
+    elif args.error_category in ('env_mismatch', 'runaway_argument', 'emergency_stop'):
         ok, note = close_unfinished_environment(target)
         changed_file = target if ok else None
         what_changed = note
-        status = "fixed" if ok else "skipped"
+        status = 'fixed' if ok else 'skipped'
 
-    elif args.error_category in ("file_not_found", "missing_package"):
+    elif args.error_category in ('file_not_found', 'missing_package'):
         main_tex = detect_main_tex(args.build_dir) or target
         ok, note, _ = fix_missing_file_or_package(args.message, args.build_dir, main_tex)
-        changed_file = (main_tex if ok else None)
+        changed_file = main_tex if ok else None
         what_changed = note
-        status = "fixed" if ok else "skipped"
+        status = 'fixed' if ok else 'skipped'
 
     else:
-        status = "skipped"
-        what_changed = "No safe rule-based fix for this category."
+        status = 'skipped'
+        what_changed = 'No safe rule-based fix for this category.'
 
     return {
-        "status": status,
-        "changed_file": str(changed_file) if changed_file else None,
-        "rationale": rationale,
-        "what_changed": what_changed,
-        "debug": {"notes": "ok"},
+        'status': status,
+        'changed_file': str(changed_file) if changed_file else None,
+        'rationale': rationale,
+        'what_changed': what_changed,
+        'capabilities': capabilities,
+        'kb_context': kb_context,
+        'debug': {'notes': 'ok', 'section': str(args.section) if args.section else None},
     }
 
 

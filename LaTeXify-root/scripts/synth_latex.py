@@ -46,6 +46,9 @@ import textwrap
 
 from model_backends import LlamaCppBackend, LlamaCppConfig
 from model_router import choose_model_for_text, RouteDecision
+import synth_table
+import synth_formula
+import synth_figure
 
 
 DEFAULT_CTX = 4096
@@ -93,6 +96,7 @@ class Args:
     max_tokens: int
     n_threads: Optional[int]
     n_threads_batch: Optional[int]
+    plan: Optional[Path]
 
 def _read_json(p: Path) -> Dict:
     return json.loads(p.read_text(encoding="utf-8"))
@@ -106,6 +110,35 @@ def _capabilities_from_text(tex: str) -> List[str]:
         if any(n in tex for n in needles):
             caps.append(name)
     return sorted(set(caps))
+
+
+def _load_plan_types(path: Optional[Path]) -> Dict[str, str]:
+    if not path or not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    mapping: Dict[str, str] = {}
+    for task in data.get("tasks", []):
+        tid = task.get("id")
+        ctype = task.get("content_type")
+        if tid and ctype:
+            mapping[str(tid)] = str(ctype)
+    return mapping
+
+
+def _choose_specialist(content_type: Optional[str]):
+    if not content_type:
+        return None
+    kind = content_type.lower()
+    if "table" in kind:
+        return synth_table.synthesize
+    if any(token in kind for token in ("formula", "equation", "math")):
+        return synth_formula.synthesize
+    if any(token in kind for token in ("figure", "image", "picture")):
+        return synth_figure.synthesize
+    return None
 
 def _build_prompt(ocr_text: str, rag_context: str) -> str:
     return PROMPT_TEMPLATE.format(
@@ -138,12 +171,18 @@ def synth_one_bundle(
     out_dir: Path,
     backend_cache: Dict[str, LlamaCppBackend],
     args: Args,
+    plan_types: Dict[str, str],
 ) -> Tuple[Path, Path]:
     b = _read_json(bundle_path)
     bid = b.get("id") or bundle_path.stem.replace(".bundle", "")
     ocr = b.get("prompt") or b.get("ocr") or ""
     ctx = b.get("context") or ""
     body = _build_prompt(ocr, ctx)
+
+    specialist = _choose_specialist(plan_types.get(bid))
+    if specialist:
+        snippet, caps = specialist(b)
+        return _write_outputs(out_dir, bid, snippet, caps, route_reason="specialist", model_path=None, seed=args.seed)
 
     # Routing (unless --gguf-model is explicitly provided)
     if args.gguf_model:
@@ -175,19 +214,40 @@ def synth_one_bundle(
     # Write outputs
     out_tex = out_dir / f"{bid}.tex"
     out_meta = out_dir / f"{bid}.meta.json"
+    return _write_outputs(
+        out_dir,
+        bid,
+        completion,
+        _capabilities_from_text(completion),
+        route_reason=route.reason,
+        model_path=route.model_path,
+        seed=args.seed,
+    )
+
+
+def _write_outputs(
+    out_dir: Path,
+    bid: str,
+    text: str,
+    capabilities: List[str],
+    route_reason: str,
+    model_path: Optional[Path],
+    seed: int,
+) -> Tuple[Path, Path]:
     _ensure_out(out_dir)
-    out_tex.write_text(completion + ("\n" if not completion.endswith("\n") else ""), encoding="utf-8")
-
-    caps = _capabilities_from_text(completion)
-    out_meta.write_text(json.dumps({
+    out_tex = out_dir / f"{bid}.tex"
+    out_meta = out_dir / f"{bid}.meta.json"
+    content = text + ("\n" if not text.endswith("\n") else "")
+    out_tex.write_text(content, encoding="utf-8")
+    meta = {
         "id": bid,
-        "route": route.reason,
-        "model_path": str(route.model_path),
-        "seed": args.seed,
-        "capabilities": caps
-    }, indent=2), encoding="utf-8")
-
-    print(f"[synth] {bid} → {out_tex}  ({route.reason})")
+        "route": route_reason,
+        "model_path": str(model_path) if model_path else None,
+        "seed": seed,
+        "capabilities": sorted(set(capabilities)),
+    }
+    out_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"[synth] {bid} → {out_tex}  ({route_reason})")
     return out_tex, out_meta
 
 def parse_args() -> Args:
@@ -198,6 +258,7 @@ def parse_args() -> Args:
     ap.add_argument("--hf-cache", type=Path, default=None, help="Optional HF cache root to include in model search.")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--ctx", type=int, default=DEFAULT_CTX)
+    ap.add_argument("--plan", type=Path, help="Optional plan.json with content_type annotations")
     ap.add_argument("--n-gpu-layers", type=int, default=-1)
     ap.add_argument("--tensor-split", type=str, default="auto")
     ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOK)
@@ -217,6 +278,7 @@ def parse_args() -> Args:
         max_tokens=ns.max_tokens,
         n_threads=ns.n_threads,
         n_threads_batch=ns.n_threads_batch,
+        plan=ns.plan,
     )
 
 def main() -> int:
@@ -227,8 +289,14 @@ def main() -> int:
     _ensure_out(args.out)
 
     backend_cache: Dict[str, LlamaCppBackend] = {}
-    # Process *.bundle.json (or *.json with 'id'/'prompt' keys)
-    bundle_files = sorted([p for p in args.bundles_dir.rglob("*.json") if p.name.endswith(".bundle.json") or True])
+    plan_types = _load_plan_types(args.plan)
+    bundle_files = sorted(
+        [
+            p
+            for p in args.bundles_dir.rglob("*.json")
+            if p.suffix == ".json" and not p.name.endswith(".meta.json")
+        ]
+    )
 
     if not bundle_files:
         print(f"[synth][WARN] No bundle JSON files found in {args.bundles_dir}")
@@ -236,10 +304,9 @@ def main() -> int:
 
     for bf in bundle_files:
         try:
-            synth_one_bundle(bf, args.out, backend_cache, args)
+            synth_one_bundle(bf, args.out, backend_cache, args, plan_types)
         except Exception as e:
             print(f"[synth][ERR] {bf.name}: {e}", file=sys.stderr)
-            # Continue to next bundle; compile stage will catch errors later
             continue
 
     return 0

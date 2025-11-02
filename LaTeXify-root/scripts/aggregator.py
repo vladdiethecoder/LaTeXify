@@ -8,14 +8,35 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
-# Preamble allowlist (unchanged)
-ALLOWLIST_PACKAGES = [
-    "amsmath", "amssymb", "amsthm", "mathtools", "thmtools",
-    "graphicx", "booktabs", "caption", "siunitx", "microtype",
-    "enumitem", "geometry", "hyperref", "cleveref",
+# Packages that we are willing to include in the preamble dynamically.
+CAPABILITY_TO_PACKAGE = {
+    "amsmath": r"\\usepackage{amsmath}",
+    "amssymb": r"\\usepackage{amssymb}",
+    "mathtools": r"\\usepackage{mathtools}",
+    "thmtools": r"\\usepackage{thmtools}",
+    "graphicx": r"\\usepackage{graphicx}",
+    "booktabs": r"\\usepackage{booktabs}",
+    "caption": r"\\usepackage{caption}",
+    "siunitx": r"\\usepackage{siunitx}",
+    "microtype": r"\\usepackage{microtype}",
+    "enumitem": r"\\usepackage{enumitem}",
+    "geometry": r"\\usepackage{geometry}",
+    "hyperref": r"\\usepackage{hyperref}",
+    "cleveref": r"\\usepackage{cleveref}",
+    "bm": r"\\usepackage{bm}",
+    "physics": r"\\usepackage{physics}",
+    "cancel": r"\\usepackage{cancel}",
+}
+
+BASE_PREAMBLE_LINES = [
+    r"\\usepackage{microtype}",
+    r"\\usepackage{geometry}",
+    r"\\usepackage{hyperref}",
+    r"\\hypersetup{hidelinks}",
 ]
 SEED = 42  # determinism
 
@@ -97,6 +118,18 @@ class SectionEntry:
     content: str
     is_placeholder: bool
     is_frontmatter: bool
+    source_path: Path | None
+
+
+@dataclass
+class SourceMapEntry:
+    task_id: str
+    main_start: int
+    main_end: int
+    section_file: str
+    snippet_file: str | None
+    snippet_start: int
+    snippet_end: int
 
 
 @dataclass
@@ -113,6 +146,48 @@ def _slugify(value: str, fallback: str) -> str:
     return value or fallback.lower()
 
 
+def _collect_capabilities(snippets_dir: Path) -> List[str]:
+    caps: List[str] = []
+    if not snippets_dir.exists():
+        return caps
+    for meta in snippets_dir.rglob("*.meta.json"):
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for cap in data.get("capabilities", []) or []:
+            if isinstance(cap, str):
+                caps.append(cap.strip())
+    # Preserve deterministic order
+    seen = set()
+    ordered: List[str] = []
+    for cap in caps:
+        if cap in CAPABILITY_TO_PACKAGE and cap not in seen:
+            seen.add(cap)
+            ordered.append(cap)
+    return ordered
+
+
+def _preamble_from_capabilities(capabilities: Iterable[str]) -> List[str]:
+    lines: List[str] = []
+    for cap in capabilities:
+        pkg_line = CAPABILITY_TO_PACKAGE.get(cap)
+        if pkg_line and pkg_line not in lines:
+            lines.append(pkg_line)
+    # Ensure baseline packages are present exactly once
+    out: List[str] = []
+    seen = set()
+    for base in BASE_PREAMBLE_LINES:
+        if base not in seen:
+            out.append(base)
+            seen.add(base)
+    for line in lines:
+        if line not in seen:
+            out.append(line)
+            seen.add(line)
+    return out
+
+
 def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> AssembleResult:
     tid_to_title = {t["id"]: t["title"] for t in plan.get("tasks", [])}
     doc_class_raw = plan.get("doc_class", "lix_article")
@@ -124,8 +199,8 @@ def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> As
     if fell_back:
         _log_event(evidence_log, "doc_class_fallback", requested=doc_class_raw, used=doc_class)
 
-    preamble_lines = [f"\\usepackage{{{pkg}}}" for pkg in ALLOWLIST_PACKAGES]
-    preamble_lines.append("\\hypersetup{hidelinks}")
+    caps = _collect_capabilities(snippets_dir)
+    preamble_lines = _preamble_from_capabilities(caps)
 
     sections: List[SectionEntry] = []
     used_bib = False
@@ -148,6 +223,7 @@ def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> As
                 f"\\todo{{Write content.}}\n"
             )
             is_placeholder = True
+            source_path = None
         else:
             _log_event(evidence_log, "snippet_found", task_id=tid, path=str(sp))
             body = sp.read_text(encoding="utf-8").rstrip()
@@ -155,6 +231,7 @@ def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> As
                 used_bib = True
             content = body
             is_placeholder = False
+            source_path = sp
         sections.append(
             SectionEntry(
                 task_id=tid,
@@ -163,6 +240,7 @@ def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> As
                 content=content,
                 is_placeholder=is_placeholder,
                 is_frontmatter=is_frontmatter,
+                source_path=source_path,
             )
         )
     _log_event(evidence_log, "bib_detection", use_biblatex=used_bib)
@@ -187,7 +265,8 @@ def _write_preamble(lines: List[str], out_dir: Path, evidence_log: Path) -> Path
     return preamble
 
 
-def _write_sections(sections: List[SectionEntry], out_dir: Path, evidence_log: Path) -> None:
+def _write_sections(sections: List[SectionEntry], out_dir: Path, evidence_log: Path) -> Dict[str, Dict[str, int | str | None]]:
+    section_map: Dict[str, Dict[str, int | str | None]] = {}
     for entry in sections:
         target = out_dir / entry.filename
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -200,17 +279,38 @@ def _write_sections(sections: List[SectionEntry], out_dir: Path, evidence_log: P
             path=target,
             placeholder=entry.is_placeholder,
         )
+        if entry.source_path and not entry.is_placeholder:
+            rel_section = entry.filename.as_posix()
+            rel_snippet = entry.source_path.as_posix()
+            section_map[rel_section] = {
+                "task_id": entry.task_id,
+                "snippet": rel_snippet,
+                "line_count": len(text.splitlines()),
+            }
+    return section_map
 
 
-def _build_main(doc_class: str, sections: List[SectionEntry], used_bib: bool) -> str:
-    frontmatter_blocks: List[str] = []
-    body_blocks: List[str] = []
+def _build_main(doc_class: str, sections: List[SectionEntry], used_bib: bool) -> Tuple[str, List[SourceMapEntry]]:
+    mapping: List[SourceMapEntry] = []
+    frontmatter: List[Tuple[List[str], SourceMapEntry]] = []
+    body: List[Tuple[List[str], SourceMapEntry]] = []
+
     for entry in sections:
         block = [f"% --- {entry.task_id} ---", f"\\input{{{entry.filename.as_posix()}}}", ""]
+        snippet_lines = entry.content.count("\n") + 1 if entry.content else 0
+        map_entry = SourceMapEntry(
+            task_id=entry.task_id,
+            main_start=0,
+            main_end=0,
+            section_file=entry.filename.as_posix(),
+            snippet_file=entry.source_path.as_posix() if entry.source_path else None,
+            snippet_start=1,
+            snippet_end=snippet_lines,
+        )
         if entry.is_frontmatter:
-            frontmatter_blocks.extend(block)
+            frontmatter.append((block, map_entry))
         else:
-            body_blocks.extend(block)
+            body.append((block, map_entry))
 
     lines: List[str] = [
         f"\\documentclass{{{doc_class}}}",
@@ -218,26 +318,73 @@ def _build_main(doc_class: str, sections: List[SectionEntry], used_bib: bool) ->
         "",
         "\\begin{document}",
     ]
-    lines.extend(frontmatter_blocks)
-    lines.append("% aggregator: \\maketitle after frontmatter")
-    lines.append("\\maketitle")
-    lines.append("")
-    lines.extend(body_blocks)
+
+    current_line = len(lines)
+
+    for block, map_entry in frontmatter:
+        block_start = current_line + 1
+        lines.extend(block)
+        current_line += len(block)
+        map_entry.main_start = block_start
+        map_entry.main_end = current_line
+        mapping.append(map_entry)
+
+    if frontmatter:
+        lines.append("% aggregator: \\maketitle after frontmatter")
+        lines.append("\\maketitle")
+        lines.append("")
+        current_line = len(lines)
+
+    for block, map_entry in body:
+        block_start = current_line + 1
+        lines.extend(block)
+        current_line += len(block)
+        map_entry.main_start = block_start
+        map_entry.main_end = current_line
+        mapping.append(map_entry)
+
     if used_bib:
         lines.append("\\printbibliography")
         lines.append("")
+        current_line = len(lines)
+
     lines.append("\\end{document}")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", mapping
 
 
 def _write_main(doc_class: str, sections: List[SectionEntry], used_bib: bool,
-                out_dir: Path, evidence_log: Path) -> Path:
+                out_dir: Path, evidence_log: Path) -> Tuple[Path, List[SourceMapEntry]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     main_tex = out_dir / "main.tex"
-    tex = _build_main(doc_class, sections, used_bib)
+    tex, mapping = _build_main(doc_class, sections, used_bib)
     main_tex.write_text(tex, encoding="utf-8")
     _log_event(evidence_log, "main_written", path=main_tex, bytes=main_tex.stat().st_size)
-    return main_tex
+    return main_tex, mapping
+
+
+def _write_source_map(out_dir: Path,
+                      mapping: List[SourceMapEntry],
+                      section_map: Dict[str, Dict[str, int | str | None]],
+                      evidence_log: Path) -> Path:
+    source_map_path = out_dir / "main.sourcemap.json"
+    payload = {
+        "version": 1,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "entries": [
+            {
+                "task_id": m.task_id,
+                "main": {"start": m.main_start, "end": m.main_end},
+                "section_file": m.section_file,
+                "snippet_file": m.snippet_file,
+                "snippet": {"start": m.snippet_start, "end": m.snippet_end},
+            }
+            for m in mapping
+        ],
+        "sections": section_map,
+    }
+    source_map_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _log_event(evidence_log, "source_map_written", path=source_map_path, entries=len(mapping))
+    return source_map_path
 
 def _run_latexmk(main_tex: Path, engine: str, verbose: bool) -> Tuple[bool, str, str]:
     latexmk = shutil.which("latexmk")
@@ -262,8 +409,9 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
     evidence_log = out_dir_path / "aggregate.log.jsonl"
     res = _assemble_document(plan, Path(snippets_dir), evidence_log)
     _write_preamble(res.preamble_lines, out_dir_path, evidence_log)
-    _write_sections(res.sections, out_dir_path, evidence_log)
-    main_tex = _write_main(res.doc_class, res.sections, res.used_bib, out_dir_path, evidence_log)
+    section_map = _write_sections(res.sections, out_dir_path, evidence_log)
+    main_tex, mapping = _write_main(res.doc_class, res.sections, res.used_bib, out_dir_path, evidence_log)
+    source_map_path = _write_source_map(out_dir_path, mapping, section_map, evidence_log)
 
     compile_attempted = False
     compile_ok = False
@@ -294,6 +442,7 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "compile_ok": compile_ok,
         "stdout": stdout,
         "stderr": stderr,
+        "source_map": str(source_map_path),
     }, ensure_ascii=False))
     return {
         "main_tex": str(main_tex),
@@ -303,6 +452,7 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "compile_ok": compile_ok,
         "stdout": stdout,
         "stderr": stderr,
+        "source_map": str(source_map_path),
     }
 
 def main() -> None:
