@@ -1,9 +1,10 @@
-"""Specialized figure synthesis helper."""
+"""Specialised figure synthesis helper."""
 
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+# Tokens used to infer environment types
 FIGURE_TOKENS = ("figure", "image", "picture", "graphic", "diagram", "photo", "chart")
 TABLE_TOKENS = ("table", "spreadsheet", "tabular")
 MATH_TOKENS = ("formula", "equation", "math", "expression")
@@ -11,15 +12,13 @@ MATH_TOKENS = ("formula", "equation", "math", "expression")
 
 def _sanitize_label(raw: str) -> str:
     raw = (raw or "figure").lower()
-    cleaned = [
-        ch if ch.isalnum() or ch in {"-", "_"} else "-"
-        for ch in raw
-    ]
+    cleaned = [ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw]
     label = "".join(cleaned).strip("-")
     return label or "figure"
 
 
 def _resolve_environment(kind: str | None) -> Tuple[str, str]:
+    """Map a semantic kind to a LaTeX environment and label prefix."""
     if not kind:
         return "figure", "fig"
     lower = kind.lower()
@@ -33,19 +32,32 @@ def _resolve_environment(kind: str | None) -> Tuple[str, str]:
 
 
 def synthesize(bundle: Dict) -> Tuple[str, List[str]]:
-<<<<<<< ours
-    image_path = bundle.get("asset_path") or bundle.get("image_path") or "figure-placeholder.pdf"
-=======
+    """Generate a LaTeX figure/table snippet from a bundle.
+
+    The bundle may include an explicit ``asset_path`` or ``image_path``.  If
+    neither is provided a placeholder path is used to ensure compilation still
+    succeeds.  Semantic hints (``asset_source_type``, ``figure_type``,
+    ``content_type``) are used to decide whether to emit a ``figure`` or
+    ``table`` environment and to choose the appropriate label prefix.  The
+    caption is taken from ``caption`` or the first line of ``prompt`` or
+    defaults to a generic description.  Labels are automatically sanitised.
+    """
+    # Determine the path to include; fall back to a placeholder to avoid errors
     asset_path = bundle.get("asset_path") or bundle.get("image_path")
     if not asset_path:
-        raise ValueError("Figure bundle missing 'asset_path'. Provide an asset_path in the plan/bundle.")
-
-    semantic = bundle.get("asset_source_type") or bundle.get("figure_type") or bundle.get("content_type")
+        asset_path = "figure-placeholder.pdf"
+    # Resolve environment and label prefix based on semantic hints
+    semantic = (
+        bundle.get("asset_source_type")
+        or bundle.get("figure_type")
+        or bundle.get("content_type")
+    )
     environment, label_prefix = _resolve_environment(semantic)
->>>>>>> theirs
+    # Caption: explicit caption > first line of prompt > default
     caption = bundle.get("caption") or (bundle.get("prompt") or "Auto-generated figure").splitlines()[0]
+    # Sanitise the label using id or prefix
     label = _sanitize_label(bundle.get("id") or label_prefix)
-
+    # Build snippet lines
     lines = [
         f"\\begin{{{environment}}}[ht]",
         "  \\centering",
@@ -54,4 +66,5 @@ def synthesize(bundle: Dict) -> Tuple[str, List[str]]:
         f"  \\label{{{label_prefix}:{label}}}",
         f"\\end{{{environment}}}",
     ]
+    # Return the snippet and required packages
     return "\n".join(lines) + "\n", ["graphicx"]

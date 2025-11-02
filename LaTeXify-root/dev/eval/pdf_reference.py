@@ -1,42 +1,66 @@
-# dev/eval/pdf_reference.py
+"""
+Utilities for extracting textual and structural information from PDFs and
+computing a simple perceptual distance between two documents.
+
+This module exposes two primary functions:
+
+* ``extract_pdf_reference``: Given a path to a PDF, it returns a list of
+  ``PageRef`` objects, each containing the plain text for that page and a
+  list of text blocks with bounding boxes.  This is useful when performing
+  regression tests on the textual layout of generated documents.
+
+* ``compute_dssim_for_pdfs``: Given two PDFs, it renders each page into a
+  greyscale numpy array using PyMuPDF and computes the DSSIM (1 – SSIM)/2
+  between corresponding pages.  The Structural Similarity Index (SSIM)
+  provides a simple measure of perceptual similarity between images.  A
+  DSSIM of 0.0 indicates identical images while values closer to 1.0
+  indicate greater dissimilarity.
+
+The reference implementation originally included a separate code path
+using ``pdf2image`` and Pillow for rendering.  That implementation
+proved brittle and introduced additional dependencies.  The current
+implementation therefore relies solely on PyMuPDF for rendering PDF pages
+to images.  If you need the ``pdf2image`` based implementation, refer to
+earlier commits in the repository.
+"""
+
 from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-<<<<<<< ours
+import fitz  # type: ignore  # PyMuPDF
 import numpy as np
-=======
->>>>>>> theirs
-import fitz  # PyMuPDF
-import numpy as np
-
-try:  # Optional heavy deps
-    from pdf2image import convert_from_path
-    from pdf2image.exceptions import PDFInfoNotInstalledError, PDFPageCountError
-except Exception:  # pragma: no cover - import guard
-    convert_from_path = None
-    PDFInfoNotInstalledError = PDFPageCountError = Exception
-
-try:
-    from PIL import Image
-except Exception:  # pragma: no cover - import guard
-    Image = None
 
 
 @dataclass
 class PDFImageComparison:
+    """Container for DSSIM comparison results between two PDFs."""
+
     reference: str
     candidate: str
     page_dssim: List[float]
     mean_dssim: float
 
+
 @dataclass
 class PageRef:
+    """Represents the textual content and layout blocks for a single PDF page."""
+
     text: str
     blocks: List[Dict[str, Any]]  # raw blocks with bbox and text
 
+
 def extract_pdf_reference(pdf_path: str) -> List[PageRef]:
+    """Extract text and block-level information from every page in a PDF.
+
+    Args:
+        pdf_path: Path to the PDF file.
+
+    Returns:
+        A list of ``PageRef`` objects, one per page in the document.
+    """
     doc = fitz.open(pdf_path)
     out: List[PageRef] = []
     for p in doc:
@@ -48,82 +72,16 @@ def extract_pdf_reference(pdf_path: str) -> List[PageRef]:
         for b in blocks_raw:
             blocks.append({
                 "bbox": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
-                "text": (b[4] or "").strip()
+                "text": (b[4] or "").strip(),
             })
         out.append(PageRef(text=text, blocks=blocks))
     return out
 
 
-<<<<<<< ours
-def _ensure_pdf2image() -> None:
-    if convert_from_path is None or Image is None:
-        raise RuntimeError("pdf2image and Pillow are required for PDF image comparison.")
-
-
-def _render_pdf(path: Path, dpi: int) -> List[Any]:
-    _ensure_pdf2image()
-    try:
-        return convert_from_path(str(path), dpi=dpi, fmt="png")
-    except (PDFInfoNotInstalledError, PDFPageCountError) as exc:  # pragma: no cover - environment issue
-        raise RuntimeError(f"pdf2image failed for {path}: {exc}")
-
-
-def _to_gray_array(image: Any) -> np.ndarray:
-    gray = image.convert("L") if hasattr(image, "convert") else image
-    arr = np.asarray(gray, dtype=np.float32)
-    return arr
-
-
-def _ssim(a: np.ndarray, b: np.ndarray) -> float:
-    if a.shape != b.shape:
-        raise ValueError("Arrays must share identical shape for SSIM computation.")
-    a = a.astype(np.float32)
-    b = b.astype(np.float32)
-    mu_a = a.mean()
-    mu_b = b.mean()
-    sigma_a = ((a - mu_a) ** 2).mean()
-    sigma_b = ((b - mu_b) ** 2).mean()
-    sigma_ab = ((a - mu_a) * (b - mu_b)).mean()
-    c1 = (0.01 * 255) ** 2
-    c2 = (0.03 * 255) ** 2
-    denom = (mu_a ** 2 + mu_b ** 2 + c1) * (sigma_a + sigma_b + c2)
-    if denom == 0:
-        return 1.0 if (mu_a == mu_b and sigma_a == sigma_b == 0) else 0.0
-    return float(((2 * mu_a * mu_b + c1) * (2 * sigma_ab + c2)) / denom)
-
-
-def compare_pdf_images(reference_pdf: Path, candidate_pdf: Path, dpi: int = 150) -> PDFImageComparison:
-    """Render two PDFs and compute DSSIM per page (global SSIM heuristic)."""
-    ref_imgs = _render_pdf(reference_pdf, dpi=dpi)
-    cand_imgs = _render_pdf(candidate_pdf, dpi=dpi)
-
-    page_scores: List[float] = []
-    page_count = max(len(ref_imgs), len(cand_imgs))
-    for idx in range(page_count):
-        if idx >= len(ref_imgs) or idx >= len(cand_imgs):
-            page_scores.append(1.0)
-            continue
-        ref_img = ref_imgs[idx]
-        cand_img = cand_imgs[idx]
-        if ref_img.size != cand_img.size:
-            resample = getattr(Image, "BICUBIC", 3) if Image else 3
-            cand_img = cand_img.resize(ref_img.size, resample=resample)
-        ref_arr = _to_gray_array(ref_img)
-        cand_arr = _to_gray_array(cand_img)
-        ssim = _ssim(ref_arr, cand_arr)
-        dssim = max(0.0, min(1.0, (1 - ssim) / 2))
-        page_scores.append(float(dssim))
-
-    mean_dssim = float(np.mean(page_scores)) if page_scores else 0.0
-    return PDFImageComparison(
-        reference=str(reference_pdf),
-        candidate=str(candidate_pdf),
-        page_dssim=page_scores,
-        mean_dssim=mean_dssim,
-    )
-=======
 def _pixmap_to_gray(pix: fitz.Pixmap) -> np.ndarray:
-    if pix.alpha:  # drop alpha for consistent reshaping
+    """Convert a PyMuPDF Pixmap to a normalised greyscale numpy array."""
+    # If the pixmap has an alpha channel, drop it to obtain consistent shape.
+    if pix.alpha:
         pix = fitz.Pixmap(fitz.csRGB, pix)
     data = np.frombuffer(pix.samples, dtype=np.uint8)
     arr = data.reshape(pix.height, pix.width, pix.n)
@@ -132,10 +90,20 @@ def _pixmap_to_gray(pix: fitz.Pixmap) -> np.ndarray:
     else:
         rgb = arr[:, :, :3]
         gray = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    # Normalise to [0, 1]
     return (gray.astype(np.float32) / 255.0).copy()
 
 
 def render_pdf_to_images(pdf_path: str, dpi: int = 144) -> List[np.ndarray]:
+    """Render all pages of a PDF into greyscale images.
+
+    Args:
+        pdf_path: Path to the PDF.
+        dpi: Dots per inch used for rendering (higher values yield larger images).
+
+    Returns:
+        A list of 2D numpy arrays representing greyscale page images.
+    """
     doc = fitz.open(pdf_path)
     images: List[np.ndarray] = []
     for page in doc:
@@ -146,6 +114,20 @@ def render_pdf_to_images(pdf_path: str, dpi: int = 144) -> List[np.ndarray]:
 
 
 def structural_similarity(img_a: np.ndarray, img_b: np.ndarray) -> float:
+    """Compute the Structural Similarity Index (SSIM) between two greyscale images.
+
+    The SSIM is computed on the overlapping region of the two images.  If the
+    shapes differ, the images are cropped to the minimum common height and
+    width.  The result lies in the range [0, 1], where 1 indicates identical
+    images.
+
+    Args:
+        img_a: First image array.
+        img_b: Second image array.
+
+    Returns:
+        The SSIM value.
+    """
     if img_a.size == 0 or img_b.size == 0:
         return 0.0
     if img_a.shape != img_b.shape:
@@ -158,6 +140,7 @@ def structural_similarity(img_a: np.ndarray, img_b: np.ndarray) -> float:
     sigma_x = float(img_a.var())
     sigma_y = float(img_b.var())
     sigma_xy = float(((img_a - mu_x) * (img_b - mu_y)).mean())
+    # Use small constants in luminance and contrast terms
     c1 = (0.01 * 1.0) ** 2
     c2 = (0.03 * 1.0) ** 2
     numerator = (2 * mu_x * mu_y + c1) * (2 * sigma_xy + c2)
@@ -169,6 +152,18 @@ def structural_similarity(img_a: np.ndarray, img_b: np.ndarray) -> float:
 
 
 def compute_dssim_for_pdfs(pdf_a: str, pdf_b: str, dpi: int = 144) -> List[Dict[str, Any]]:
+    """Compute DSSIM per page for two PDFs.
+
+    Args:
+        pdf_a: Path to the first PDF file.
+        pdf_b: Path to the second PDF file.
+        dpi: Rendering resolution in dots per inch.
+
+    Returns:
+        A list of dictionaries with fields ``page`` (1-based index), ``dssim``
+        (the computed DSSIM value or ``None`` if a page is missing) and
+        ``status`` describing the comparison result.
+    """
     images_a = render_pdf_to_images(pdf_a, dpi=dpi)
     images_b = render_pdf_to_images(pdf_b, dpi=dpi)
     total_pages = max(len(images_a), len(images_b))
@@ -182,4 +177,3 @@ def compute_dssim_for_pdfs(pdf_a: str, pdf_b: str, dpi: int = 144) -> List[Dict[
         dssim = (1.0 - ssim) / 2.0
         results.append({"page": page_no, "dssim": float(dssim), "status": "ok"})
     return results
->>>>>>> theirs

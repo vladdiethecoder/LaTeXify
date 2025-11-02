@@ -1,25 +1,30 @@
-# tests/test_planner_scaffold.py
+"""
+Tests for the planner scaffold module.
+
+These tests validate that the generated plan enforces unique identifiers and
+monotonically increasing order values and that visual assets are routed
+correctly when supplied via a layout analysis and asset manifest.  The
+imported functions and classes come from ``latexify.pipeline.planner_scaffold``.
+"""
+
 from __future__ import annotations
+
 import json
 from pathlib import Path
 
-<<<<<<< ours
-from scripts.planner_scaffold import (
+from latexify.pipeline.planner_scaffold import (
     AssetInfo,
     AssetLookup,
     LayoutBlock,
     _emit_plan,
     validate_plan,
 )
-=======
-from latexify.pipeline.planner_scaffold import _emit_plan, validate_plan
->>>>>>> theirs
 
-def test_plan_unique_and_strict_order(tmp_path: Path):
+
+def test_plan_unique_and_strict_order(tmp_path: Path) -> None:
     plan = _emit_plan("lix_article")
     # Valid baseline
     validate_plan(plan)
-
     # Break uniqueness
     bad = json.loads(json.dumps(plan))
     bad["tasks"][1]["id"] = bad["tasks"][0]["id"]
@@ -30,7 +35,7 @@ def test_plan_unique_and_strict_order(tmp_path: Path):
         pass
 
 
-def test_plan_demotes_missing_figure_to_placeholder():
+def test_plan_demotes_missing_figure_to_placeholder() -> None:
     blocks = {"Q1": LayoutBlock(block_id="Q1", content_type="Figure")}
     plan = _emit_plan("lix_article", questions=["Q1"], layout_blocks=blocks)
     task = next(t for t in plan["tasks"] if t["id"] == "Q1")
@@ -39,7 +44,7 @@ def test_plan_demotes_missing_figure_to_placeholder():
     assert task.get("asset_source_type") == "Figure"
 
 
-def test_plan_routes_table_image_to_figure():
+def test_plan_routes_table_image_to_figure() -> None:
     blocks = {"Q2": LayoutBlock(block_id="Q2", content_type="Table", page_index=0)}
     lookup = AssetLookup()
     lookup.add(
@@ -56,7 +61,6 @@ def test_plan_routes_table_image_to_figure():
     assert task["type"] == "figure"
     assert task["asset_path"] == "assets/Q2.png"
     assert task.get("asset_source_type") == "Table"
-
     # Break order
     bad2 = json.loads(json.dumps(plan))
     bad2["tasks"][1]["order"] = bad2["tasks"][0]["order"]
