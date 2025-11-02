@@ -5,7 +5,7 @@ retrieval_agent.py (v1.1)
 
 Build Context Bundles per task using:
 - semantic_id anchor matches, and
-- FAISS dense retrieval + MMR diversification (BGE-M3).
+- FAISS dense retrieval + reranking (BGE-M3 + cross-encoder, MMR fallback).
 
 Determinism: fixed seeds; cosine via L2-normalized vectors + IndexFlatIP.
 
@@ -20,7 +20,7 @@ Usage:
     --out_dir build/context
 
   # options
-  --k 6 --mmr_lambda 0.6 --mmr_pool 16
+  --k 6 --mmr_lambda 0.6 --mmr_pool 20 --reranker BAAI/bge-reranker-v2-m3
 """
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
 import numpy as np
+
+from scripts.rerankers import get_reranker, BaseReranker
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -119,12 +121,28 @@ def _search(index: faiss.Index, query: np.ndarray, topk: int) -> Tuple[np.ndarra
 
 
 def _gather_candidates(meta: dict, ids: np.ndarray) -> List[dict]:
-    # id_to_ref is positional; 'ids' in meta aligns to FAISS add order
+    # id_to_ref can be a list (positional) or dict keyed by chunk id.
     id_to_ref = meta.get("id_to_ref", [])
     out: List[dict] = []
-    for pos in ids:
-        if 0 <= int(pos) < len(id_to_ref):
-            out.append(id_to_ref[int(pos)])
+    if isinstance(id_to_ref, list):
+        for pos in ids:
+            if 0 <= int(pos) < len(id_to_ref):
+                out.append(id_to_ref[int(pos)])
+        return out
+
+    if isinstance(id_to_ref, dict):
+        ordered_ids = meta.get("ids")
+        if isinstance(ordered_ids, list):
+            for pos in ids:
+                if 0 <= int(pos) < len(ordered_ids):
+                    ref = id_to_ref.get(ordered_ids[int(pos)])
+                    if ref:
+                        out.append(ref)
+        else:
+            for pos in ids:
+                ref = id_to_ref.get(str(int(pos))) or id_to_ref.get(int(pos))
+                if ref:
+                    out.append(ref)
     return out
 
 
@@ -187,7 +205,9 @@ def build_for_task(task_id: str,
                    rubric_idx: faiss.Index, rubric_meta: dict,
                    assignment_idx: faiss.Index, assignment_meta: dict,
                    user_idx: faiss.Index, user_meta: dict,
-                   k: int, mmr_pool: int, mmr_lambda: float) -> dict:
+                   reranker: BaseReranker,
+                   k: int, mmr_pool: int, mmr_lambda: float,
+                   plan_doc_class: Optional[str]) -> dict:
     # Seed anchor rows via semantic_id
     q_rows = filter_by_semantic(assess_meta, task_id)
     question_text = " ".join(_text(r) for r in q_rows)[:4000] if q_rows else task_id
@@ -195,14 +215,30 @@ def build_for_task(task_id: str,
     # Dense query from anchor/question
     q_vec = _encode_query(model, question_text)
 
-    # Search each index, gather a pool, then MMR
+    # Search each index, gather a pool, rerank (fallback to MMR)
+    plan_doc_class_norm = (plan_doc_class or "").strip().lower()
+
+    def _matches_doc_class(row: dict) -> bool:
+        if not plan_doc_class_norm:
+            return True
+        cand = row.get("doc_class")
+        if not cand and isinstance(row.get("metadata"), dict):
+            cand = row["metadata"].get("doc_class")
+        if not cand:
+            return True
+        return str(cand).strip().lower() == plan_doc_class_norm
+
     def pool_pick(idx: faiss.Index, meta: dict) -> List[dict]:
-        scores, ids = _search(idx, q_vec, topk=mmr_pool)
-        cands = _gather_candidates(meta, ids)
+        pool_size = max(mmr_pool, k, 20)
+        _, ids = _search(idx, q_vec, topk=pool_size)
+        cands = [r for r in _gather_candidates(meta, ids) if _matches_doc_class(r)]
         if not cands:
             return []
+        reranked = reranker.rerank(question_text, cands, top_k=k)
+        if reranker.available():
+            return [s.payload for s in reranked]
         doc_vecs = _encode_passages(model, [_text(r) for r in cands])
-        sel = mmr_select(doc_vecs, q_vec[0], k=k, lam=mmr_lambda)
+        sel = mmr_select(doc_vecs, q_vec[0], k=min(k, len(cands)), lam=mmr_lambda)
         return [cands[i] for i in sel]
 
     assess_sel = pool_pick(assess_idx, assess_meta)
@@ -258,8 +294,9 @@ def main():
     ap.add_argument("--user", required=True)
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--k", type=int, default=6, help="MMR top-k per source")
-    ap.add_argument("--mmr_pool", type=int, default=16, help="pool size before MMR")
+    ap.add_argument("--mmr_pool", type=int, default=20, help="FAISS pool size before rerank/MMR fallback")
     ap.add_argument("--mmr_lambda", type=float, default=0.6, help="MMR relevance weight")
+    ap.add_argument("--reranker", default="BAAI/bge-reranker-v2-m3", help="Cross-encoder reranker model name or 'none'")
     args = ap.parse_args()
 
     plan = load_plan(args.plan)
@@ -275,6 +312,7 @@ def main():
     user_idx = load_index(args.user)
 
     model = load_model("BAAI/bge-m3")
+    reranker = get_reranker(args.reranker)
 
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,7 +324,9 @@ def main():
             rubric_idx, rubric_meta,
             assignment_idx, assignment_meta,
             user_idx, user_meta,
-            k=args.k, mmr_pool=args.mmr_pool, mmr_lambda=args.mmr_lambda
+            reranker=reranker,
+            k=args.k, mmr_pool=args.mmr_pool, mmr_lambda=args.mmr_lambda,
+            plan_doc_class=plan.get("doc_class")
         )
         (out_dir / f"{tid}.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")
         print(f"[retrieval] wrote {out_dir / (tid + '.json')}")

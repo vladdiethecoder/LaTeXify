@@ -1,4 +1,4 @@
-# scripts/query_index.py
+# latexify/kb/query_index.py
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,13 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import faiss
+try:
+    import faiss  # type: ignore
+    _FAISS_OK = True
+except Exception:  # pragma: no cover - optional dependency
+    faiss = None  # type: ignore
+    _FAISS_OK = False
+
 import numpy as np
 
 try:
@@ -21,12 +27,18 @@ except Exception:
 # ---------------------------
 # Core index I/O
 # ---------------------------
-def _load_index(run_dir: Path) -> Tuple[faiss.Index, Dict]:
+def _ensure_faiss() -> None:
+    if not _FAISS_OK:
+        raise RuntimeError("faiss is required for index queries but is not installed")
+
+
+def _load_index(run_dir: Path) -> Tuple["faiss.Index", Dict]:
+    _ensure_faiss()
     idx_p = run_dir / "faiss.index"
     meta_p = run_dir / "faiss.meta.json"
     if not idx_p.exists() or not meta_p.exists():
         raise SystemExit(f"Missing index/meta in: {run_dir}")
-    index = faiss.read_index(str(idx_p))
+    index = faiss.read_index(str(idx_p))  # type: ignore[arg-type]
     meta = json.loads(meta_p.read_text(encoding="utf-8"))
     return index, meta
 
@@ -69,7 +81,7 @@ def _encode(q: str, model_name: str, dim: int) -> np.ndarray:
 # ---------------------------
 # Helpers: stable ranking + MMR
 # ---------------------------
-def _reconstruct_many(index: faiss.Index, ids: List[int]) -> np.ndarray:
+def _reconstruct_many(index: "faiss.Index", ids: List[int]) -> np.ndarray:
     vecs = []
     for i in ids:
         try:
@@ -93,7 +105,7 @@ def _stable_pairs(scores: np.ndarray, I: np.ndarray) -> List[Tuple[float, int]]:
     return items
 
 
-def _mmr_select(index: faiss.Index, cand_ids: List[int], qv: np.ndarray, k: int, lambda_coef: float = 0.5) -> List[int]:
+def _mmr_select(index: "faiss.Index", cand_ids: List[int], qv: np.ndarray, k: int, lambda_coef: float = 0.5) -> List[int]:
     """
     Deterministic Maximal Marginal Relevance selection on reconstructed vectors.
     If reconstruct() unsupported, returns first k candidates (already stably sorted).
@@ -191,7 +203,7 @@ def build_context_bundle(task: Dict, indices: Dict[str, str], k_user: int = 6) -
 # ---------------------------
 # Legacy CLI (ad-hoc query) + Bundle mode
 # ---------------------------
-def _print_top(index: faiss.Index, meta: Dict, query: str, k: int, pages: Optional[str]):
+def _print_top(index: "faiss.Index", meta: Dict, query: str, k: int, pages: Optional[str]):
     model_name = meta.get("model") or "BAAI/bge-m3"
     qv = _encode(query, model_name=model_name, dim=index.d)
     scores, I = index.search(qv, k)
@@ -221,7 +233,9 @@ def main():
         return
 
     if not args.run_dir or not args.query:
-        raise SystemExit("Usage: -m scripts.query_index --run_dir <dir> 'your query'  OR  --bundle with stdin payload")
+        raise SystemExit(
+            "Usage: -m latexify.kb.query_index --run_dir <dir> 'your query'  OR  --bundle with stdin payload"
+        )
 
     run_dir = Path(args.run_dir)
     index, meta = _load_index(run_dir)

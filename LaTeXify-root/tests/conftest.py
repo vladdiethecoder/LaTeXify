@@ -1,4 +1,4 @@
-# Ensure repo root is importable so "from scripts.* import ..." works.
+# Ensure repo root is importable so "import latexify" works.
 import sys
 from pathlib import Path
 

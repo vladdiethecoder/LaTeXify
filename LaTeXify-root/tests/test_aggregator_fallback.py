@@ -2,7 +2,7 @@
 from __future__ import annotations
 import io, json, os, re, tempfile
 from types import SimpleNamespace
-import scripts.aggregator as ag
+import latexify.pipeline.aggregator as ag
 
 def _mk(tmp: str, name: str, text: str) -> str:
     p = os.path.join(tmp, name)

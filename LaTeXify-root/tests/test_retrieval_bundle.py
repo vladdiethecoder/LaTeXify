@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.retrieval_bundle import build_context_bundle
+from latexify.pipeline.retrieval_bundle import build_context_bundle
 
 def test_bundle_shapes_without_indexes(tmp_path: Path):
     # Minimal plan and task

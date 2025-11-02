@@ -7,7 +7,7 @@ Idempotent: re-runs replace links/files without duplication.
 Logs JSONL to build/setup_classes.log.jsonl
 
 Usage:
-  python -m scripts.setup_classes \
+  python -m latexify.utils.setup_classes \
       --lix_repo kb/online/github/LiX-master \
       --texmf_home kb/classes \
       --out build

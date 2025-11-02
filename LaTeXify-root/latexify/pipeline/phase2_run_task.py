@@ -1,4 +1,4 @@
-# scripts/phase2_run_task.py
+# latexify/pipeline/phase2_run_task.py
 from __future__ import annotations
 
 import argparse
@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Dict
 
 # Local modules (installed by you in-repo)
-from scripts.retrieval_bundle import build_context_bundle  # type: ignore
-from scripts.synth_latex import synthesize_snippet         # type: ignore
+from latexify.pipeline.retrieval_bundle import build_context_bundle  # type: ignore
+from latexify.pipeline.synth_latex import synthesize_snippet  # type: ignore
 
 
 def _load_plan(path: Path) -> Dict:

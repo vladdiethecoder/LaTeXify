@@ -2,7 +2,11 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from scripts.query_index import build_context_bundle
+import pytest
+
+pytest.importorskip("faiss")
+
+from latexify.kb.query_index import build_context_bundle
 
 def test_bundle_minimal(tmp_path: Path, monkeypatch):
     # Fast mode: no heavy model downloads

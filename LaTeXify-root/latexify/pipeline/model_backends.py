@@ -21,12 +21,10 @@ import re
 
 try:
     from llama_cpp import Llama
-except Exception as e:  # pragma: no cover
-    raise RuntimeError(
-        "llama-cpp-python not available. Install it first (GPU example):\n"
-        '  CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python\n'
-        "or install a CUDA wheel per the project docs."
-    ) from e
+    _LLAMA_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dependency
+    Llama = None  # type: ignore
+    _LLAMA_AVAILABLE = False
 
 
 def _visible_gpus() -> List[int]:
@@ -107,7 +105,11 @@ class LlamaCppBackend:
         self.cfg = cfg
         self._llm = self._load()
 
-    def _load(self) -> Llama:
+    def _load(self) -> "Llama":
+        if not _LLAMA_AVAILABLE:
+            raise RuntimeError(
+                "llama-cpp-python is required for GGUF synthesis. Install it via 'pip install llama-cpp-python'."
+            )
         ts = _parse_tensor_split(self.cfg.tensor_split)
         llm = Llama(
             model_path=str(self.cfg.model_path),

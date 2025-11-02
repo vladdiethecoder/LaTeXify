@@ -2,7 +2,7 @@
 from __future__ import annotations
 import json, os, re
 from types import SimpleNamespace
-import scripts.aggregator as ag
+import latexify.pipeline.aggregator as ag
 
 def _mk(tmp: str, path: str, text: str):
     p = os.path.join(tmp, path); os.makedirs(os.path.dirname(p), exist_ok=True)

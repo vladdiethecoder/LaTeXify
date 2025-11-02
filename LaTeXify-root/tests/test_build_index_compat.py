@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 faiss = pytest.importorskip("faiss")  # skip if FAISS not present
-from scripts.build_index_compat import build_index
+from latexify.kb.build_index_compat import build_index
 
 def test_build_index_from_single_file(tmp_path: Path):
     run_dir = tmp_path / "kb" / "latex"

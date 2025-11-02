@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import argparse, sys
+import pytest
+
+pytest.importorskip("llama_cpp")
+
 from scripts.synth_backends.llamacpp_backend import LlamaCppBackend
 
 ap = argparse.ArgumentParser()

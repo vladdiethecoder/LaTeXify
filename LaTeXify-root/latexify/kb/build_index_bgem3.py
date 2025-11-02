@@ -14,8 +14,8 @@ Defaults:
 - Index:  FAISS IndexFlatIP over L2-normalized vectors (cosine similarity)
 
 Examples:
-    python scripts/build_index_bgem3.py --run_dir dev/runs/user_e2e
-    python scripts/build_index_bgem3.py --run_dir dev/runs/assessment_e2e --out indexes/assessment.index
+    python -m latexify.kb.build_index_bgem3 --run_dir dev/runs/user_e2e
+    python -m latexify.kb.build_index_bgem3 --run_dir dev/runs/assessment_e2e --out indexes/assessment.index
 
 Determinism:
 - Sets seeds for random, numpy, and torch (if present).

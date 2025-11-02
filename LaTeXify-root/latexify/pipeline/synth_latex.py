@@ -36,19 +36,27 @@ Output:
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List
+from typing import Callable, Dict, Optional, Tuple, List
 
 import argparse
 import json
 import os
 import sys
 import textwrap
+import re
 
+<<<<<<< ours
 from model_backends import LlamaCppBackend, LlamaCppConfig
 from model_router import choose_model_for_text, RouteDecision
 import synth_table
 import synth_formula
 import synth_figure
+import synth_figure_placeholder
+=======
+from latexify.pipeline.model_backends import LlamaCppBackend, LlamaCppConfig
+from latexify.pipeline.model_router import choose_model_for_text, RouteDecision
+from latexify.pipeline import synth_table, synth_formula, synth_figure
+>>>>>>> theirs
 
 
 DEFAULT_CTX = 4096
@@ -104,6 +112,161 @@ def _read_json(p: Path) -> Dict:
 def _ensure_out(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
+
+_ESCAPE_RE = re.compile(r"[\\{}_\%$]")
+
+
+def _sanitize_inline(text: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        ch = match.group(0)
+        if ch == "\\":
+            return r"\textbackslash{}"
+        return "\\" + ch
+
+    return _ESCAPE_RE.sub(_replace, text or "")
+
+
+def _title_from_question(question: str, default: str) -> str:
+    if ":" in question:
+        return question.split(":", 1)[1].strip() or default
+    return question.strip() or default
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "section"
+
+
+def _bundle_texts(values) -> List[str]:
+    texts: List[str] = []
+    for entry in values or []:
+        if isinstance(entry, dict):
+            txt = entry.get("text") or entry.get("content") or ""
+        else:
+            txt = str(entry)
+        if txt:
+            texts.append(str(txt))
+    return texts
+
+
+def _user_flag_uncertain(bundle: Dict) -> bool:
+    flags = bundle.get("user_answer", {}).get("flags", {})
+    if isinstance(flags, dict):
+        return bool(flags.get("ocr_uncertain"))
+    return False
+
+
+def build_snippet(bundle: Dict) -> str:
+    """Deterministic snippet suitable for aggregation tests."""
+
+    task_id = str(bundle.get("task_id", "task"))
+    question = str(bundle.get("question", task_id))
+    title = _title_from_question(question, task_id)
+    slug = _slugify(title)
+
+    rubric_texts = _bundle_texts(bundle.get("rubric"))
+    user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
+
+    if title.lower().startswith("abstract"):
+        abstract_lines = ["\\begin{abstract}"]
+        if user_chunks:
+            abstract_lines.extend(_sanitize_inline(chunk) for chunk in user_chunks)
+        else:
+            abstract_lines.append(_sanitize_inline(question))
+        if _user_flag_uncertain(bundle):
+            abstract_lines.append(r"\todo{Verify OCR accuracy.}")
+        abstract_lines.append("\\end{abstract}")
+        return "\n".join(abstract_lines) + "\n"
+
+    lines = [
+        f"\\section{{{_sanitize_inline(title)}}}",
+        f"\\label{{sec:{task_id}-{slug}}}",
+    ]
+    if rubric_texts:
+        lines.append("% Rubric guidance")
+        for note in rubric_texts:
+            lines.append(f"\\textit{{{_sanitize_inline(note)}}}")
+    for chunk in user_chunks:
+        lines.append(_sanitize_inline(chunk))
+    if _user_flag_uncertain(bundle):
+        lines.append(r"\todo{Verify OCR accuracy.}")
+    return "\n".join(lines) + "\n"
+
+
+def _cli_snippet(bundle: Dict) -> str:
+    task_id = str(bundle.get("task_id", "task"))
+    question = str(bundle.get("question", task_id))
+    header = f"\\section*{{Task {task_id}: {_sanitize_inline(question)}}}"
+    label = f"\\label{{sec:{task_id.lower()}}}"
+    sections = [header, label]
+
+    rubric_texts = _bundle_texts(bundle.get("assignment_rules")) or _bundle_texts(bundle.get("rubric"))
+    if rubric_texts:
+        sections.append("% Assignment guidance")
+        for note in rubric_texts:
+            sections.append(f"\\begin{{itemize}}\\item {_sanitize_inline(note)}\\end{{itemize}}")
+
+    user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
+    if user_chunks:
+        sections.append("% User answer context")
+        for chunk in user_chunks:
+            sections.append(_sanitize_inline(chunk))
+
+    sections.extend([
+        "\\begin{align}",
+        "  a + b &= c \\label{eq:example}\\\\",
+        "  d &= e + f",
+        "\\end{align}",
+        "As a reference we will use \\SI{9.81}{\\meter\\per\\second\\squared}.",
+        "\\begin{table}[h]",
+        "\\centering",
+        "\\begin{tabular}{ll}",
+        "\\toprule",
+        "Quantity & Value\\\\",
+        "\\midrule",
+        "Example & 1.0\\\\",
+        "\\bottomrule",
+        "\\end{tabular}",
+        "\\caption{Auto-generated reference table}",
+        f"\\label{{tab:{task_id.lower()}}}",
+        "\\end{table}",
+    ])
+
+    if _user_flag_uncertain(bundle):
+        sections.append(r"\todo{Verify OCR accuracy.}")
+
+    return "\n\n".join(sections) + "\n"
+
+
+def synthesize_snippet(
+    bundle_or_path: Dict | Path | str,
+    out_dir: Optional[Path] = None,
+    *,
+    kb_dir: Optional[Path] = None,
+) -> str | Path:
+    """Generate a deterministic snippet. Accepts either bundle dict or path."""
+
+    if isinstance(bundle_or_path, (str, Path)):
+        bundle_path = Path(bundle_or_path)
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        snippet = _cli_snippet(bundle)
+        if out_dir is not None:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{bundle.get('task_id', bundle_path.stem)}.tex"
+            out_path.write_text(snippet, encoding="utf-8")
+            return out_path
+        return snippet
+
+    bundle = bundle_or_path
+    snippet_text = build_snippet(bundle)
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{bundle.get('task_id', 'snippet')}.tex"
+        out_path.write_text(snippet_text, encoding="utf-8")
+        return out_path
+    return snippet_text
+
+
 def _capabilities_from_text(tex: str) -> List[str]:
     caps = []
     for name, needles in CAPABILITY_HINTS:
@@ -112,23 +275,54 @@ def _capabilities_from_text(tex: str) -> List[str]:
     return sorted(set(caps))
 
 
-def _load_plan_types(path: Optional[Path]) -> Dict[str, str]:
+def _load_plan_metadata(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
     if not path or not path.exists():
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    mapping: Dict[str, str] = {}
+    mapping: Dict[str, Dict[str, str]] = {}
     for task in data.get("tasks", []):
+        if not isinstance(task, dict):
+            continue
         tid = task.get("id")
+        if not tid:
+            continue
+        info: Dict[str, str] = {}
         ctype = task.get("content_type")
-        if tid and ctype:
-            mapping[str(tid)] = str(ctype)
+        if ctype:
+            info["content_type"] = str(ctype)
+        asset_path = task.get("asset_path")
+        if asset_path:
+            info["asset_path"] = str(asset_path)
+        task_type = task.get("type")
+        if task_type:
+            info["type"] = str(task_type)
+        asset_source = task.get("asset_source_type")
+        if asset_source:
+            info["asset_source_type"] = str(asset_source)
+        if task.get("asset_page_index") is not None:
+            info["asset_page_index"] = str(task.get("asset_page_index"))
+        asset_id = task.get("asset_id")
+        if asset_id:
+            info["asset_id"] = str(asset_id)
+        if info:
+            mapping[str(tid)] = info
     return mapping
 
 
-def _choose_specialist(content_type: Optional[str]):
+def _choose_specialist(task_info: Dict[str, str]) -> Optional[Callable[[Dict], Tuple[str, List[str]]]]:
+    task_type = (task_info.get("type") or "").lower()
+    if task_type == "figure_placeholder":
+        return synth_figure_placeholder.synthesize
+    if task_type == "figure":
+        return synth_figure.synthesize
+
+    if task_info.get("asset_path"):
+        return synth_figure.synthesize
+
+    content_type = task_info.get("content_type")
     if not content_type:
         return None
     kind = content_type.lower()
@@ -171,7 +365,7 @@ def synth_one_bundle(
     out_dir: Path,
     backend_cache: Dict[str, LlamaCppBackend],
     args: Args,
-    plan_types: Dict[str, str],
+    plan_metadata: Dict[str, Dict[str, str]],
 ) -> Tuple[Path, Path]:
     b = _read_json(bundle_path)
     bid = b.get("id") or bundle_path.stem.replace(".bundle", "")
@@ -179,7 +373,15 @@ def synth_one_bundle(
     ctx = b.get("context") or ""
     body = _build_prompt(ocr, ctx)
 
-    specialist = _choose_specialist(plan_types.get(bid))
+    task_info = plan_metadata.get(bid, {})
+    if task_info:
+        for key in ("content_type", "asset_path", "asset_source_type", "asset_page_index", "asset_id"):
+            if key in task_info and key not in b:
+                b[key] = task_info[key]
+        if task_info.get("type") and "type" not in b:
+            b["type"] = task_info["type"]
+
+    specialist = _choose_specialist(task_info)
     if specialist:
         snippet, caps = specialist(b)
         return _write_outputs(out_dir, bid, snippet, caps, route_reason="specialist", model_path=None, seed=args.seed)
@@ -289,7 +491,7 @@ def main() -> int:
     _ensure_out(args.out)
 
     backend_cache: Dict[str, LlamaCppBackend] = {}
-    plan_types = _load_plan_types(args.plan)
+    plan_metadata = _load_plan_metadata(args.plan)
     bundle_files = sorted(
         [
             p
@@ -304,7 +506,7 @@ def main() -> int:
 
     for bf in bundle_files:
         try:
-            synth_one_bundle(bf, args.out, backend_cache, args, plan_types)
+            synth_one_bundle(bf, args.out, backend_cache, args, plan_metadata)
         except Exception as e:
             print(f"[synth][ERR] {bf.name}: {e}", file=sys.stderr)
             continue

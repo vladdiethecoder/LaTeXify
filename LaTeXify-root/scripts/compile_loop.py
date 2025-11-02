@@ -389,6 +389,26 @@ def write_report(report_path: Path, report: Dict) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def write_metrics(build_dir: Path, run_id: str, report_path: Path, report: Dict) -> Path:
+    """Persist a light-weight metrics view alongside the full report."""
+    build_dir.mkdir(parents=True, exist_ok=True)
+    metrics = {
+        "run_id": run_id,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "compile_report": str(report_path),
+        "compilation_success": report.get("status") == "ok",
+        "final_status": report.get("status"),
+        "passes": report.get("passes"),
+        "auto_fix_attempts": int(report.get("retry_policy", {}).get("auto_fix_attempted", False)),
+        "auto_fix_status": (report.get("auto_fix") or {}).get("status"),
+        "pdf_artifact": (report.get("artifacts") or {}).get("pdf_file"),
+    }
+    metrics_path = build_dir / "compile_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return metrics_path
 
 
 def invoke_auto_fix(
@@ -571,7 +591,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     })
                 report["artifacts"]["log_file"] = str(log_path2)
 
-    write_report(run_dir / "compile_report.json", report)
+    report["run_id"] = run_id
+    report_path = run_dir / "compile_report.json"
+    write_report(report_path, report)
+    write_metrics(build_dir, run_id, report_path, report)
     return 0 if report["status"] == "ok" else 1
 
 

@@ -1,4 +1,4 @@
-# scripts/retrieval_bundle.py
+# latexify/pipeline/retrieval_bundle.py
 from __future__ import annotations
 
 import argparse

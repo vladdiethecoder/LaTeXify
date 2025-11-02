@@ -19,13 +19,117 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Dict, List, Sequence
+
+
+@dataclass
+class LayoutBlock:
+    block_id: str
+    content_type: str | None = None
+    page_index: int | None = None
+    asset_id: str | None = None
+
+
+@dataclass
+class AssetInfo:
+    asset_path: str
+    asset_type: str | None = None
+    page_index: int | None = None
+    block_id: str | None = None
+    asset_id: str | None = None
+
+
+class AssetLookup:
+    def __init__(self) -> None:
+        self.by_id: Dict[str, AssetInfo] = {}
+        self.by_page: Dict[int, List[AssetInfo]] = {}
+        self.ordered: List[AssetInfo] = []
+
+    def add(self, entry: AssetInfo) -> None:
+        self.ordered.append(entry)
+        for key in filter(None, (entry.asset_id, entry.block_id)):
+            self.by_id.setdefault(str(key), entry)
+        if entry.page_index is not None:
+            try:
+                idx = int(entry.page_index)
+            except (TypeError, ValueError):
+                return
+            self.by_page.setdefault(idx, []).append(entry)
+
+    def match_for_block(self, block: LayoutBlock, used_paths: set[str]) -> AssetInfo | None:
+        for key in filter(None, (block.asset_id, block.block_id)):
+            info = self.by_id.get(str(key))
+            if info and info.asset_path not in used_paths:
+                return info
+        if block.page_index is not None:
+            try:
+                idx = int(block.page_index)
+            except (TypeError, ValueError):
+                idx = None
+            if idx is not None:
+                for info in self.by_page.get(idx, []):
+                    if info.asset_path not in used_paths:
+                        return info
+        return None
+
+    @property
+    def ordered_paths(self) -> List[str]:
+        return [entry.asset_path for entry in self.ordered]
 
 
 def _split_list(csv: str | None) -> List[str]:
     if not csv:
         return []
     return [s.strip() for s in csv.split(",") if s.strip()]
+
+
+def _looks_like_figure(value: str | None) -> bool:
+    if not value:
+        return False
+    value = value.lower()
+    return any(token in value for token in ("figure", "image", "picture", "graphic", "diagram", "photo", "chart"))
+
+
+def _looks_like_table(value: str | None) -> bool:
+    if not value:
+        return False
+    value = value.lower()
+    return any(token in value for token in ("table", "spreadsheet", "tabular"))
+
+
+def _looks_like_math(value: str | None) -> bool:
+    if not value:
+        return False
+    value = value.lower()
+    return any(token in value for token in ("formula", "equation", "math", "expression"))
+
+
+def _asset_is_visual(*candidates: str | None) -> bool:
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if _looks_like_figure(candidate) or _looks_like_table(candidate) or _looks_like_math(candidate):
+            return True
+    return False
+
+
+def _coerce_str(value) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def _coerce_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _emit_plan(
@@ -36,16 +140,29 @@ def _emit_plan(
     course: str = "",
     date: str = r"\today",
     questions: Sequence[str] | None = None,
+<<<<<<< ours
     layout_metadata: Dict[str, Dict[str, str]] | None = None,
 ) -> dict:
 
     layout_metadata = layout_metadata or {}
+=======
+    layout_blocks: Dict[str, LayoutBlock] | None = None,
+    assets: AssetLookup | None = None,
+) -> dict:
+
+    layout_blocks = layout_blocks or {}
+    assets = assets or AssetLookup()
+
+>>>>>>> theirs
     tasks = [
         {"id": "PREAMBLE", "type": "preamble", "order": 0, "content_type": "frontmatter"},
         {"id": "TITLE", "type": "titlepage", "order": 1, "content_type": "frontmatter"},
     ]
 
+    used_assets: set[str] = set()
+
     for i, q in enumerate(questions or (), start=2):
+<<<<<<< ours
         entry = {"id": q, "type": "question", "title": q.replace("_", " "), "order": i}
         info = layout_metadata.get(q)
         if info:
@@ -55,6 +172,35 @@ def _emit_plan(
             asset_path = info.get("asset_path")
             if asset_path:
                 entry["asset_path"] = asset_path
+=======
+        block = layout_blocks.get(q, LayoutBlock(block_id=q))
+        entry: Dict[str, object] = {"id": q, "type": "question", "title": q.replace("_", " "), "order": i}
+
+        if block.content_type:
+            entry["content_type"] = block.content_type
+
+        asset_info = assets.match_for_block(block, used_assets)
+        if asset_info:
+            semantic_type = asset_info.asset_type or block.content_type
+            if _asset_is_visual(semantic_type, block.content_type):
+                entry["type"] = "figure"
+                entry["asset_path"] = asset_info.asset_path
+                entry["asset_source_type"] = semantic_type
+                if asset_info.asset_id:
+                    entry["asset_id"] = asset_info.asset_id
+                if asset_info.page_index is not None:
+                    entry["asset_page_index"] = int(asset_info.page_index)
+                used_assets.add(asset_info.asset_path)
+            else:
+                # Asset exists but not a visual block; leave as regular content.
+                entry.setdefault("type", "question")
+        else:
+            if _looks_like_figure(block.content_type):
+                entry["type"] = "figure_placeholder"
+                if block.content_type:
+                    entry["asset_source_type"] = block.content_type
+
+>>>>>>> theirs
         tasks.append(entry)
 
     plan = {
@@ -88,7 +234,11 @@ def validate_plan(plan: dict) -> None:
         previous_order = order
 
 
+<<<<<<< ours
 def _load_layout_metadata(path: Path | None) -> Dict[str, Dict[str, str]]:
+=======
+def _load_layout_blocks(path: Path | None) -> Dict[str, LayoutBlock]:
+>>>>>>> theirs
     if not path or not path.exists():
         return {}
     try:
@@ -103,6 +253,7 @@ def _load_layout_metadata(path: Path | None) -> Dict[str, Dict[str, str]]:
     except Exception:
         return {}
 
+<<<<<<< ours
     metadata: Dict[str, Dict[str, str]] = {}
 
     def _merge(entry_id: str, *, content_type: str | None, asset_path: str | None) -> None:
@@ -126,14 +277,132 @@ def _load_layout_metadata(path: Path | None) -> Dict[str, Dict[str, str]]:
                 ct = str(content_type) if content_type else None
                 ap = str(asset_path) if isinstance(asset_path, str) and asset_path else None
                 _merge(str(entry_id), content_type=ct, asset_path=ap)
+=======
+    blocks: Dict[str, LayoutBlock] = {}
+
+    def _ensure_block(identifier) -> LayoutBlock | None:
+        ident = _coerce_str(identifier)
+        if ident is None:
+            return None
+        if ident not in blocks:
+            blocks[ident] = LayoutBlock(block_id=ident)
+        return blocks[ident]
+
+    def _update_block(obj: Dict) -> None:
+        candidate_ids = [
+            obj.get("id"),
+            obj.get("block_id"),
+            obj.get("task_id"),
+            obj.get("question_id"),
+            obj.get("bundle_id"),
+        ]
+        block: LayoutBlock | None = None
+        for cid in candidate_ids:
+            block = _ensure_block(cid)
+            if block is not None:
+                break
+        if block is None:
+            return
+
+        ctype = _coerce_str(obj.get("type") or obj.get("block_type") or obj.get("category"))
+        if ctype:
+            block.content_type = ctype
+
+        page = _coerce_int(obj.get("page_index") or obj.get("page") or obj.get("page_number"))
+        if page is not None:
+            block.page_index = page
+
+        asset_ref = _coerce_str(
+            obj.get("asset_id")
+            or obj.get("image_id")
+            or obj.get("asset_ref")
+            or obj.get("asset")
+        )
+        if asset_ref:
+            block.asset_id = block.asset_id or asset_ref
+
+    def _walk(obj):
+        if isinstance(obj, dict):
+            _update_block(obj)
+>>>>>>> theirs
             for value in obj.values():
                 _walk(value)
         elif isinstance(obj, list):
             for item in obj:
                 _walk(item)
 
+<<<<<<< ours
     _walk(payload)
     return metadata
+=======
+    _walk(data)
+    return blocks
+
+
+def _load_asset_manifest(path: Path | None) -> AssetLookup:
+    lookup = AssetLookup()
+    if not path or not path.exists():
+        return lookup
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return lookup
+
+    entries: List[dict] = []
+    if isinstance(data, dict):
+        if isinstance(data.get("entries"), list):
+            entries = data.get("entries", [])
+        elif isinstance(data.get("assets"), list):
+            entries = data.get("assets", [])
+    elif isinstance(data, list):
+        entries = data  # type: ignore[assignment]
+
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        rel = (
+            item.get("asset_path")
+            or item.get("relative_path")
+            or item.get("rel_path")
+            or item.get("path")
+            or item.get("filename")
+        )
+        rel = _coerce_str(rel)
+        if not rel:
+            continue
+
+        asset_type = _coerce_str(
+            item.get("asset_type")
+            or item.get("type")
+            or item.get("block_type")
+            or item.get("category")
+        )
+        page_index = _coerce_int(item.get("page_index") or item.get("page") or item.get("page_number"))
+        block_id = _coerce_str(
+            item.get("block_id")
+            or item.get("task_id")
+            or item.get("question_id")
+            or item.get("bundle_id")
+        )
+        asset_id = _coerce_str(
+            item.get("asset_id")
+            or item.get("image_id")
+            or item.get("id")
+            or item.get("asset_identifier")
+        )
+        if not asset_id:
+            asset_id = Path(rel).stem
+        info = AssetInfo(
+            asset_path=rel,
+            asset_type=asset_type,
+            page_index=page_index,
+            block_id=block_id,
+            asset_id=asset_id,
+        )
+        lookup.add(info)
+
+    return lookup
+>>>>>>> theirs
 
 
 def main() -> int:
@@ -146,9 +415,15 @@ def main() -> int:
     ap.add_argument("--date", default=r"\today")
     ap.add_argument("--questions", default="", help="CSV list, e.g. Q1a,Q1b,Q2")
     ap.add_argument("--layout-json", type=Path, help="Optional layout analysis JSON with block types")
+    ap.add_argument("--asset-manifest", type=Path, help="Optional asset manifest JSON for figure tasks")
     args = ap.parse_args()
 
+<<<<<<< ours
     layout_metadata = _load_layout_metadata(args.layout_json)
+=======
+    layout_blocks = _load_layout_blocks(args.layout_json)
+    asset_lookup = _load_asset_manifest(args.asset_manifest)
+>>>>>>> theirs
 
     plan = _emit_plan(
         args.doc_class,
@@ -157,7 +432,12 @@ def main() -> int:
         course=args.course,
         date=args.date,
         questions=_split_list(args.questions),
+<<<<<<< ours
         layout_metadata=layout_metadata,
+=======
+        layout_blocks=layout_blocks,
+        assets=asset_lookup,
+>>>>>>> theirs
     )
 
     validate_plan(plan)

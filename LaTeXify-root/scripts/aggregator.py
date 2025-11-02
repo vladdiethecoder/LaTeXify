@@ -510,7 +510,10 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
     evidence_log = out_dir_path / "aggregate.log.jsonl"
     out_dir_path.mkdir(parents=True, exist_ok=True)
     assets_dst = _prepare_assets(Path(assets_dir) if assets_dir else None, out_dir_path, evidence_log)
+<<<<<<< ours
     bundled_assets = _bundle_plan_assets(plan, out_dir_path, evidence_log)
+=======
+>>>>>>> theirs
     res = _assemble_document(plan, Path(snippets_dir), evidence_log)
     _write_preamble(res.preamble_lines, out_dir_path, evidence_log)
     section_map = _write_sections(res.sections, out_dir_path, evidence_log)
@@ -550,7 +553,10 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "stderr": stderr,
         "source_map": str(source_map_path),
         "assets_dir": str(assets_dst) if assets_dst else None,
+<<<<<<< ours
         "asset_manifest": str(asset_manifest_path) if asset_manifest_path.exists() else None,
+=======
+>>>>>>> theirs
     }, ensure_ascii=False))
     return {
         "main_tex": str(main_tex),
@@ -562,8 +568,11 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "stderr": stderr,
         "source_map": str(source_map_path),
         "assets_dir": str(assets_dst) if assets_dst else None,
+<<<<<<< ours
         "asset_manifest": str(asset_manifest_path) if asset_manifest_path.exists() else None,
         "bundled_assets": bundled_assets,
+=======
+>>>>>>> theirs
     }
 
 def main() -> None:

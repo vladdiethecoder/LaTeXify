@@ -394,22 +394,89 @@ def close_unfinished_environment(file_path: Path) -> Tuple[bool, str]:
     return False, "No unbalanced environment detected."
 
 
-def fix_missing_file_or_package(message: str, build_dir: Path, main_tex: Path) -> Tuple[bool, str, Optional[Path]]:
+_MISSING_FILE_PATTERNS = [
+    re.compile(r"LaTeX Error: File `([^`]+)` not found\."),
+    re.compile(r"! I can't find file `([^']+)'\."),
+]
+
+
+def _extract_missing_filename(message: str) -> Optional[str]:
+    if not message:
+        return None
+    for pattern in _MISSING_FILE_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _locate_asset_on_disk(missing: str, build_dir: Path) -> Optional[Path]:
+    candidates = []
+    target = Path(missing)
+    if target.is_absolute():
+        candidates.append(target)
+    candidates.append(build_dir / missing)
+    if target.name != missing:
+        candidates.append(build_dir / target.name)
+    for cand in candidates:
+        try:
+            if cand.exists():
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _replace_includegraphics_with_placeholder(snippet_path: Path, missing: str) -> Tuple[bool, str]:
+    if not snippet_path.exists():
+        return False, "Snippet not found."
+    text = load_text(snippet_path)
+    if not text:
+        return False, "Snippet empty; nothing to replace."
+    tokens = {missing, Path(missing).as_posix(), Path(missing).name}
+    lines = text.splitlines()
+    replaced = False
+    for idx, line in enumerate(lines):
+        if "\\includegraphics" not in line:
+            continue
+        if not any(token in line for token in tokens):
+            continue
+        indent = line[: len(line) - len(line.lstrip())]
+        placeholder = f"{indent}\\fbox{{Missing Asset: {Path(missing).name}}} % [auto-fix missing asset]"
+        lines[idx] = placeholder
+        replaced = True
+        break
+    if not replaced:
+        return False, "Includegraphics reference not found in snippet."
+    new_text = "\n".join(lines)
+    if not new_text.endswith("\n"):
+        new_text += "\n"
+    save_text(snippet_path, new_text)
+    return True, f"Replaced includegraphics with placeholder for {Path(missing).name}."
+
+
+def fix_missing_file_or_package(message: str, build_dir: Path, main_tex: Path, snippet_path: Optional[Path] = None) -> Tuple[bool, str, Optional[Path]]:
     msty = re.search(r"File `([^`]+\.sty)` not found", message)
     if msty:
         pkg = Path(msty.group(1)).stem
         changed, note = ensure_preamble_package(main_tex, pkg)
         return changed, note, None
 
-    mfile = re.search(r"I can't find file `([^']+)'\.", message)
-    if mfile:
-        missing = mfile.group(1)
+    missing = _extract_missing_filename(message)
+    if missing:
+        located = _locate_asset_on_disk(missing, build_dir)
+        if located:
+            return False, f"File {missing} exists at {located}; check path usage.", located
+        if snippet_path:
+            changed, note = _replace_includegraphics_with_placeholder(snippet_path, missing)
+            if changed:
+                return True, note, snippet_path
         base = build_dir / missing
         for ext in (".pdf", ".png", ".jpg"):
             cand = base.with_suffix(ext)
             if cand.exists():
                 return False, f"Found {cand.name} in build; update \\includegraphics path.", cand
-        return False, f"No alternates found for {missing}.", None
+        return False, f"Missing file {missing}; no snippet updated.", None
 
     return False, "No actionable missing file/package pattern.", None
 
@@ -476,8 +543,11 @@ def _run() -> dict:
 
     elif args.error_category in ('file_not_found', 'missing_package'):
         main_tex = detect_main_tex(args.build_dir) or target
-        ok, note, _ = fix_missing_file_or_package(args.message, args.build_dir, main_tex)
-        changed_file = main_tex if ok else None
+        ok, note, changed_path = fix_missing_file_or_package(args.message, args.build_dir, main_tex, target)
+        if ok:
+            changed_file = changed_path if changed_path else main_tex
+        else:
+            changed_file = changed_path
         what_changed = note
         status = 'fixed' if ok else 'skipped'
 

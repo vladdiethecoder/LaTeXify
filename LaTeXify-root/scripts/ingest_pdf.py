@@ -65,6 +65,7 @@ def _write_page_md(out_dir: Path, page_index: int, text: str) -> Path:
     return p
 
 
+<<<<<<< ours
 def _image_extension(fmt: str | None) -> str:
     fmt = (fmt or "").lower()
     if fmt in {"jpeg", "jpg"}:
@@ -107,6 +108,8 @@ def _export_page_images(reader: PdfReader, pdf: Path, assets_dir: Path) -> Seque
     return manifest
 
 
+=======
+>>>>>>> theirs
 def _export_page_images(pdf: Path, assets_dir: Path) -> List[Dict[str, str]]:
     """Export page-level images using pdf-document-layout-analysis helpers."""
 
@@ -127,6 +130,12 @@ def _export_page_images(pdf: Path, assets_dir: Path) -> List[Dict[str, str]]:
                 {
                     "page_index": idx,
                     "filename": name,
+<<<<<<< ours
+=======
+                    "asset_id": f"{pdf.stem}-page-{idx + 1:04d}",
+                    "type": "page_image",
+                    "source": "page_render",
+>>>>>>> theirs
                     "relative_path": f"{assets_dir.name}/{name}",
                     "asset_path": f"{assets_dir.name}/{name}",
                     "absolute_path": str(target),
@@ -158,8 +167,11 @@ def ingest_pdf(
     assets_dir: Path | None = None,
     manifest_path: Path | None = None,
 ) -> None:
+<<<<<<< ours
 
 
+=======
+>>>>>>> theirs
     if not pdf.exists():
         raise FileNotFoundError(f"PDF not found: {pdf}")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -222,11 +234,26 @@ def main() -> None:
     ap.add_argument(
         "--assets-dir",
         type=Path,
+<<<<<<< ours
         default=Path("build/assets"),
         help="Directory where extracted figures/tables will be written.",
     )
     args = ap.parse_args()
     ingest_pdf(args.pdf, args.run_dir, assets_dir=args.assets_dir)
+=======
+        default=DEFAULT_ASSET_DIR,
+        help="Directory to export detected images (default: build/assets)",
+    )
+    ap.add_argument(
+        "--asset-manifest",
+        type=Path,
+        default=None,
+        help="Optional path to write a JSON manifest describing exported assets",
+    )
+    args = ap.parse_args()
+    manifest_path = args.asset_manifest or (args.run_dir / "layout" / "assets.json")
+    ingest_pdf(args.pdf, args.run_dir, assets_dir=args.assets_dir, manifest_path=manifest_path)
+>>>>>>> theirs
 
 
 if __name__ == "__main__":

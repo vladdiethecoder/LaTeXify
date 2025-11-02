@@ -1,4 +1,4 @@
-from scripts.docclass_map import normalize_docclass
+from latexify.utils.docclass_map import normalize_docclass
 
 def test_normalize_lix_aliases():
     for alias in ["lix", "lix_article", "lix_textbook"]:

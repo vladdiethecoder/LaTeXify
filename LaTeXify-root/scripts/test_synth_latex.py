@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from scripts.synth_latex import synthesize_snippet
+from latexify.pipeline.synth_latex import synthesize_snippet
 
 def test_synthesize_minimal(tmp_path: Path):
     # Minimal bundle with rubric + user chunks

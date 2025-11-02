@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from scripts.class_probe import parse_issues, suggest_fixes, ClassProfile
+from latexify.agents.class_probe import ClassProfile, parse_issues, suggest_fixes
 
 def test_parse_missing_class_and_microtype():
     text = "LaTeX Error: File `lix_article.cls' not found.\n" \

@@ -1,7 +1,7 @@
 # tests/test_synth_sanitize.py
 from __future__ import annotations
 import json
-from scripts.synth_latex import _sanitize_inline, build_snippet
+from latexify.pipeline.synth_latex import _sanitize_inline, build_snippet
 
 def test_escape_backslash_and_braces():
     s = r"I'm \myage{day}{month}{year} years old."

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from scripts.aggregator import run_aggregator
+from latexify.pipeline.aggregator import run_aggregator
 
 def test_placeholder_branch_no_collision(tmp_path: Path):
     # Minimal plan with a missing snippet to force the placeholder path
@@ -16,7 +16,7 @@ def test_placeholder_branch_no_collision(tmp_path: Path):
     }
     (tmp_path / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
     out_dir = tmp_path / "build"
-    res = run_aggregator(tmp_path / "plan.json", tmp_path / "snippets", out_dir, no_compile=True, simulate=True)
+    res = run_aggregator(tmp_path / "plan.json", tmp_path / "snippets", out_dir, no_compile=True, simulate=True, assets_dir=None)
 
     assert (out_dir / "main.tex").exists()
     log = out_dir / "aggregate.log.jsonl"

@@ -23,11 +23,14 @@ def test_docclass_fallback_and_no_compile(tmp_path: Path, monkeypatch):
     env["AGG_FORCE_DOCCLASS_FALLBACK"] = "1"
 
     # Act
-    cmd = [sys.executable, "-m", "scripts.aggregator",
-           "--plan", str(tmp_path / "plan.json"),
-           "--snippets_dir", str(tmp_path / "snippets"),
-           "--out_dir", str(tmp_path / "build"),
-           "--no_compile"]
+    cmd = [
+        sys.executable,
+        "-m",
+        "latexify.pipeline.aggregator",
+        "--plan", str(tmp_path / "plan.json"),
+        "--snippets_dir", str(tmp_path / "snippets"),
+        "--out_dir", str(tmp_path / "build"),
+        "--no_compile"]
     out = subprocess.run(cmd, capture_output=True, text=True, cwd=str(Path.cwd()), env=env)
     assert out.returncode == 0
 

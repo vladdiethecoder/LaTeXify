@@ -23,12 +23,21 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
 HERE = Path(__file__).resolve()
+<<<<<<< ours
 REPO_ROOT = HERE.parents[1]          # << was likely HERE.parent before
 ROOT = REPO_ROOT
 SCRIPTS = REPO_ROOT / "scripts"
 BUILD = REPO_ROOT / "build"
 RUNS_ROOT = REPO_ROOT / "dev" / "runs"
+=======
+REPO_ROOT = HERE.parents[1]
+ROOT = REPO_ROOT
+SCRIPTS = ROOT / "scripts"
+BUILD = ROOT / "build"
+RUNS_ROOT = ROOT / "dev" / "runs"
+>>>>>>> theirs
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
     print(f"[run] {' '.join(map(str, cmd))}")
@@ -80,10 +89,12 @@ def main() -> int:
     # (Optional) Upstream agents if you invoke them from here.
     # Commented as placeholders; leave your existing calls if you already do this elsewhere.
     if not args.skip_agents:
-        # Example placeholders — uncomment/adapt if your CLI matches:
+        # Example placeholders — uncomment/adapt if your CLI matches. Note the synth step passes
+        # --plan so figure/placeholder routing can delegate to synth_figure.py and
+        # synth_figure_placeholder.py as needed.
         # run([sys.executable, str(SCRIPTS / "planner_scaffold.py"), "--out", str(BUILD / "plan.json")], env=tex_env)
         # run([sys.executable, str(SCRIPTS / "retrieval_agent.py"), "--plan", str(BUILD / "plan.json"), "--out", "bundles"], env=tex_env)
-        # run([sys.executable, str(SCRIPTS / "synth_latex.py"), "--bundles", "bundles", "--out", str(BUILD / "snippets")], env=tex_env)
+        # run([sys.executable, str(SCRIPTS / "synth_latex.py"), "--bundles", "bundles", "--out", str(BUILD / "snippets"), "--plan", str(BUILD / "plan.json")], env=tex_env)
         # run([sys.executable, str(SCRIPTS / "aggregator.py"), "--plan", str(BUILD / "plan.json"), "--snippets", str(BUILD / "snippets"), "--out", str(BUILD)], env=tex_env)
         pass
 

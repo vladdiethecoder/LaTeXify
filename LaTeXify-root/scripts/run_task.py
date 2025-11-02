@@ -1,9 +1,9 @@
 from __future__ import annotations
 import argparse, json, os, subprocess
 from pathlib import Path
-from scripts.query_index import build_context_bundle
-from scripts.synth_latex import synthesize_snippet
-from scripts.ensure_kb_alias import ensure_kb_alias
+from latexify.kb.query_index import build_context_bundle
+from latexify.pipeline.synth_latex import synthesize_snippet
+from latexify.kb.ensure_kb_alias import ensure_kb_alias
 
 def parse_indices(mapping: str) -> dict:
     out = {}

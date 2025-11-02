@@ -1,5 +1,5 @@
 import json
-from scripts.latex_deps_check import parse_missing_styles, suggest_installs
+from latexify.utils.latex_deps_check import parse_missing_styles, suggest_installs
 
 def test_gs1_detection_and_suggestion():
     fake_log = """

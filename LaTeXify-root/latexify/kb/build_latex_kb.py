@@ -13,16 +13,110 @@ Outputs:
   - indexes/latex_docs.index/      (FAISS, via build_index_bgem3.py if requested)
 
 Usage:
-  python scripts/build_latex_kb.py
-  python scripts/build_latex_kb.py --no_index        # only write JSONL/chunks
-  python scripts/build_latex_kb.py --run_dir dev/runs/latex_kb --out indexes/latex_docs.index
+  python -m latexify.kb.build_latex_kb
+  python -m latexify.kb.build_latex_kb --no_index        # only write JSONL/chunks
+  python -m latexify.kb.build_latex_kb --run_dir dev/runs/latex_kb --out indexes/latex_docs.index
 """
 from __future__ import annotations
 
 import json
 import argparse
+from dataclasses import dataclass
+from hashlib import sha1
+from html import unescape
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
+import re
+
+
+@dataclass
+class KBRecord:
+    """Normalized representation of a lightweight knowledge-base article."""
+
+    id: str
+    url: str
+    title: str
+    question: str
+    answer: str
+    code_blocks: List[str]
+    tags: List[str]
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(fragment: str) -> str:
+    return unescape(_TAG_RE.sub("", fragment or "")).strip()
+
+
+def _code_blocks(html: str) -> List[str]:
+    return [unescape(block.strip()) for block in re.findall(r"<code>(.*?)</code>", html, flags=re.S)]
+
+
+def _record_id(url: str, title: str) -> str:
+    h = sha1()
+    h.update(url.encode("utf-8"))
+    h.update(title.encode("utf-8"))
+    return f"sha1:{h.hexdigest()}"
+
+
+def parse_texse_html(url: str, html: str) -> KBRecord:
+    title_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, flags=re.S)
+    question_match = re.search(r'<div[^>]+id="question"[^>]*>(.*?)</div>', html, flags=re.S)
+    answer_match = re.search(r'<div[^>]+class="answer[^"]*"[^>]*>.*?<div[^>]+class="js-post-body"[^>]*>(.*?)</div>', html, flags=re.S)
+    tags = [unescape(tag.strip()) for tag in re.findall(r'<a[^>]+class="post-tag"[^>]*>(.*?)</a>', html, flags=re.S)]
+    title = _strip_html(title_match.group(1) if title_match else url)
+    question = _strip_html(question_match.group(1) if question_match else "")
+    answer = _strip_html(answer_match.group(1) if answer_match else "")
+    return KBRecord(
+        id=_record_id(url, title),
+        url=url,
+        title=title,
+        question=question,
+        answer=answer,
+        code_blocks=_code_blocks(html),
+        tags=tags,
+    )
+
+
+def parse_overleaf_html(url: str, html: str) -> KBRecord:
+    title_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, flags=re.S)
+    paragraph_match = re.search(r'<p>(.*?)</p>', html, flags=re.S)
+    article_match = re.search(r'<article[^>]*>(.*?)</article>', html, flags=re.S)
+    title = _strip_html(title_match.group(1) if title_match else url)
+    question = _strip_html(paragraph_match.group(1) if paragraph_match else "")
+    answer = _strip_html(article_match.group(1) if article_match else question)
+    page_title = re.search(r'<title>(.*?)</title>', html, flags=re.S)
+    tags = [part.strip().lower() for part in (page_title.group(1).split("-") if page_title else []) if part.strip()]
+    return KBRecord(
+        id=_record_id(url, title),
+        url=url,
+        title=title,
+        question=question,
+        answer=answer,
+        code_blocks=_code_blocks(html),
+        tags=tags,
+    )
+
+
+def parse_wikibooks_html(url: str, html: str) -> KBRecord:
+    title_match = re.search(r'<h1[^>]*>(.*?)</h1>', html, flags=re.S)
+    content_match = re.search(r'<div[^>]+id="mw-content-text"[^>]*>(.*?)</div>', html, flags=re.S)
+    paragraph_match = re.search(r'<p>(.*?)</p>', html, flags=re.S)
+    title = _strip_html(title_match.group(1) if title_match else url)
+    question = _strip_html(paragraph_match.group(1) if paragraph_match else "")
+    answer = _strip_html(content_match.group(1) if content_match else question)
+    page_title = re.search(r'<title>(.*?)</title>', html, flags=re.S)
+    tags = [part.strip().lower() for part in (page_title.group(1).split("-") if page_title else []) if part.strip()]
+    return KBRecord(
+        id=_record_id(url, title),
+        url=url,
+        title=title,
+        question=question,
+        answer=answer,
+        code_blocks=_code_blocks(html),
+        tags=tags,
+    )
 
 DEFAULT_RUN_DIR = "dev/runs/latex_kb"
 DEFAULT_OUT_DIR = "indexes/latex_docs.index"
@@ -191,9 +285,13 @@ def main():
     if not args.no_index:
         import subprocess, sys
         cmd = [
-            sys.executable, "scripts/build_index_bgem3.py",
-            "--run_dir", args.run_dir,
-            "--out", args.out
+            sys.executable,
+            "-m",
+            "latexify.kb.build_index_bgem3",
+            "--run_dir",
+            args.run_dir,
+            "--out",
+            args.out,
         ]
         print("[latex_kb] indexing via:", " ".join(cmd))
         subprocess.run(cmd, check=True)

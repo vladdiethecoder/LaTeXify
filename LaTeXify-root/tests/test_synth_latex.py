@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.synth_latex import synthesize_snippet
+from latexify.pipeline.synth_latex import synthesize_snippet
 
 def test_synth_section_snippet(tmp_path: Path):
     bundle = {

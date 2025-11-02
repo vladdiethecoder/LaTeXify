@@ -2,7 +2,13 @@ from __future__ import annotations
 import argparse, json
 from pathlib import Path
 from typing import List, Dict
-from scripts.kb_paths import ensure_dir, find_first_with_index, has_index, link_or_copy, REQUIRED_INDEX_FILES
+from latexify.kb.kb_paths import (
+    REQUIRED_INDEX_FILES,
+    ensure_dir,
+    find_first_with_index,
+    has_index,
+    link_or_copy,
+)
 
 DEFAULT_ALIAS = Path("kb/latex")
 DEFAULT_SOURCES = [Path("kb/latex"), Path("kb/offline/latex"), Path("kb/online/latex")]

@@ -1,5 +1,5 @@
 from pathlib import Path
-from scripts.setup_classes import stage_lix
+from latexify.utils.setup_classes import stage_lix
 
 def test_stage_lix_minimal(tmp_path: Path):
     # fake LiX repo

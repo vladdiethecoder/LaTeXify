@@ -1,9 +1,13 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+
 import numpy as np
-import faiss
-from scripts.query_index import build_context_bundle
+import pytest
+
+faiss = pytest.importorskip("faiss")
+
+from latexify.kb.query_index import build_context_bundle
 
 
 def _mk_dummy_index(tmp: Path, name: str, n: int = 8, d: int = 32) -> Path:

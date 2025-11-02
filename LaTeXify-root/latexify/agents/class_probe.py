@@ -1,4 +1,4 @@
-# scripts/class_probe.py
+# latexify/agents/class_probe.py
 from __future__ import annotations
 
 import argparse
@@ -6,13 +6,76 @@ import json
 import os
 import re
 import subprocess
-from pathlib import Path
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List
 
 ALLOWED_PACKAGES = ["enumitem", "geometry", "microtype"]  # keep tiny & deterministic
 DEFAULT_CLASS = "lix_article"  # we will fall back to scrartcl if missing
 FALLBACK_CLASS = "scrartcl"
 SEED = 42  # determinism placeholder (not used for randomness here)
+
+
+@dataclass
+class ClassProfile:
+    """Description of a document class and the packages it expects."""
+
+    name: str
+    fallback: str
+    packages: List[str]
+
+
+def parse_issues(log_text: str) -> List[Dict[str, str]]:
+    """Parse latexmk/stdout logs into structured issue dictionaries."""
+
+    issues: List[Dict[str, str]] = []
+    for cls_name in re.findall(r"File `([^`]+\.cls)' not found", log_text):
+        issues.append({"type": "missing_class", "name": cls_name})
+    for pkg_name in re.findall(r"File `([^`]+\.sty)' not found", log_text):
+        issues.append({"type": "missing_package", "name": pkg_name})
+    if re.search(r"tcrm[0-9]+", log_text) or "TS1/cmr" in log_text:
+        issues.append({"type": "missing_ec_fonts", "name": "tcrm/TS1"})
+    if re.search(r"mktextfm: .*mf: command not found", log_text):
+        issues.append({"type": "missing_metafont", "name": "metafont"})
+    return issues
+
+
+def suggest_fixes(profile: ClassProfile, issues: List[Dict[str, str]]) -> Dict[str, List[str] | List[Dict[str, str]]]:
+    """Return installation hints for Fedora/TexLive and fallback notes."""
+
+    fedora: List[str] = []
+    tlmgr: List[str] = []
+    notes: List[Dict[str, str]] = []
+
+    def _add_unique(target: List[str], value: str) -> None:
+        if value not in target:
+            target.append(value)
+
+    for issue in issues:
+        kind = issue.get("type")
+        name = issue.get("name", "")
+        if kind == "missing_class":
+            notes.append(
+                {
+                    "action": "fallback_class",
+                    "from": profile.name,
+                    "to": profile.fallback,
+                    "reason": f"{name} not found",
+                }
+            )
+        elif kind == "missing_package":
+            pkg = name.replace(".sty", "")
+            _add_unique(fedora, f"sudo dnf install texlive-{pkg}")
+            _add_unique(tlmgr, f"tlmgr install {pkg}")
+        elif kind == "missing_ec_fonts":
+            _add_unique(fedora, "sudo dnf install texlive-ec")
+            _add_unique(tlmgr, "tlmgr install ec")
+        elif kind == "missing_metafont":
+            _add_unique(fedora, "sudo dnf install texlive-metafont")
+            _add_unique(tlmgr, "tlmgr install metafont")
+
+    return {"fedora": fedora, "tlmgr": tlmgr, "notes": notes}
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

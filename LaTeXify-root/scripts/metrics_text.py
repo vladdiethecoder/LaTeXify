@@ -138,6 +138,62 @@ def bleuish(hyp: str, ref: str, max_n: int = 4) -> float:
     return float(bp * geo_mean)
 
 
+def meteorish(hyp: str, ref: str) -> float:
+    """Approximate METEOR-style score using unigram precision/recall + fragmentation penalty."""
+    hyp_t = _tokens(hyp)
+    ref_t = _tokens(ref)
+    if not hyp_t and not ref_t:
+        return 1.0
+    if not hyp_t or not ref_t:
+        return 0.0
+
+    # greedy alignment left-to-right
+    ref_positions: Dict[str, List[int]] = {}
+    for idx, tok in enumerate(ref_t):
+        ref_positions.setdefault(tok, []).append(idx)
+
+    matches: List[Tuple[int, int]] = []
+    used_positions: Dict[str, int] = {}
+    last_ref_idx = -1
+    for h_idx, tok in enumerate(hyp_t):
+        positions = ref_positions.get(tok)
+        if not positions:
+            continue
+        start = used_positions.get(tok, 0)
+        chosen = None
+        for pos_idx in range(start, len(positions)):
+            ref_idx = positions[pos_idx]
+            if ref_idx > last_ref_idx:
+                chosen = ref_idx
+                used_positions[tok] = pos_idx + 1
+                break
+        if chosen is None:
+            continue
+        matches.append((h_idx, chosen))
+        last_ref_idx = chosen
+
+    match_count = len(matches)
+    if match_count == 0:
+        return 0.0
+
+    precision = match_count / len(hyp_t)
+    recall = match_count / len(ref_t)
+    if precision == 0.0 and recall == 0.0:
+        return 0.0
+
+    f_mean = (10 * precision * recall) / (recall + 9 * precision) if (recall + 9 * precision) else 0.0
+
+    chunks = 1
+    for i in range(1, match_count):
+        prev_h, prev_r = matches[i - 1]
+        cur_h, cur_r = matches[i]
+        if cur_h != prev_h + 1 or cur_r != prev_r + 1:
+            chunks += 1
+    frag = chunks / match_count
+    penalty = 0.5 * (frag ** 3)
+    return max(0.0, (1 - penalty) * f_mean)
+
+
 @dataclass
 class TextScores:
     wer: float
@@ -145,6 +201,7 @@ class TextScores:
     lev_dist: int
     jaccard_unigram: float
     bleuish: float
+    meteorish: float
     ref_len_chars: int
     hyp_len_chars: int
     ref_len_words: int
@@ -157,10 +214,25 @@ class TextScores:
         d = levenshtein(hyp, ref)
         j = jaccard(_tokens(hyp), _tokens(ref))
         b = bleuish(hyp, ref)
+        m = meteorish(hyp, ref)
         return cls(
-            wer=w, cer=c, lev_dist=d, jaccard_unigram=j, bleuish=b,
+            wer=w, cer=c, lev_dist=d, jaccard_unigram=j, bleuish=b, meteorish=m,
             ref_len_chars=len(_charseq(ref)),
             hyp_len_chars=len(_charseq(hyp)),
             ref_len_words=len(_tokens(ref)),
             hyp_len_words=len(_tokens(hyp)),
         )
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "wer": self.wer,
+            "cer": self.cer,
+            "lev_dist": self.lev_dist,
+            "jaccard_unigram": self.jaccard_unigram,
+            "bleuish": self.bleuish,
+            "meteorish": self.meteorish,
+            "ref_len_chars": self.ref_len_chars,
+            "hyp_len_chars": self.hyp_len_chars,
+            "ref_len_words": self.ref_len_words,
+            "hyp_len_words": self.hyp_len_words,
+        }

@@ -6,7 +6,7 @@ LiX/**
 models/**
 kb/online/**
 .venv-*/**
-.venv**
+.venv/**
 venv/**
 
 # Images & media likely to be large

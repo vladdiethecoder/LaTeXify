@@ -16,7 +16,7 @@ def test_fallback_uses_corpus_head_when_no_deps(tmp_path: Path, monkeypatch):
     (run_dir / "chunks.jsonl").write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
 
     # Import module and force flags to simulate missing deps
-    import scripts.retrieval_bundle as rb
+    import latexify.pipeline.retrieval_bundle as rb
     importlib.reload(rb)
     monkeypatch.setattr(rb, "_FAISS_OK", False, raising=False)
     monkeypatch.setattr(rb, "_SBERT_OK", False, raising=False)

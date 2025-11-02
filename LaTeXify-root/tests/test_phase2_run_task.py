@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.phase2_run_task import _load_plan
-from scripts.phase2_run_task import main as orch_main  # used via CLI in MSC, here we simulate
+from latexify.pipeline.phase2_run_task import _load_plan
+from latexify.pipeline.phase2_run_task import main as orch_main  # used via CLI in MSC, here we simulate
 
 def test_orchestrate_writes_snippet(tmp_path: Path, monkeypatch):
     # Minimal plan with T03 present
@@ -35,7 +35,7 @@ def test_orchestrate_writes_snippet(tmp_path: Path, monkeypatch):
         "--snippets_dir", str(snippets),
     ]
     try:
-        from scripts.phase2_run_task import main as _main
+        from latexify.pipeline.phase2_run_task import main as _main
         _main()
     finally:
         sys.argv = old_argv

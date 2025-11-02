@@ -1,4 +1,4 @@
-# scripts/build_index_compat.py
+# latexify/kb/build_index_compat.py
 from __future__ import annotations
 import argparse, glob, json
 from pathlib import Path

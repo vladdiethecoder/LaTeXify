@@ -1,6 +1,6 @@
 # tests/test_build_latex_kb.py
 from __future__ import annotations
-from scripts.build_latex_kb import (
+from latexify.kb.build_latex_kb import (
     parse_texse_html,
     parse_overleaf_html,
     parse_wikibooks_html,

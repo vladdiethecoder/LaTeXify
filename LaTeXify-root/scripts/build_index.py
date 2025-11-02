@@ -19,11 +19,11 @@ Where <role> is inferred from run_dir/pdf naming:
 """
 from __future__ import annotations
 
-import os
 import json
 import argparse
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 try:
@@ -119,26 +119,138 @@ def build_faiss(embs: np.ndarray):
     return index
 
 
+def _coerce_flags(flags: Any) -> Dict[str, bool]:
+    if isinstance(flags, dict):
+        return {str(k): bool(v) for k, v in flags.items()}
+    if isinstance(flags, list):
+        return {str(k): True for k in flags}
+    if isinstance(flags, str):
+        return {flags: True}
+    return {}
+
+
+def _pick_meta(chunk: Dict[str, Any], key: str) -> Any:
+    if key in chunk and chunk[key] is not None:
+        return chunk[key]
+    meta = chunk.get("metadata")
+    if isinstance(meta, dict):
+        return meta.get(key)
+    return None
+
+
+@lru_cache(maxsize=None)
+def _known_doc_classes(root: Path) -> Set[str]:
+    hints: Set[str] = {
+        "lix",
+        "lix_article",
+        "lix_textbook",
+        "textbook",
+        "novella",
+        "newspaper",
+        "contract",
+        "article",
+        "scrartcl",
+    }
+    classes_root = root / "kb" / "classes"
+    if classes_root.exists():
+        for cls_path in classes_root.rglob("*.cls"):
+            stem = cls_path.stem.lower()
+            hints.add(stem)
+            hints.add(stem.replace("-", "_"))
+            hints.add(f"lix_{stem}")
+    return hints
+
+
+def _infer_doc_class_from_json(blob: Any) -> Optional[str]:
+    if not isinstance(blob, dict):
+        return None
+    for key in ("doc_class", "docClass", "document_class"):
+        val = blob.get(key)
+        if val:
+            return str(val)
+    plan = blob.get("plan")
+    if isinstance(plan, dict):
+        for key in ("doc_class", "docClass", "document_class"):
+            val = plan.get(key)
+            if val:
+                return str(val)
+    return None
+
+
+def infer_doc_class(run_dir: Path) -> Optional[str]:
+    """Best-effort doc_class inference from run metadata or directory hints."""
+    candidate_jsons = [
+        run_dir / "plan.json",
+        run_dir / "metadata.json",
+        run_dir / f"{run_dir.name}.json",
+        run_dir / f"{run_dir.name}.meta.json",
+        run_dir / f"{run_dir.name}.chunks_meta.json",
+    ]
+    seen: Set[Path] = set()
+    for path in candidate_jsons + list(run_dir.glob("*.json")):
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        try:
+            blob = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        doc_class = _infer_doc_class_from_json(blob)
+        if doc_class:
+            return str(doc_class)
+
+    hints = _known_doc_classes(Path(__file__).resolve().parents[1])
+    for part in reversed(run_dir.parts):
+        lower = part.lower()
+        if lower in hints or lower.startswith("lix_"):
+            return lower
+    return None
+
+
+def _chunk_doc_class(chunk: Dict[str, Any], default: Optional[str]) -> Optional[str]:
+    meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else None
+    for source in (chunk, meta):
+        if not isinstance(source, dict):
+            continue
+        for key in ("doc_class", "docClass", "document_class"):
+            val = source.get(key)
+            if val:
+                return str(val)
+    return default
+
+
 def write_meta(run_dir: Path, ids: List[str], texts: List[str], chunks: List[dict], dim: int):
-    id_to_ref = {}
+    default_doc_class = infer_doc_class(run_dir)
+    id_to_ref: List[Dict[str, Any]] = []
     for cid, text, ch in zip(ids, texts, chunks):
-        id_to_ref[cid] = {
+        meta = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else None
+        doc_class = _chunk_doc_class(ch, default_doc_class)
+        id_to_ref.append({
             "id": cid,
             "text": text,
-            "page": ch.get("page"),
-            "bbox": ch.get("bbox"),
-            "block_type": ch.get("block_type"),
-            "label": ch.get("label"),
-            "labels": (ch.get("metadata") or {}).get("labels") if isinstance(ch.get("metadata"), dict) else None,
-            "page_span": (ch.get("metadata") or {}).get("page_span") if isinstance(ch.get("metadata"), dict) else None,
-            "pages": (ch.get("metadata") or {}).get("pages") if isinstance(ch.get("metadata"), dict) else None,
-            "block_ids": (ch.get("metadata") or {}).get("block_ids") if isinstance(ch.get("metadata"), dict) else None,
-            "semantic_id": ch.get("semantic_id"),
-            "source_backend": ch.get("source_backend"),
-            "source_backends": (ch.get("metadata") or {}).get("source_backends") if isinstance(ch.get("metadata"), dict) else None,
-            "flags": ch.get("flags", {}),
-        }
-    meta = {"dim": dim, "n": len(ids), "id_to_ref": id_to_ref}
+            "page": _pick_meta(ch, "page"),
+            "bbox": _pick_meta(ch, "bbox"),
+            "block_type": _pick_meta(ch, "block_type"),
+            "label": _pick_meta(ch, "label"),
+            "labels": _pick_meta(ch, "labels"),
+            "page_span": _pick_meta(ch, "page_span"),
+            "pages": _pick_meta(ch, "pages"),
+            "block_ids": _pick_meta(ch, "block_ids"),
+            "semantic_id": _pick_meta(ch, "semantic_id"),
+            "source_backend": _pick_meta(ch, "source_backend"),
+            "source_backends": _pick_meta(ch, "source_backends"),
+            "flags": _coerce_flags(_pick_meta(ch, "flags")),
+            "doc_class": doc_class,
+            "metadata": meta,
+        })
+    meta = {
+        "dim": dim,
+        "n": len(ids),
+        "ids": ids,
+        "id_to_ref": id_to_ref,
+        "doc_class": default_doc_class,
+        "run_dir": str(run_dir),
+    }
     (run_dir / "faiss.meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

@@ -7,7 +7,7 @@ def test_write_latexmkrc_token_replacement(tmp_path: Path, monkeypatch):
     (proj / "kb" / "online" / "github" / "LiX-master" / "lix.sty").write_text("%", encoding="utf-8")
 
     sys.path.insert(0, str(Path.cwd()))
-    from scripts.setup_classes import write_latexmkrc, stage_lix
+    from latexify.utils.setup_classes import write_latexmkrc, stage_lix
 
     log = proj / "build" / "setup_classes.log.jsonl"
     texmf = proj / "kb" / "classes"

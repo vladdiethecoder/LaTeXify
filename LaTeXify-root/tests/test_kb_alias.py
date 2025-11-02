@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from scripts.ensure_kb_alias import ensure_kb_alias
+from latexify.kb.ensure_kb_alias import ensure_kb_alias
 
 def test_ensure_kb_alias_symlink_or_copy(tmp_path: Path):
     offline = tmp_path / "kb" / "offline" / "latex"

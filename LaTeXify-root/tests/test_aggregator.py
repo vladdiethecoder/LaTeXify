@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
-from scripts.aggregator import run_aggregator
+from latexify.pipeline.aggregator import run_aggregator
 
 def test_aggregator_writes_main(tmp_path: Path):
     # Plan with two tasks
@@ -24,7 +24,7 @@ def test_aggregator_writes_main(tmp_path: Path):
     (snip_dir / "T03.tex").write_text("\\section{Introduction}\n\\label{sec:T03-introduction}\nHello.", encoding="utf-8")
 
     out_dir = tmp_path / "build"
-    res = run_aggregator(tmp_path / "plan.json", snip_dir, out_dir, no_compile=True, simulate=True)
+    res = run_aggregator(tmp_path / "plan.json", snip_dir, out_dir, no_compile=True, simulate=True, assets_dir=None)
 
     main_tex = out_dir / "main.tex"
     assert main_tex.exists()
