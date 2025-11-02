@@ -1,0 +1,41 @@
+{
+  "doc_class": "lix_textbook",
+  "frontmatter": {
+    "title": "Basic Skills Review",
+    "author": "Vlad",
+    "course": "",
+    "date": "\\today"
+  },
+  "tasks": [
+    {
+      "id": "PREAMBLE",
+      "type": "preamble",
+      "order": 0,
+      "content_type": "frontmatter"
+    },
+    {
+      "id": "TITLE",
+      "type": "titlepage",
+      "order": 1,
+      "content_type": "frontmatter"
+    },
+    {
+      "id": "Q1",
+      "type": "question",
+      "title": "Q1",
+      "order": 2
+    },
+    {
+      "id": "Q2",
+      "type": "question",
+      "title": "Q2",
+      "order": 3
+    },
+    {
+      "id": "Q3",
+      "type": "question",
+      "title": "Q3",
+      "order": 4
+    }
+  ]
+}

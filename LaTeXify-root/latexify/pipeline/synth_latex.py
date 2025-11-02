@@ -45,18 +45,11 @@ import sys
 import textwrap
 import re
 
-<<<<<<< ours
-from model_backends import LlamaCppBackend, LlamaCppConfig
-from model_router import choose_model_for_text, RouteDecision
-import synth_table
-import synth_formula
-import synth_figure
-import synth_figure_placeholder
-=======
-from latexify.pipeline.model_backends import LlamaCppBackend, LlamaCppConfig
-from latexify.pipeline.model_router import choose_model_for_text, RouteDecision
-from latexify.pipeline import synth_table, synth_formula, synth_figure
->>>>>>> theirs
+# Use relative imports for pipeline modules
+from .model_backends import LlamaCppBackend, LlamaCppConfig
+from .model_router import choose_model_for_text, RouteDecision
+from . import synth_table, synth_formula, synth_figure
+from . import synth_figure_placeholder
 
 
 DEFAULT_CTX = 4096
@@ -71,15 +64,18 @@ CAPABILITY_HINTS = [
     ("hyperref", ["\\url{", "\\href{"]),
 ]
 
-SYSTEM_INSTR = """You are a LaTeX synthesis agent. Produce ONLY a LaTeX snippet (no preamble, no \\documentclass, no \\begin{document}).
+SYSTEM_INSTR = textwrap.dedent(
+    """You are a LaTeX synthesis agent. Produce ONLY a LaTeX snippet (no preamble, no \documentclass, no \begin{document}).
 Respect LiX classes when relevant (lix_textbook or lix_article) and prefer semantic, clean LaTeX.
 - Math: amsmath environments (align, equation) with labels; inline math as $...$.
-- Tables: booktabs + tabular with sensible column alignment; no vertical lines; include \\label.
-- Figures: use \\includegraphics[width=\\linewidth]{<placeholder>} with \\caption and \\label.
+- Tables: booktabs + tabular with sensible column alignment; no vertical lines; include \label.
+- Figures: use \includegraphics[width=\linewidth]{<placeholder>} with \caption and \label.
 - No boilerplate, no explanations, no markdown fences.
 """
+)
 
-PROMPT_TEMPLATE = """{system}
+PROMPT_TEMPLATE = textwrap.dedent(
+    """{system}
 
 # Source
 {ocr_text}
@@ -90,6 +86,8 @@ PROMPT_TEMPLATE = """{system}
 # Task
 Generate a high-quality LaTeX snippet for this section. Only the snippet body. If unsure about a value, use sensible placeholders and add a % TODO comment. Keep it compact and compilable.
 """
+)
+
 
 @dataclass
 class Args:
@@ -106,8 +104,10 @@ class Args:
     n_threads_batch: Optional[int]
     plan: Optional[Path]
 
+
 def _read_json(p: Path) -> Dict:
     return json.loads(p.read_text(encoding="utf-8"))
+
 
 def _ensure_out(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
@@ -120,9 +120,8 @@ def _sanitize_inline(text: str) -> str:
     def _replace(match: re.Match[str]) -> str:
         ch = match.group(0)
         if ch == "\\":
-            return r"\textbackslash{}"
+            return r"\\textbackslash{}"
         return "\\" + ch
-
     return _ESCAPE_RE.sub(_replace, text or "")
 
 
@@ -158,15 +157,12 @@ def _user_flag_uncertain(bundle: Dict) -> bool:
 
 def build_snippet(bundle: Dict) -> str:
     """Deterministic snippet suitable for aggregation tests."""
-
     task_id = str(bundle.get("task_id", "task"))
     question = str(bundle.get("question", task_id))
     title = _title_from_question(question, task_id)
     slug = _slugify(title)
-
     rubric_texts = _bundle_texts(bundle.get("rubric"))
     user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
-
     if title.lower().startswith("abstract"):
         abstract_lines = ["\\begin{abstract}"]
         if user_chunks:
@@ -174,10 +170,9 @@ def build_snippet(bundle: Dict) -> str:
         else:
             abstract_lines.append(_sanitize_inline(question))
         if _user_flag_uncertain(bundle):
-            abstract_lines.append(r"\todo{Verify OCR accuracy.}")
+            abstract_lines.append(r"\\todo{Verify OCR accuracy.}")
         abstract_lines.append("\\end{abstract}")
         return "\n".join(abstract_lines) + "\n"
-
     lines = [
         f"\\section{{{_sanitize_inline(title)}}}",
         f"\\label{{sec:{task_id}-{slug}}}",
@@ -189,7 +184,7 @@ def build_snippet(bundle: Dict) -> str:
     for chunk in user_chunks:
         lines.append(_sanitize_inline(chunk))
     if _user_flag_uncertain(bundle):
-        lines.append(r"\todo{Verify OCR accuracy.}")
+        lines.append(r"\\todo{Verify OCR accuracy.}")
     return "\n".join(lines) + "\n"
 
 
@@ -199,19 +194,16 @@ def _cli_snippet(bundle: Dict) -> str:
     header = f"\\section*{{Task {task_id}: {_sanitize_inline(question)}}}"
     label = f"\\label{{sec:{task_id.lower()}}}"
     sections = [header, label]
-
     rubric_texts = _bundle_texts(bundle.get("assignment_rules")) or _bundle_texts(bundle.get("rubric"))
     if rubric_texts:
         sections.append("% Assignment guidance")
         for note in rubric_texts:
             sections.append(f"\\begin{{itemize}}\\item {_sanitize_inline(note)}\\end{{itemize}}")
-
     user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
     if user_chunks:
         sections.append("% User answer context")
         for chunk in user_chunks:
             sections.append(_sanitize_inline(chunk))
-
     sections.extend([
         "\\begin{align}",
         "  a + b &= c \\label{eq:example}\\\\",
@@ -231,10 +223,8 @@ def _cli_snippet(bundle: Dict) -> str:
         f"\\label{{tab:{task_id.lower()}}}",
         "\\end{table}",
     ])
-
     if _user_flag_uncertain(bundle):
-        sections.append(r"\todo{Verify OCR accuracy.}")
-
+        sections.append(r"\\todo{Verify OCR accuracy.}")
     return "\n\n".join(sections) + "\n"
 
 
@@ -245,7 +235,6 @@ def synthesize_snippet(
     kb_dir: Optional[Path] = None,
 ) -> str | Path:
     """Generate a deterministic snippet. Accepts either bundle dict or path."""
-
     if isinstance(bundle_or_path, (str, Path)):
         bundle_path = Path(bundle_or_path)
         bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
@@ -256,7 +245,6 @@ def synthesize_snippet(
             out_path.write_text(snippet, encoding="utf-8")
             return out_path
         return snippet
-
     bundle = bundle_or_path
     snippet_text = build_snippet(bundle)
     if out_dir is not None:
@@ -318,10 +306,8 @@ def _choose_specialist(task_info: Dict[str, str]) -> Optional[Callable[[Dict], T
         return synth_figure_placeholder.synthesize
     if task_type == "figure":
         return synth_figure.synthesize
-
     if task_info.get("asset_path"):
         return synth_figure.synthesize
-
     content_type = task_info.get("content_type")
     if not content_type:
         return None
@@ -334,17 +320,19 @@ def _choose_specialist(task_info: Dict[str, str]) -> Optional[Callable[[Dict], T
         return synth_figure.synthesize
     return None
 
+
 def _build_prompt(ocr_text: str, rag_context: str) -> str:
     return PROMPT_TEMPLATE.format(
         system=SYSTEM_INSTR.strip(),
         ocr_text=ocr_text.strip(),
-        rag_context=rag_context.strip()
+        rag_context=rag_context.strip(),
     )
+
 
 def _load_backend_for(
     override_model: Optional[Path],
     route: RouteDecision,
-    args: Args
+    args: Args,
 ) -> LlamaCppBackend:
     model_path = override_model or route.model_path
     cfg = LlamaCppConfig(
@@ -360,6 +348,7 @@ def _load_backend_for(
     )
     return LlamaCppBackend(cfg)
 
+
 def synth_one_bundle(
     bundle_path: Path,
     out_dir: Path,
@@ -372,30 +361,31 @@ def synth_one_bundle(
     ocr = b.get("prompt") or b.get("ocr") or ""
     ctx = b.get("context") or ""
     body = _build_prompt(ocr, ctx)
-
     task_info = plan_metadata.get(bid, {})
     if task_info:
-        for key in ("content_type", "asset_path", "asset_source_type", "asset_page_index", "asset_id"):
+        for key in (
+            "content_type",
+            "asset_path",
+            "asset_source_type",
+            "asset_page_index",
+            "asset_id",
+        ):
             if key in task_info and key not in b:
                 b[key] = task_info[key]
         if task_info.get("type") and "type" not in b:
             b["type"] = task_info["type"]
-
     specialist = _choose_specialist(task_info)
     if specialist:
         snippet, caps = specialist(b)
         return _write_outputs(out_dir, bid, snippet, caps, route_reason="specialist", model_path=None, seed=args.seed)
-
     # Routing (unless --gguf-model is explicitly provided)
     if args.gguf_model:
         route = RouteDecision(reason="override", model_path=args.gguf_model)
     else:
         route = choose_model_for_text(ocr + "\n" + ctx, args.hf_cache)
-
     key = str(route.model_path.resolve())
     if key not in backend_cache:
         backend_cache[key] = _load_backend_for(args.gguf_model, route, args)
-
     llm = backend_cache[key]
     completion = llm.generate(
         body,
@@ -406,16 +396,11 @@ def synth_one_bundle(
         stop=STOP,
         repeat_penalty=1.05,
     ).strip()
-
     # Trim accidental fencing or markdown
     if completion.startswith("```"):
         completion = completion.strip("` \n")
-        # try to drop 'latex' first token if present
         completion = completion.split("\n", 1)[-1].strip()
-
     # Write outputs
-    out_tex = out_dir / f"{bid}.tex"
-    out_meta = out_dir / f"{bid}.meta.json"
     return _write_outputs(
         out_dir,
         bid,
@@ -452,11 +437,17 @@ def _write_outputs(
     print(f"[synth] {bid} → {out_tex}  ({route_reason})")
     return out_tex, out_meta
 
+
 def parse_args() -> Args:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundles-dir", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--gguf-model", type=Path, default=None, help="Override model path (.gguf). If set, routing is skipped.")
+    ap.add_argument(
+        "--gguf-model",
+        type=Path,
+        default=None,
+        help="Override model path (.gguf). If set, routing is skipped.",
+    )
     ap.add_argument("--hf-cache", type=Path, default=None, help="Optional HF cache root to include in model search.")
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--ctx", type=int, default=DEFAULT_CTX)
@@ -467,7 +458,6 @@ def parse_args() -> Args:
     ap.add_argument("--n-threads", type=int, default=None)
     ap.add_argument("--n-threads-batch", type=int, default=None)
     ns = ap.parse_args()
-
     return Args(
         bundles_dir=ns.bundles_dir,
         out=ns.out,
@@ -483,35 +473,31 @@ def parse_args() -> Args:
         plan=ns.plan,
     )
 
+
 def main() -> int:
     args = parse_args()
     if not args.bundles_dir.exists():
         print(f"[synth][ERR] Bundles dir not found: {args.bundles_dir}", file=sys.stderr)
         return 2
     _ensure_out(args.out)
-
     backend_cache: Dict[str, LlamaCppBackend] = {}
     plan_metadata = _load_plan_metadata(args.plan)
-    bundle_files = sorted(
-        [
-            p
-            for p in args.bundles_dir.rglob("*.json")
-            if p.suffix == ".json" and not p.name.endswith(".meta.json")
-        ]
-    )
-
+    bundle_files = sorted([
+        p
+        for p in args.bundles_dir.rglob("*.json")
+        if p.suffix == ".json" and not p.name.endswith(".meta.json")
+    ])
     if not bundle_files:
         print(f"[synth][WARN] No bundle JSON files found in {args.bundles_dir}")
         return 0
-
     for bf in bundle_files:
         try:
             synth_one_bundle(bf, args.out, backend_cache, args, plan_metadata)
         except Exception as e:
             print(f"[synth][ERR] {bf.name}: {e}", file=sys.stderr)
             continue
-
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
