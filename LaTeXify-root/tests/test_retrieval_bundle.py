@@ -31,6 +31,7 @@ def test_bundle_shapes_without_indexes(tmp_path: Path):
     assert isinstance(bundle.assessment, list)
     assert isinstance(bundle.user_answer.chunks, list)
     assert "ocr_uncertain" in bundle.user_answer.flags
+    assert bundle.task_meta.get("title") == "Introduction"
 
     # evidence is written
     ev = tmp_path / "evidence" / "T03.json"

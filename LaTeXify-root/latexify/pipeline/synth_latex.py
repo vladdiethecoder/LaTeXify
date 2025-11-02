@@ -281,6 +281,9 @@ def _load_plan_metadata(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
         ctype = task.get("content_type")
         if ctype:
             info["content_type"] = str(ctype)
+        kind = task.get("kind")
+        if kind:
+            info["kind"] = str(kind)
         asset_path = task.get("asset_path")
         if asset_path:
             info["asset_path"] = str(asset_path)
@@ -301,13 +304,18 @@ def _load_plan_metadata(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
 
 
 def _choose_specialist(task_info: Dict[str, str]) -> Optional[Callable[[Dict], Tuple[str, List[str]]]]:
-    task_type = (task_info.get("type") or "").lower()
-    if task_type == "figure_placeholder":
+    task_kind = (task_info.get("kind") or "").lower()
+    if task_kind == "figure_placeholder":
         return synth_figure_placeholder.synthesize
-    if task_type == "figure":
+    if task_kind == "figure":
         return synth_figure.synthesize
-    if task_info.get("asset_path"):
+    normalized = (task_info.get("type") or "").lower()
+    if task_info.get("asset_path") and normalized in {"figure", "table"}:
         return synth_figure.synthesize
+    if normalized == "table":
+        return synth_table.synthesize
+    if normalized == "math":
+        return synth_formula.synthesize
     content_type = task_info.get("content_type")
     if not content_type:
         return None
@@ -369,11 +377,14 @@ def synth_one_bundle(
             "asset_source_type",
             "asset_page_index",
             "asset_id",
+            "kind",
         ):
             if key in task_info and key not in b:
                 b[key] = task_info[key]
         if task_info.get("type") and "type" not in b:
             b["type"] = task_info["type"]
+        if task_info.get("kind") and "kind" not in b:
+            b["kind"] = task_info["kind"]
     specialist = _choose_specialist(task_info)
     if specialist:
         snippet, caps = specialist(b)

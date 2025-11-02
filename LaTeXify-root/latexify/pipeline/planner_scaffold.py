@@ -9,8 +9,20 @@ structure::
         "doc_class": <document class>,
         "frontmatter": {"title": ..., "author": ..., "course": ..., "date": ...},
         "tasks": [
-            {"id": "PREAMBLE", "type": "preamble", "order": 0, "content_type": "frontmatter"},
-            {"id": "TITLE",    "type": "titlepage", "order": 1, "content_type": "frontmatter"},
+            {
+                "id": "PREAMBLE",
+                "kind": "preamble",
+                "type": "frontmatter",
+                "order": 0,
+                "content_type": "frontmatter",
+            },
+            {
+                "id": "TITLE",
+                "kind": "titlepage",
+                "type": "frontmatter",
+                "order": 1,
+                "content_type": "frontmatter",
+            },
             {"id": "Q1", ...},
             ...
         ]
@@ -21,9 +33,10 @@ information can be provided via a JSON or JSONL file to indicate block
 types (e.g. Figure, Table) and page indices.  An optional asset manifest
 maps asset identifiers or block identifiers to actual filenames on disk.  If
 an asset is found for a given block and is deemed "visual", the planner
-will emit a ``figure`` task instead of a generic ``question``.  Missing
-visual assets result in a ``figure_placeholder`` task to signal that a
-figure is expected but has not yet been resolved.
+        will attach normalized ``type`` values (e.g. ``figure`` or ``table``)
+        along with any discovered ``asset_path`` metadata.  Missing visual
+        assets result in a placeholder task to signal that a figure is expected
+        but has not yet been resolved.
 
 The functions defined here are pure and side-effect free.  A small CLI
 wrapper lives in ``scripts/planner_scaffold.py`` and delegates to these
@@ -199,6 +212,21 @@ def _coerce_int(value) -> int | None:
         return None
 
 
+def _normalize_content_type(*candidates: str | None) -> str:
+    """Map raw content/asset strings into canonical content type labels."""
+
+    for candidate in candidates:
+        if _looks_like_table(candidate):
+            return "table"
+    for candidate in candidates:
+        if _looks_like_figure(candidate):
+            return "figure"
+    for candidate in candidates:
+        if _looks_like_math(candidate):
+            return "math"
+    return "text"
+
+
 def _emit_plan(
     doc_class: str,
     *,
@@ -215,8 +243,20 @@ def _emit_plan(
     assets = assets or AssetLookup()
 
     tasks: List[Dict[str, object]] = [
-        {"id": "PREAMBLE", "type": "preamble", "order": 0, "content_type": "frontmatter"},
-        {"id": "TITLE", "type": "titlepage", "order": 1, "content_type": "frontmatter"},
+        {
+            "id": "PREAMBLE",
+            "kind": "preamble",
+            "type": "frontmatter",
+            "order": 0,
+            "content_type": "frontmatter",
+        },
+        {
+            "id": "TITLE",
+            "kind": "titlepage",
+            "type": "frontmatter",
+            "order": 1,
+            "content_type": "frontmatter",
+        },
     ]
     used_assets: set[str] = set()
     # Enumerate questions starting from 2 (after preamble and title)
@@ -224,7 +264,7 @@ def _emit_plan(
         block = layout_blocks.get(q, LayoutBlock(block_id=q))
         entry: Dict[str, object] = {
             "id": q,
-            "type": "question",
+            "kind": "content",
             "title": q.replace("_", " "),
             "order": i,
         }
@@ -233,25 +273,35 @@ def _emit_plan(
             entry["content_type"] = block.content_type
         # Attempt to match an asset for the block
         asset_info = assets.match_for_block(block, used_assets)
+        normalized_type = _normalize_content_type(
+            asset_info.asset_type if asset_info else None,
+            block.content_type,
+        )
+        entry["type"] = normalized_type
+        # Attach page index hints from either asset or layout when available
+        page_hint = asset_info.page_index if asset_info else block.page_index
+        if page_hint is not None:
+            try:
+                entry["asset_page_index"] = int(page_hint)
+            except (TypeError, ValueError):
+                pass
         if asset_info:
             semantic_type = asset_info.asset_type or block.content_type
             # If the asset or block implies a visual type, emit a figure
             if _asset_is_visual(semantic_type, block.content_type):
-                entry["type"] = "figure"
+                entry["kind"] = "figure"
                 entry["asset_path"] = asset_info.asset_path
                 entry["asset_source_type"] = semantic_type
                 if asset_info.asset_id:
                     entry["asset_id"] = asset_info.asset_id
-                if asset_info.page_index is not None:
-                    entry["asset_page_index"] = int(asset_info.page_index)
                 used_assets.add(asset_info.asset_path)
             else:
                 # Asset exists but not a visual block; leave as regular content
-                entry.setdefault("type", "question")
+                entry.setdefault("kind", "content")
         else:
             # No asset found; if block indicates a visual type, demote to placeholder
-            if _looks_like_figure(block.content_type):
-                entry["type"] = "figure_placeholder"
+            if normalized_type in {"figure", "table"}:
+                entry["kind"] = "figure_placeholder"
                 if block.content_type:
                     entry["asset_source_type"] = block.content_type
         tasks.append(entry)

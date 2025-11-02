@@ -86,6 +86,7 @@ def main():
             "chunks": [c.__dict__ for c in bundle.user_answer.chunks],
             "flags": bundle.user_answer.flags,
         },
+        "task_meta": bundle.task_meta,
     })))
 
     # Write snippet

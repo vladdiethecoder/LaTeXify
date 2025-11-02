@@ -51,6 +51,7 @@ class ContextBundle:
     assignment_rules: List[Chunk]
     assessment: List[Chunk]
     user_answer: UserAnswer
+    task_meta: Dict[str, object]
 
 
 ###############################################################################
@@ -317,6 +318,10 @@ def build_context_bundle(
         with ev.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    meta_payload = {k: v for k, v in task.items() if k not in {"order"}}
+    if meta_payload:
+        log("task_meta", meta=meta_payload)
+
     def do_source(name: str, top_k: int) -> List[Chunk]:
         run_dir = indices.get(name)
         if not run_dir:
@@ -350,6 +355,7 @@ def build_context_bundle(
         assignment_rules=assignment_rules,
         assessment=assessment,
         user_answer=UserAnswer(chunks=user_chunks, flags={"ocr_uncertain": False}),
+        task_meta=dict(task),
     )
     log("bundle_done", rubric=len(rubric), assignment=len(assignment_rules), assessment=len(assessment), user=len(user_chunks))
     return bundle
@@ -410,6 +416,7 @@ def main():
             "chunks": [asdict(c) for c in bundle.user_answer.chunks],
             "flags": bundle.user_answer.flags,
         },
+        "task_meta": bundle.task_meta,
     }
 
     js = json.dumps(out_obj, ensure_ascii=False, indent=2)

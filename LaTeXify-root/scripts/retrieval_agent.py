@@ -279,7 +279,19 @@ def build_for_task(task_id: str,
 
 
 def collect_task_ids(plan: dict) -> List[str]:
-    return [t["id"] for t in plan.get("tasks", []) if t.get("type") == "question"]
+    task_ids: List[str] = []
+    for task in plan.get("tasks", []):
+        if not isinstance(task, dict) or "id" not in task:
+            continue
+        kind = (task.get("kind") or "").lower()
+        if kind in {"preamble", "titlepage"}:
+            continue
+        if kind:
+            task_ids.append(task["id"])
+            continue
+        if task.get("type") == "question":
+            task_ids.append(task["id"])
+    return task_ids
 
 
 def main():

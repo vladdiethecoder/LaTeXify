@@ -26,7 +26,19 @@ from typing import Dict, List, Any
 
 def _task_ids(plan_path: Path) -> List[str]:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    return [t["id"] for t in plan.get("tasks", []) if t.get("type") == "question"]
+    task_ids: List[str] = []
+    for task in plan.get("tasks", []):
+        if not isinstance(task, dict) or "id" not in task:
+            continue
+        kind = (task.get("kind") or "").lower()
+        if kind in {"preamble", "titlepage"}:
+            continue
+        if kind:
+            task_ids.append(task["id"])
+            continue
+        if task.get("type") == "question":
+            task_ids.append(task["id"])
+    return task_ids
 
 
 def _load_context(ctx_dir: Path, tid: str) -> Dict[str, Any]:
