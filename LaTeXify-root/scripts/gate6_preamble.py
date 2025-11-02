@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 import argparse
+import json
 import re
 from pathlib import Path
 from typing import Dict, Set
@@ -59,6 +60,13 @@ PACKAGE_LINES = {
     "hyperref": r"\usepackage{hyperref}",
 }
 
+ROUTE_FEATURE_HINTS = {
+    "figure": {"graphicx"},
+    "figure_placeholder": {"graphicx"},
+    "table": {"booktabs"},
+    "math": {"amsmath"},
+}
+
 
 def scan_features(snippets_dir: Path) -> Set[str]:
     feats: Set[str] = set()
@@ -72,6 +80,23 @@ def scan_features(snippets_dir: Path) -> Set[str]:
         for name, patt in FEATURES.items():
             if patt.search(text):
                 feats.add(name)
+    # Merge metadata-derived hints
+    for meta_path in snippets_dir.rglob("*.meta.json"):
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for cap in data.get("capabilities", []) or []:
+            if cap in PACKAGE_LINES:
+                feats.add(cap)
+        route_meta = data.get("route_metadata") or {}
+        specialist = (route_meta.get("specialist") or "").strip()
+        if specialist in ROUTE_FEATURE_HINTS:
+            feats.update(ROUTE_FEATURE_HINTS[specialist])
+        route_reason = (data.get("route") or "").strip()
+        for key, extra in ROUTE_FEATURE_HINTS.items():
+            if key and key in route_reason:
+                feats.update(extra)
     return feats
 
 

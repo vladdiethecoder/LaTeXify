@@ -1,16 +1,17 @@
 # tests/test_synth_sanitize.py
 from __future__ import annotations
-import json
-from latexify.pipeline.synth_latex import _sanitize_inline, build_snippet
+
+from latexify.pipeline.synth_shared import sanitize_inline
+from latexify.pipeline.synth_latex import build_snippet
 
 def test_escape_backslash_and_braces():
     s = r"I'm \myage{day}{month}{year} years old."
-    out = _sanitize_inline(s)
+    out = sanitize_inline(s)
     assert r"\textbackslash{}myage\{day\}\{month\}\{year\}" in out
 
 def test_escape_underscore_and_percent_and_dollar():
     s = "file_name%price$"
-    out = _sanitize_inline(s)
+    out = sanitize_inline(s)
     assert r"file\_name\%price\$" in out
 
 def test_build_snippet_minimal():

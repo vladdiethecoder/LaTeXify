@@ -49,6 +49,13 @@ CAPABILITY_TO_PACKAGE = {
     "cancel": r"\\usepackage{cancel}",
 }
 
+ROUTE_CAPABILITY_HINTS = {
+    "figure": {"graphicx"},
+    "figure_placeholder": {"graphicx"},
+    "table": {"booktabs"},
+    "math": {"amsmath"},
+}
+
 BASE_PREAMBLE_LINES = [
     r"\\usepackage{microtype}",
     r"\\usepackage{geometry}",
@@ -247,6 +254,14 @@ def _collect_capabilities(snippets_dir: Path) -> List[str]:
         for cap in data.get("capabilities", []) or []:
             if isinstance(cap, str):
                 caps.append(cap.strip())
+        route_meta = data.get("route_metadata") or {}
+        specialist = (route_meta.get("specialist") or "").strip()
+        if specialist:
+            caps.extend(sorted(ROUTE_CAPABILITY_HINTS.get(specialist, set())))
+        route_reason = (data.get("route") or "").strip()
+        for key, pkg_caps in ROUTE_CAPABILITY_HINTS.items():
+            if key and key in route_reason:
+                caps.extend(sorted(pkg_caps))
     # Preserve deterministic order
     seen = set()
     ordered: List[str] = []

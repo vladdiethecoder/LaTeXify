@@ -4,19 +4,11 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+from .synth_shared import sanitize_inline, slugify
+
 FIGURE_TOKENS = ("figure", "image", "picture", "graphic", "diagram", "photo", "chart")
 TABLE_TOKENS = ("table", "spreadsheet", "tabular")
 MATH_TOKENS = ("formula", "equation", "math", "expression")
-
-
-def _sanitize_label(raw: str) -> str:
-    raw = (raw or "placeholder").lower()
-    cleaned = [
-        ch if ch.isalnum() or ch in {"-", "_"} else "-"
-        for ch in raw
-    ]
-    label = "".join(cleaned).strip("-")
-    return label or "placeholder"
 
 
 def _resolve_environment(kind: str | None) -> Tuple[str, str]:
@@ -47,8 +39,9 @@ def _box_text(environment: str, semantic: str | None, task_id: str | None) -> st
 def synthesize(bundle: Dict) -> Tuple[str, List[str]]:
     semantic = bundle.get("asset_source_type") or bundle.get("content_type")
     environment, label_prefix = _resolve_environment(semantic)
-    caption = bundle.get("caption") or (bundle.get("prompt") or "Missing asset placeholder").splitlines()[0]
-    label = _sanitize_label(bundle.get("id") or label_prefix)
+    caption_raw = bundle.get("caption") or (bundle.get("prompt") or "Missing asset placeholder").splitlines()[0]
+    caption = sanitize_inline(caption_raw)
+    label = slugify(bundle.get("id") or label_prefix)
     task_id = bundle.get("id")
     box = _box_text(environment, semantic, task_id)
 

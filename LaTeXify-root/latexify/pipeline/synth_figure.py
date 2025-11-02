@@ -4,17 +4,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Tuple
 
+from .synth_shared import sanitize_inline, slugify
+
 # Tokens used to infer environment types
 FIGURE_TOKENS = ("figure", "image", "picture", "graphic", "diagram", "photo", "chart")
 TABLE_TOKENS = ("table", "spreadsheet", "tabular")
 MATH_TOKENS = ("formula", "equation", "math", "expression")
-
-
-def _sanitize_label(raw: str) -> str:
-    raw = (raw or "figure").lower()
-    cleaned = [ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw]
-    label = "".join(cleaned).strip("-")
-    return label or "figure"
 
 
 def _resolve_environment(kind: str | None) -> Tuple[str, str]:
@@ -54,9 +49,10 @@ def synthesize(bundle: Dict) -> Tuple[str, List[str]]:
     )
     environment, label_prefix = _resolve_environment(semantic)
     # Caption: explicit caption > first line of prompt > default
-    caption = bundle.get("caption") or (bundle.get("prompt") or "Auto-generated figure").splitlines()[0]
+    caption_raw = bundle.get("caption") or (bundle.get("prompt") or "Auto-generated figure").splitlines()[0]
+    caption = sanitize_inline(caption_raw)
     # Sanitise the label using id or prefix
-    label = _sanitize_label(bundle.get("id") or label_prefix)
+    label = slugify(bundle.get("id") or label_prefix)
     # Build snippet lines
     lines = [
         f"\\begin{{{environment}}}[ht]",

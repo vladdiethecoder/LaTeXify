@@ -36,20 +36,20 @@ Output:
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 import argparse
 import json
 import os
 import sys
 import textwrap
-import re
 
 # Use relative imports for pipeline modules
 from .model_backends import LlamaCppBackend, LlamaCppConfig
 from .model_router import choose_model_for_text, RouteDecision
-from . import synth_table, synth_formula, synth_figure
-from . import synth_figure_placeholder
+from . import synth_text
+from .synth_shared import capabilities_from_text, read_bundle
+from .specialist_router import select_specialist
 
 
 DEFAULT_CTX = 4096
@@ -105,127 +105,14 @@ class Args:
     plan: Optional[Path]
 
 
-def _read_json(p: Path) -> Dict:
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
 def _ensure_out(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-_ESCAPE_RE = re.compile(r"[\\{}_\%$]")
-
-
-def _sanitize_inline(text: str) -> str:
-    def _replace(match: re.Match[str]) -> str:
-        ch = match.group(0)
-        if ch == "\\":
-            return r"\\textbackslash{}"
-        return "\\" + ch
-    return _ESCAPE_RE.sub(_replace, text or "")
-
-
-def _title_from_question(question: str, default: str) -> str:
-    if ":" in question:
-        return question.split(":", 1)[1].strip() or default
-    return question.strip() or default
-
-
-def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug or "section"
-
-
-def _bundle_texts(values) -> List[str]:
-    texts: List[str] = []
-    for entry in values or []:
-        if isinstance(entry, dict):
-            txt = entry.get("text") or entry.get("content") or ""
-        else:
-            txt = str(entry)
-        if txt:
-            texts.append(str(txt))
-    return texts
-
-
-def _user_flag_uncertain(bundle: Dict) -> bool:
-    flags = bundle.get("user_answer", {}).get("flags", {})
-    if isinstance(flags, dict):
-        return bool(flags.get("ocr_uncertain"))
-    return False
-
-
+# Backwards compatibility for tests and CLI helpers
 def build_snippet(bundle: Dict) -> str:
-    """Deterministic snippet suitable for aggregation tests."""
-    task_id = str(bundle.get("task_id", "task"))
-    question = str(bundle.get("question", task_id))
-    title = _title_from_question(question, task_id)
-    slug = _slugify(title)
-    rubric_texts = _bundle_texts(bundle.get("rubric"))
-    user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
-    if title.lower().startswith("abstract"):
-        abstract_lines = ["\\begin{abstract}"]
-        if user_chunks:
-            abstract_lines.extend(_sanitize_inline(chunk) for chunk in user_chunks)
-        else:
-            abstract_lines.append(_sanitize_inline(question))
-        if _user_flag_uncertain(bundle):
-            abstract_lines.append(r"\\todo{Verify OCR accuracy.}")
-        abstract_lines.append("\\end{abstract}")
-        return "\n".join(abstract_lines) + "\n"
-    lines = [
-        f"\\section{{{_sanitize_inline(title)}}}",
-        f"\\label{{sec:{task_id}-{slug}}}",
-    ]
-    if rubric_texts:
-        lines.append("% Rubric guidance")
-        for note in rubric_texts:
-            lines.append(f"\\textit{{{_sanitize_inline(note)}}}")
-    for chunk in user_chunks:
-        lines.append(_sanitize_inline(chunk))
-    if _user_flag_uncertain(bundle):
-        lines.append(r"\\todo{Verify OCR accuracy.}")
-    return "\n".join(lines) + "\n"
-
-
-def _cli_snippet(bundle: Dict) -> str:
-    task_id = str(bundle.get("task_id", "task"))
-    question = str(bundle.get("question", task_id))
-    header = f"\\section*{{Task {task_id}: {_sanitize_inline(question)}}}"
-    label = f"\\label{{sec:{task_id.lower()}}}"
-    sections = [header, label]
-    rubric_texts = _bundle_texts(bundle.get("assignment_rules")) or _bundle_texts(bundle.get("rubric"))
-    if rubric_texts:
-        sections.append("% Assignment guidance")
-        for note in rubric_texts:
-            sections.append(f"\\begin{{itemize}}\\item {_sanitize_inline(note)}\\end{{itemize}}")
-    user_chunks = _bundle_texts(bundle.get("user_answer", {}).get("chunks"))
-    if user_chunks:
-        sections.append("% User answer context")
-        for chunk in user_chunks:
-            sections.append(_sanitize_inline(chunk))
-    sections.extend([
-        "\\begin{align}",
-        "  a + b &= c \\label{eq:example}\\\\",
-        "  d &= e + f",
-        "\\end{align}",
-        "As a reference we will use \\SI{9.81}{\\meter\\per\\second\\squared}.",
-        "\\begin{table}[h]",
-        "\\centering",
-        "\\begin{tabular}{ll}",
-        "\\toprule",
-        "Quantity & Value\\\\",
-        "\\midrule",
-        "Example & 1.0\\\\",
-        "\\bottomrule",
-        "\\end{tabular}",
-        "\\caption{Auto-generated reference table}",
-        f"\\label{{tab:{task_id.lower()}}}",
-        "\\end{table}",
-    ])
-    if _user_flag_uncertain(bundle):
-        sections.append(r"\\todo{Verify OCR accuracy.}")
-    return "\n\n".join(sections) + "\n"
+    snippet, _ = synth_text.synthesize(bundle)
+    return snippet
 
 
 def synthesize_snippet(
@@ -237,8 +124,8 @@ def synthesize_snippet(
     """Generate a deterministic snippet. Accepts either bundle dict or path."""
     if isinstance(bundle_or_path, (str, Path)):
         bundle_path = Path(bundle_or_path)
-        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-        snippet = _cli_snippet(bundle)
+        bundle = read_bundle(bundle_path)
+        snippet = synth_text.synthesize_cli(bundle)
         if out_dir is not None:
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"{bundle.get('task_id', bundle_path.stem)}.tex"
@@ -246,21 +133,13 @@ def synthesize_snippet(
             return out_path
         return snippet
     bundle = bundle_or_path
-    snippet_text = build_snippet(bundle)
+    snippet_text, _ = synth_text.synthesize(bundle)
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{bundle.get('task_id', 'snippet')}.tex"
         out_path.write_text(snippet_text, encoding="utf-8")
         return out_path
     return snippet_text
-
-
-def _capabilities_from_text(tex: str) -> List[str]:
-    caps = []
-    for name, needles in CAPABILITY_HINTS:
-        if any(n in tex for n in needles):
-            caps.append(name)
-    return sorted(set(caps))
 
 
 def _load_plan_metadata(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
@@ -303,32 +182,6 @@ def _load_plan_metadata(path: Optional[Path]) -> Dict[str, Dict[str, str]]:
     return mapping
 
 
-def _choose_specialist(task_info: Dict[str, str]) -> Optional[Callable[[Dict], Tuple[str, List[str]]]]:
-    task_kind = (task_info.get("kind") or "").lower()
-    if task_kind == "figure_placeholder":
-        return synth_figure_placeholder.synthesize
-    if task_kind == "figure":
-        return synth_figure.synthesize
-    normalized = (task_info.get("type") or "").lower()
-    if task_info.get("asset_path") and normalized in {"figure", "table"}:
-        return synth_figure.synthesize
-    if normalized == "table":
-        return synth_table.synthesize
-    if normalized == "math":
-        return synth_formula.synthesize
-    content_type = task_info.get("content_type")
-    if not content_type:
-        return None
-    kind = content_type.lower()
-    if "table" in kind:
-        return synth_table.synthesize
-    if any(token in kind for token in ("formula", "equation", "math")):
-        return synth_formula.synthesize
-    if any(token in kind for token in ("figure", "image", "picture")):
-        return synth_figure.synthesize
-    return None
-
-
 def _build_prompt(ocr_text: str, rag_context: str) -> str:
     return PROMPT_TEMPLATE.format(
         system=SYSTEM_INSTR.strip(),
@@ -364,7 +217,7 @@ def synth_one_bundle(
     args: Args,
     plan_metadata: Dict[str, Dict[str, str]],
 ) -> Tuple[Path, Path]:
-    b = _read_json(bundle_path)
+    b = read_bundle(bundle_path)
     bid = b.get("id") or bundle_path.stem.replace(".bundle", "")
     ocr = b.get("prompt") or b.get("ocr") or ""
     ctx = b.get("context") or ""
@@ -385,10 +238,19 @@ def synth_one_bundle(
             b["type"] = task_info["type"]
         if task_info.get("kind") and "kind" not in b:
             b["kind"] = task_info["kind"]
-    specialist = _choose_specialist(task_info)
-    if specialist:
-        snippet, caps = specialist(b)
-        return _write_outputs(out_dir, bid, snippet, caps, route_reason="specialist", model_path=None, seed=args.seed)
+    decision = select_specialist(b, task_info)
+    if decision:
+        snippet, caps = decision.run(b)
+        return _write_outputs(
+            out_dir,
+            bid,
+            snippet,
+            caps,
+            route_reason=decision.reason,
+            model_path=None,
+            seed=args.seed,
+            route_metadata=decision.metadata,
+        )
     # Routing (unless --gguf-model is explicitly provided)
     if args.gguf_model:
         route = RouteDecision(reason="override", model_path=args.gguf_model)
@@ -416,10 +278,11 @@ def synth_one_bundle(
         out_dir,
         bid,
         completion,
-        _capabilities_from_text(completion),
+        capabilities_from_text(completion),
         route_reason=route.reason,
         model_path=route.model_path,
         seed=args.seed,
+        route_metadata={"prompt_version": "llm", "prompt_path": "", "specialist": "", "tags": ""},
     )
 
 
@@ -431,6 +294,7 @@ def _write_outputs(
     route_reason: str,
     model_path: Optional[Path],
     seed: int,
+    route_metadata: Optional[Dict[str, str]] = None,
 ) -> Tuple[Path, Path]:
     _ensure_out(out_dir)
     out_tex = out_dir / f"{bid}.tex"
@@ -444,6 +308,8 @@ def _write_outputs(
         "seed": seed,
         "capabilities": sorted(set(capabilities)),
     }
+    if route_metadata:
+        meta["route_metadata"] = route_metadata
     out_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"[synth] {bid} → {out_tex}  ({route_reason})")
     return out_tex, out_meta
