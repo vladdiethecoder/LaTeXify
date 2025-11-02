@@ -25,8 +25,10 @@ import time
 from pathlib import Path
 HERE = Path(__file__).resolve()
 REPO_ROOT = HERE.parents[1]          # << was likely HERE.parent before
+ROOT = REPO_ROOT
+SCRIPTS = REPO_ROOT / "scripts"
 BUILD = REPO_ROOT / "build"
-RUNS  = REPO_ROOT / "dev" / "runs"
+RUNS_ROOT = REPO_ROOT / "dev" / "runs"
 
 def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> None:
     print(f"[run] {' '.join(map(str, cmd))}")
@@ -54,6 +56,25 @@ def main() -> int:
     ensure_dirs()
     tex_env = make_tex_env()
     run_id = args.run_id or time.strftime("%Y%m%d_%H%M%S")
+
+    plan_path = BUILD / "plan.json"
+    layout_candidates = [
+        BUILD / "layout.json",
+        BUILD / "layout.jsonl",
+        BUILD / "layout" / "linked_pages.jsonl",
+    ]
+    layout_path = next((p for p in layout_candidates if p.exists()), None)
+    if plan_path.exists():
+        print("[pipeline] Validating plan.json")
+        cmd = [sys.executable, str(SCRIPTS / "validate_plan.py"), "--plan", str(plan_path)]
+        if layout_path is not None:
+            cmd += ["--layout", str(layout_path)]
+        assets_dir = BUILD / "assets"
+        if assets_dir.exists():
+            cmd += ["--assets-dir", str(assets_dir)]
+        run(cmd, env=tex_env)
+    else:
+        print(f"[pipeline] Skipping plan validation; {plan_path} not found.")
 
     # ----------------------------------------------------------------------
     # (Optional) Upstream agents if you invoke them from here.

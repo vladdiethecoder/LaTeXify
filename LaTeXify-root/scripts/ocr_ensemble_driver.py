@@ -15,13 +15,14 @@ Backends:
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib
 import json
 import shutil
 import sys
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import Iterable, List, Tuple
 
 import fitz  # PyMuPDF
 
@@ -61,7 +62,54 @@ def _safe_asdict(obj):
     return d
 
 
-def _write_page(out_dir: Path, page_idx: int, result_obj) -> None:
+def _persist_block_assets(
+    blocks: Iterable[dict] | None,
+    assets_dir: Path,
+    backend_slug: str,
+    page_idx: int,
+    base_dir: Path,
+) -> None:
+    if not blocks:
+        return
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    for asset_idx, block in enumerate(blocks, start=1):
+        btype = str(block.get("type") or block.get("block_type") or "").lower()
+        if btype not in {"figure", "table"}:
+            continue
+        asset_path = block.get("asset_path") or block.get("image_path") or block.get("path")
+        data = block.get("image_data") or block.get("image_bytes")
+        ext = block.get("extension") or block.get("format")
+        if isinstance(asset_path, str):
+            candidate = Path(asset_path)
+            search_paths = [candidate]
+            if not candidate.is_absolute():
+                search_paths.extend([
+                    base_dir / candidate,
+                    base_dir.parent / candidate,
+                    candidate.resolve(),
+                ])
+            for path in search_paths:
+                if path.exists():
+                    suffix = path.suffix or (f".{ext}" if isinstance(ext, str) and ext else "")
+                    target = assets_dir / f"{backend_slug}-p{page_idx:04d}-asset-{asset_idx:02d}{suffix}"
+                    shutil.copy2(path, target)
+                    break
+            else:
+                candidate = None
+            if candidate is not None and any(path.exists() for path in search_paths):
+                continue
+        if isinstance(data, str):
+            try:
+                payload = base64.b64decode(data)
+            except Exception:
+                continue
+            extension = (f".{ext}" if isinstance(ext, str) and ext else ".bin")
+            target = assets_dir / f"{backend_slug}-p{page_idx:04d}-asset-{asset_idx:02d}{extension}"
+            with target.open("wb") as handle:
+                handle.write(payload)
+
+
+def _write_page(out_dir: Path, page_idx: int, result_obj, *, assets_dir: Path | None, backend_slug: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = _safe_asdict(result_obj)
     text = meta.get("text_md") or ""
@@ -70,6 +118,10 @@ def _write_page(out_dir: Path, page_idx: int, result_obj) -> None:
         json.dumps({k: v for k, v in meta.items() if k in ("model", "page")}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    if assets_dir is not None:
+        blocks = meta.get("blocks") if isinstance(meta, dict) else getattr(result_obj, "blocks", None)
+        if isinstance(blocks, list):
+            _persist_block_assets(blocks, assets_dir, backend_slug, page_idx, out_dir)
 
 
 def _load_backend(module_name: str):
@@ -86,6 +138,12 @@ def main() -> None:
     ap.add_argument("--only", type=str, default="")
     ap.add_argument("--dpi", type=int, default=180)
     ap.add_argument("--clean_outputs", action="store_true", help="Remove existing outputs/<slug> before writing.")
+    ap.add_argument(
+        "--assets-dir",
+        type=Path,
+        default=Path("build/assets"),
+        help="Directory where detected figure/table crops will be exported.",
+    )
     args = ap.parse_args()
 
     tmp_img_dir = args.run_dir.resolve() / "tmp" / "images"
@@ -112,7 +170,7 @@ def main() -> None:
         for i, img_path in enumerate(pages, start=1):
             try:
                 result = backend.recognize_page(str(img_path), page=i)
-                _write_page(out_dir, i, result)
+                _write_page(out_dir, i, result, assets_dir=args.assets_dir, backend_slug=slug)
                 ok_pages += 1
             except Exception as e:
                 print(f"[warn] {label}: page {i} failed ({e})", file=sys.stderr)

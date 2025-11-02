@@ -36,9 +36,10 @@ def _emit_plan(
     course: str = "",
     date: str = r"\today",
     questions: Sequence[str] | None = None,
-    layout_types: Dict[str, str] | None = None,
+    layout_metadata: Dict[str, Dict[str, str]] | None = None,
 ) -> dict:
 
+    layout_metadata = layout_metadata or {}
     tasks = [
         {"id": "PREAMBLE", "type": "preamble", "order": 0, "content_type": "frontmatter"},
         {"id": "TITLE", "type": "titlepage", "order": 1, "content_type": "frontmatter"},
@@ -46,8 +47,14 @@ def _emit_plan(
 
     for i, q in enumerate(questions or (), start=2):
         entry = {"id": q, "type": "question", "title": q.replace("_", " "), "order": i}
-        if layout_types and q in layout_types:
-            entry["content_type"] = layout_types[q]
+        info = layout_metadata.get(q)
+        if info:
+            content_type = info.get("content_type")
+            if content_type:
+                entry["content_type"] = content_type
+            asset_path = info.get("asset_path")
+            if asset_path:
+                entry["asset_path"] = asset_path
         tasks.append(entry)
 
     plan = {
@@ -81,28 +88,52 @@ def validate_plan(plan: dict) -> None:
         previous_order = order
 
 
-def _load_layout_types(path: Path | None) -> Dict[str, str]:
+def _load_layout_metadata(path: Path | None) -> Dict[str, Dict[str, str]]:
     if not path or not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        if path.suffix.lower() == ".jsonl":
+            payload = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
-    mapping: Dict[str, str] = {}
+    metadata: Dict[str, Dict[str, str]] = {}
+
+    def _merge(entry_id: str, *, content_type: str | None, asset_path: str | None) -> None:
+        info = metadata.setdefault(entry_id, {})
+        if content_type and "content_type" not in info:
+            info["content_type"] = content_type
+        if asset_path and "asset_path" not in info:
+            info["asset_path"] = asset_path
 
     def _walk(obj):
         if isinstance(obj, dict):
-            if "id" in obj and "type" in obj:
-                mapping[str(obj["id"])] = str(obj["type"])
+            entry_id = obj.get("id") or obj.get("task_id")
+            content_type = obj.get("content_type") or obj.get("type")
+            asset_path = (
+                obj.get("asset_path")
+                or obj.get("image_path")
+                or obj.get("asset")
+                or obj.get("path")
+            )
+            if entry_id is not None:
+                ct = str(content_type) if content_type else None
+                ap = str(asset_path) if isinstance(asset_path, str) and asset_path else None
+                _merge(str(entry_id), content_type=ct, asset_path=ap)
             for value in obj.values():
                 _walk(value)
         elif isinstance(obj, list):
             for item in obj:
                 _walk(item)
 
-    _walk(data)
-    return mapping
+    _walk(payload)
+    return metadata
 
 
 def main() -> int:
@@ -117,7 +148,7 @@ def main() -> int:
     ap.add_argument("--layout-json", type=Path, help="Optional layout analysis JSON with block types")
     args = ap.parse_args()
 
-    layout_types = _load_layout_types(args.layout_json)
+    layout_metadata = _load_layout_metadata(args.layout_json)
 
     plan = _emit_plan(
         args.doc_class,
@@ -126,7 +157,7 @@ def main() -> int:
         course=args.course,
         date=args.date,
         questions=_split_list(args.questions),
-        layout_types=layout_types,
+        layout_metadata=layout_metadata,
     )
 
     validate_plan(plan)

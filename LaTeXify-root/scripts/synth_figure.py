@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 
 
 def synthesize(bundle: Dict) -> Tuple[str, List[str]]:
-    image_path = bundle.get("image_path") or "figure-placeholder.pdf"
+    image_path = bundle.get("asset_path") or bundle.get("image_path") or "figure-placeholder.pdf"
     caption = bundle.get("caption") or (bundle.get("prompt") or "Auto-generated figure").splitlines()[0]
     label = bundle.get("id") or "fig"
     lines = [

@@ -12,6 +12,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+SCRIPTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPTS_DIR.parent
+
 # Packages that we are willing to include in the preamble dynamically.
 CAPABILITY_TO_PACKAGE = {
     "amsmath": r"\\usepackage{amsmath}",
@@ -140,6 +143,72 @@ class AssembleResult:
     sections: List[SectionEntry]
 
 
+def _resolve_asset_source(asset_path: str, out_dir: Path) -> Path | None:
+    candidate = Path(asset_path)
+    search: List[Path] = []
+    if candidate.is_absolute():
+        search.append(candidate)
+    else:
+        search.extend([
+            out_dir / candidate,
+            REPO_ROOT / asset_path,
+            REPO_ROOT / "build" / candidate,
+        ])
+        if candidate.parts and candidate.parts[0] != "assets":
+            search.append((out_dir / "assets" / candidate.name))
+    for path in search:
+        if path.exists():
+            return path
+    return candidate if candidate.exists() else None
+
+
+def _bundle_plan_assets(plan: Dict, out_dir: Path, evidence_log: Path) -> List[dict]:
+    assets: List[dict] = []
+    assets_dir = out_dir / "assets"
+    seen: set[Path] = set()
+
+    for task in plan.get("tasks", []):
+        asset_path = task.get("asset_path")
+        if not asset_path:
+            continue
+        source = _resolve_asset_source(asset_path, out_dir)
+        if not source or not source.exists():
+            raise FileNotFoundError(f"Asset referenced in plan not found: {asset_path}")
+
+        rel = Path(asset_path)
+        if rel.is_absolute():
+            dest = assets_dir / rel.name
+            rel_out = Path("assets") / rel.name
+        else:
+            dest = (out_dir / rel).resolve()
+            try:
+                rel_out = dest.relative_to(out_dir)
+            except ValueError:
+                dest = assets_dir / rel.name
+                rel_out = Path("assets") / rel.name
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest not in seen:
+            if source.resolve() != dest.resolve():
+                shutil.copy2(source, dest)
+            seen.add(dest)
+
+        record = {
+            "task_id": task.get("id"),
+            "source": str(source),
+            "bundled_path": rel_out.as_posix(),
+        }
+        assets.append(record)
+        _log_event(evidence_log, "asset_bundled", **record)
+
+    if assets:
+        manifest_path = assets_dir / "manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(assets, ensure_ascii=False, indent=2), encoding="utf-8")
+        _log_event(evidence_log, "asset_manifest_written", path=manifest_path, count=len(assets))
+    return assets
+
+
 def _slugify(value: str, fallback: str) -> str:
     value = value.lower()
     value = re.sub(r"[^a-z0-9]+", "_", value).strip("_")
@@ -186,6 +255,34 @@ def _preamble_from_capabilities(capabilities: Iterable[str]) -> List[str]:
             out.append(line)
             seen.add(line)
     return out
+
+
+def _prepare_assets(asset_src: Path | None, out_dir: Path, evidence_log: Path) -> Path | None:
+    if asset_src is None:
+        return None
+
+    try:
+        resolved_src = asset_src.resolve()
+    except FileNotFoundError:
+        resolved_src = asset_src
+
+    if not resolved_src.exists():
+        _log_event(evidence_log, "assets_missing", src=str(asset_src))
+        return None
+
+    dest = out_dir / resolved_src.name
+    dest_resolved = dest.resolve()
+    if dest_resolved == resolved_src:
+        file_count = sum(1 for p in dest.rglob("*") if p.is_file()) if dest.exists() else 0
+        _log_event(evidence_log, "assets_available", src=str(resolved_src), dest=str(dest_resolved), files=file_count)
+        return dest
+
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(resolved_src, dest)
+    file_count = sum(1 for p in dest.rglob("*") if p.is_file())
+    _log_event(evidence_log, "assets_copied", src=str(resolved_src), dest=str(dest), files=file_count)
+    return dest
 
 
 def _assemble_document(plan: Dict, snippets_dir: Path, evidence_log: Path) -> AssembleResult:
@@ -403,10 +500,17 @@ def _run_latexmk(main_tex: Path, engine: str, verbose: bool) -> Tuple[bool, str,
 
 def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
                    no_compile: bool, simulate: bool,
+                   assets_dir: str | None = None,
                    engine_override: str | None = None, verbose: bool = False) -> Dict:
-    plan = _read_plan(Path(plan_path))
+    plan_file = Path(plan_path)
+    if not plan_file.exists():
+        raise SystemExit(f"Plan not found: {plan_file}")
+    plan = _read_plan(plan_file)
     out_dir_path = Path(out_dir)
     evidence_log = out_dir_path / "aggregate.log.jsonl"
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+    assets_dst = _prepare_assets(Path(assets_dir) if assets_dir else None, out_dir_path, evidence_log)
+    bundled_assets = _bundle_plan_assets(plan, out_dir_path, evidence_log)
     res = _assemble_document(plan, Path(snippets_dir), evidence_log)
     _write_preamble(res.preamble_lines, out_dir_path, evidence_log)
     section_map = _write_sections(res.sections, out_dir_path, evidence_log)
@@ -434,6 +538,8 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
                compile_attempted=compile_attempted, compile_ok=compile_ok,
                used_bib=res.used_bib, out=out_dir, engine=engine)
 
+    asset_manifest_path = out_dir_path / "assets" / "manifest.json"
+
     print(json.dumps({
         "main_tex": str(main_tex),
         "doc_class": res.doc_class,
@@ -443,6 +549,8 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "stdout": stdout,
         "stderr": stderr,
         "source_map": str(source_map_path),
+        "assets_dir": str(assets_dst) if assets_dst else None,
+        "asset_manifest": str(asset_manifest_path) if asset_manifest_path.exists() else None,
     }, ensure_ascii=False))
     return {
         "main_tex": str(main_tex),
@@ -453,6 +561,9 @@ def run_aggregator(plan_path: str, snippets_dir: str, out_dir: str,
         "stdout": stdout,
         "stderr": stderr,
         "source_map": str(source_map_path),
+        "assets_dir": str(assets_dst) if assets_dst else None,
+        "asset_manifest": str(asset_manifest_path) if asset_manifest_path.exists() else None,
+        "bundled_assets": bundled_assets,
     }
 
 def main() -> None:
@@ -460,6 +571,7 @@ def main() -> None:
     ap.add_argument("--plan", required=True)
     ap.add_argument("--snippets_dir", required=True)
     ap.add_argument("--out_dir", default="build")
+    ap.add_argument("--assets_dir", type=str, default=None, help="Optional directory of assets to copy alongside build outputs")
     ap.add_argument("--no_compile", action="store_true")
     ap.add_argument("--simulate", action="store_true")
     ap.add_argument("--engine", choices=["pdflatex", "xelatex", "lualatex"])
@@ -467,6 +579,7 @@ def main() -> None:
     args = ap.parse_args()
     run_aggregator(args.plan, args.snippets_dir, args.out_dir,
                    args.no_compile, args.simulate,
+                   assets_dir=args.assets_dir,
                    engine_override=args.engine, verbose=args.verbose)
 
 if __name__ == "__main__":
