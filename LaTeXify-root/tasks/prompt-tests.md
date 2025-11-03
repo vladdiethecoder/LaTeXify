@@ -60,6 +60,35 @@ Goal: attempt to plan.
 }
 ```
 
+### Smoke: OCR Consensus influences routing
+When `block_consensus.py` reports disagreement, the planner now records a
+consensus bundle and the routed task references the flagged block. The phase 2
+driver injects that text ahead of retrieval and marks the user answer as
+`ocr_uncertain`.
+
+```json
+{
+  "consensus_bundle": {"path": "build/consensus.bundle.json"},
+  "tasks": [
+    {
+      "id": "Q3",
+      "order": 4,
+      "consensus": {
+        "block_id": "page-0003-block-004",
+        "text": "The integral equals $\frac{1}{2}x^2 + C$.",
+        "flagged": true,
+        "flag_reasons": ["High OCR Disagreement"],
+        "agreement_score": 0.27
+      }
+    }
+  ]
+}
+```
+
+In this scenario the planner driver preloads the consensus text, sets
+`user_answer.flags.ocr_uncertain` to `true`, and retrieval pivots around the
+refined snippet instead of relying on noisy OCR backends.
+
 ## Retrieval Agent
 
 ### Sample Prompt 1

@@ -46,6 +46,7 @@ functions.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -70,6 +71,73 @@ class LayoutBlock:
     content_type: str | None = None
     page_index: int | None = None
     asset_id: str | None = None
+
+
+@dataclass
+class BlockConsensus:
+    """Consensus OCR details for a single layout block."""
+
+    block_id: str
+    block_type: str | None
+    page: str | None
+    page_index: int | None
+    text: str
+    text_backend: str | None
+    latex_consensus: str | None
+    ocr_outputs: Dict[str, str]
+    flagged: bool
+    flag_reasons: List[str]
+    agreement_score: float | None
+    latex_agreement_score: float | None
+
+    def as_plan_entry(self) -> Dict[str, object]:
+        return {
+            "block_id": self.block_id,
+            "block_type": self.block_type,
+            "page": self.page,
+            "page_index": self.page_index,
+            "text_backend": self.text_backend,
+            "text": self.text,
+            "flagged": self.flagged,
+            "flag_reasons": list(self.flag_reasons),
+            "agreement_score": self.agreement_score,
+            "latex_agreement_score": self.latex_agreement_score,
+        }
+
+    def to_bundle_dict(self) -> Dict[str, object]:
+        payload = self.as_plan_entry()
+        payload.update(
+            {
+                "latex_consensus": self.latex_consensus,
+                "ocr_outputs": self.ocr_outputs,
+            }
+        )
+        return payload
+
+
+CONSENSUS_BACKEND_PREFERENCE: Sequence[str] = (
+    "nanonets-ocr2-3b",
+    "qwen2-vl-ocr-2b",
+    "nanonets-ocr-s",
+)
+
+TEXT_DISAGREEMENT_THRESHOLD: float = 0.15
+LATEX_DISAGREEMENT_THRESHOLD: float = 0.10
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def _pick_backend_text(ocr_outputs: Dict[str, str], prefer: Sequence[str]) -> tuple[str, str | None]:
+    for backend in prefer:
+        text = (ocr_outputs or {}).get(backend)
+        if isinstance(text, str) and text.strip():
+            return text, backend
+    for backend, text in (ocr_outputs or {}).items():
+        if isinstance(text, str) and text.strip():
+            return text, backend
+    return "", None
 
 
 @dataclass
@@ -212,6 +280,15 @@ def _coerce_int(value) -> int | None:
         return None
 
 
+def _coerce_float(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_content_type(*candidates: str | None) -> str:
     """Map raw content/asset strings into canonical content type labels."""
 
@@ -237,10 +314,12 @@ def _emit_plan(
     questions: Sequence[str] | None = None,
     layout_blocks: Dict[str, LayoutBlock] | None = None,
     assets: AssetLookup | None = None,
+    block_consensus: Dict[str, BlockConsensus] | None = None,
 ) -> dict:
     """Construct a document plan given optional layout and asset information."""
     layout_blocks = layout_blocks or {}
     assets = assets or AssetLookup()
+    block_consensus = block_consensus or {}
 
     tasks: List[Dict[str, object]] = [
         {
@@ -268,6 +347,7 @@ def _emit_plan(
             "title": q.replace("_", " "),
             "order": i,
         }
+        entry["layout_block_id"] = block.block_id
         # Carry over any explicit content type from layout analysis
         if block.content_type:
             entry["content_type"] = block.content_type
@@ -304,6 +384,14 @@ def _emit_plan(
                 entry["kind"] = "figure_placeholder"
                 if block.content_type:
                     entry["asset_source_type"] = block.content_type
+        consensus_entry = None
+        for key in filter(None, [block.block_id, q]):
+            ce = block_consensus.get(str(key))
+            if ce:
+                consensus_entry = ce
+                break
+        if consensus_entry:
+            entry["consensus"] = consensus_entry.as_plan_entry()
         tasks.append(entry)
     plan = {
         "doc_class": doc_class,
@@ -316,6 +404,93 @@ def _emit_plan(
         "tasks": tasks,
     }
     return plan
+
+
+def _load_block_consensus(
+    path: Path | None,
+    *,
+    prefer_backends: Sequence[str] = CONSENSUS_BACKEND_PREFERENCE,
+) -> Dict[str, BlockConsensus]:
+    """Parse block consensus JSONL into ``BlockConsensus`` entries."""
+
+    if not path or not path.exists():
+        return {}
+    consensus: Dict[str, BlockConsensus] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return {}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        block_id = _coerce_str(rec.get("block_id") or rec.get("id"))
+        if not block_id:
+            continue
+        block_type = _coerce_str(rec.get("block_type") or rec.get("type"))
+        page = _coerce_str(rec.get("page") or rec.get("page_name"))
+        page_index = _coerce_int(rec.get("page_index") or rec.get("page_number"))
+        raw_outputs = rec.get("ocr_outputs")
+        ocr_outputs: Dict[str, str] = {}
+        if isinstance(raw_outputs, dict):
+            for key, value in raw_outputs.items():
+                key_str = _coerce_str(key)
+                val_str = _coerce_str(value)
+                if key_str and val_str:
+                    ocr_outputs[key_str] = val_str
+        latex_consensus = _coerce_str(rec.get("latex_consensus"))
+        flagged = bool(rec.get("flagged"))
+        reasons = rec.get("flag_reasons")
+        flag_reasons: List[str]
+        if isinstance(reasons, list):
+            flag_reasons = []
+            for r in reasons:
+                val = _coerce_str(r)
+                if val:
+                    flag_reasons.append(val)
+        elif isinstance(reasons, dict):
+            flag_reasons = []
+            for k, v in reasons.items():
+                key = _coerce_str(k)
+                if key and v:
+                    flag_reasons.append(key)
+        elif isinstance(reasons, str):
+            flag_reasons = [reasons]
+        else:
+            flag_reasons = []
+        agreement_score = _coerce_float(rec.get("agreement_score"))
+        latex_agreement_score = _coerce_float(rec.get("latex_agreement_score"))
+        text_backend: str | None = None
+        text = ""
+        math_like = (block_type or "").lower() in {"formula", "equation", "math", "displaymath"}
+        if math_like and latex_consensus:
+            text = latex_consensus.strip()
+            text_backend = "latex_consensus"
+        if not text:
+            picked, backend = _pick_backend_text(ocr_outputs, prefer_backends)
+            text = _normalize_text(picked)
+            text_backend = backend
+        consensus[block_id] = BlockConsensus(
+            block_id=block_id,
+            block_type=block_type,
+            page=page,
+            page_index=page_index,
+            text=text,
+            text_backend=text_backend,
+            latex_consensus=latex_consensus,
+            ocr_outputs=ocr_outputs,
+            flagged=flagged,
+            flag_reasons=flag_reasons,
+            agreement_score=agreement_score,
+            latex_agreement_score=latex_agreement_score,
+        )
+    return consensus
 
 
 def validate_plan(plan: dict) -> None:
@@ -476,11 +651,15 @@ def _load_asset_manifest(path: Path | None) -> AssetLookup:
 
 __all__ = [
     "LayoutBlock",
+    "BlockConsensus",
     "AssetInfo",
     "AssetLookup",
     "_emit_plan",
+    "_load_block_consensus",
     "validate_plan",
     "_load_layout_blocks",
     "_load_asset_manifest",
     "_split_list",
+    "TEXT_DISAGREEMENT_THRESHOLD",
+    "LATEX_DISAGREEMENT_THRESHOLD",
 ]

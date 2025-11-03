@@ -24,6 +24,9 @@ except Exception:
 
 SEED = 42  # determinism for any sorting / selection
 
+DEFAULT_TEXT_DISAGREEMENT_THRESHOLD = 0.15
+DEFAULT_LATEX_DISAGREEMENT_THRESHOLD = 0.10
+
 ###############################################################################
 # Data model
 ###############################################################################
@@ -52,6 +55,157 @@ class ContextBundle:
     assessment: List[Chunk]
     user_answer: UserAnswer
     task_meta: Dict[str, object]
+
+
+def _as_float(value) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def load_consensus_bundle(
+    config: Dict[str, object] | None,
+    base_dir: Path,
+) -> Dict[str, Dict[str, object]]:
+    """Load consensus bundle metadata referenced from the plan."""
+
+    bundle_meta: Dict[str, object] = {}
+    blocks: Dict[str, Dict[str, object]] = {}
+    if not isinstance(config, dict):
+        return {"meta": bundle_meta, "blocks": blocks}
+    path_val = config.get("path")
+    if not path_val:
+        return {"meta": bundle_meta, "blocks": blocks}
+    bundle_path = Path(path_val)
+    if not bundle_path.is_absolute():
+        bundle_path = (base_dir / bundle_path).resolve()
+    if not bundle_path.exists():
+        return {"meta": bundle_meta, "blocks": blocks}
+    try:
+        raw = json.loads(bundle_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"meta": bundle_meta, "blocks": blocks}
+    if isinstance(raw, dict):
+        meta_obj = raw.get("meta")
+        if isinstance(meta_obj, dict):
+            bundle_meta = dict(meta_obj)
+        block_obj = raw.get("blocks")
+        items = block_obj.items() if isinstance(block_obj, dict) else raw.items()
+        for key, value in items:
+            if key == "meta":
+                continue
+            if isinstance(value, dict):
+                block_id = str(value.get("block_id") or key)
+                entry = dict(value)
+                entry["block_id"] = block_id
+                blocks[block_id] = entry
+    elif isinstance(raw, list):
+        for value in raw:
+            if isinstance(value, dict):
+                block_id = value.get("block_id") or value.get("id")
+                if block_id is None:
+                    continue
+                block_id = str(block_id)
+                entry = dict(value)
+                entry["block_id"] = block_id
+                blocks[block_id] = entry
+    if _as_float(bundle_meta.get("agreement_threshold")) is None:
+        bundle_meta["agreement_threshold"] = DEFAULT_TEXT_DISAGREEMENT_THRESHOLD
+    if _as_float(bundle_meta.get("latex_agreement_threshold")) is None:
+        bundle_meta["latex_agreement_threshold"] = DEFAULT_LATEX_DISAGREEMENT_THRESHOLD
+    return {"meta": bundle_meta, "blocks": blocks}
+
+
+def _resolve_task_consensus(
+    task: Dict,
+    bundle: Dict[str, Dict[str, object]] | None,
+) -> Tuple[Optional[Dict[str, object]], Dict[str, object]]:
+    bundle = bundle or {}
+    blocks = bundle.get("blocks") if isinstance(bundle, dict) else {}
+    meta = bundle.get("meta") if isinstance(bundle, dict) else {}
+    ref = task.get("consensus") if isinstance(task, dict) else None
+    block_id = None
+    if isinstance(ref, dict):
+        block_id = ref.get("block_id") or ref.get("layout_block_id") or ref.get("id")
+    if block_id is None:
+        block_id = task.get("layout_block_id") or task.get("id")
+    block_id_str = str(block_id) if block_id is not None else None
+    entry = blocks.get(block_id_str) if isinstance(blocks, dict) and block_id_str else None
+    if entry:
+        merged = dict(entry)
+        if isinstance(ref, dict):
+            for key, value in ref.items():
+                merged.setdefault(key, value)
+        merged.setdefault("block_id", block_id_str)
+        return merged, meta or {}
+    if isinstance(ref, dict):
+        fallback = dict(ref)
+        if block_id_str:
+            fallback.setdefault("block_id", block_id_str)
+        return fallback, meta or {}
+    return None, meta or {}
+
+
+def _consensus_uncertain(consensus: Dict[str, object], meta: Dict[str, object]) -> bool:
+    if consensus.get("flagged"):
+        return True
+    thr = _as_float(consensus.get("agreement_threshold"))
+    if thr is None:
+        thr = _as_float(meta.get("agreement_threshold"))
+    if thr is None:
+        thr = DEFAULT_TEXT_DISAGREEMENT_THRESHOLD
+    score = _as_float(consensus.get("agreement_score"))
+    if score is not None and thr is not None and score > thr:
+        return True
+    latex_thr = _as_float(consensus.get("latex_threshold"))
+    if latex_thr is None:
+        latex_thr = _as_float(consensus.get("latex_agreement_threshold"))
+    if latex_thr is None:
+        latex_thr = _as_float(meta.get("latex_agreement_threshold"))
+    if latex_thr is None:
+        latex_thr = DEFAULT_LATEX_DISAGREEMENT_THRESHOLD
+    latex_score = _as_float(consensus.get("latex_agreement_score"))
+    if latex_score is not None and latex_thr is not None and latex_score > latex_thr:
+        return True
+    return False
+
+
+def _build_consensus_chunk(task_id: str, consensus: Dict[str, object]) -> Optional[Chunk]:
+    text_val = consensus.get("text")
+    if text_val is None:
+        return None
+    if isinstance(text_val, str):
+        text = text_val.strip()
+    else:
+        text = str(text_val).strip()
+    if not text:
+        return None
+    page_val = consensus.get("page_index")
+    page_index: Optional[int]
+    try:
+        page_index = int(page_val) if page_val is not None else None
+    except (TypeError, ValueError):
+        page_index = None
+    page_image = consensus.get("page")
+    if page_image is not None:
+        page_image = str(page_image)
+    backend = consensus.get("text_backend")
+    source_name = "consensus"
+    if backend:
+        source_name = f"consensus:{backend}"
+    label = str(consensus.get("block_type") or "consensus")
+    return Chunk(
+        id=f"{task_id}/consensus",
+        text=text,
+        page=page_index,
+        label=label,
+        source_image=page_image,
+        score=1.0,
+        source_name=source_name,
+    )
 
 
 ###############################################################################
@@ -302,6 +456,7 @@ def build_context_bundle(
     k_assignment: int = 6,
     k_assessment: int = 6,
     evidence_dir: Path = Path("evidence"),
+    plan_consensus: Dict[str, Dict[str, object]] | None = None,
 ) -> ContextBundle:
     """
     Build a retrieval bundle for one task. Nonexistent indexes are tolerated.
@@ -321,6 +476,26 @@ def build_context_bundle(
     meta_payload = {k: v for k, v in task.items() if k not in {"order"}}
     if meta_payload:
         log("task_meta", meta=meta_payload)
+
+    consensus_data, consensus_meta = _resolve_task_consensus(task, plan_consensus)
+    consensus_chunk = None
+    ocr_uncertain = False
+    if consensus_data:
+        consensus_chunk = _build_consensus_chunk(task_id, consensus_data)
+        ocr_uncertain = _consensus_uncertain(consensus_data, consensus_meta)
+        log(
+            "consensus_attached",
+            block_id=consensus_data.get("block_id"),
+            flagged=bool(consensus_data.get("flagged")),
+            reasons=consensus_data.get("flag_reasons", []),
+        )
+        if ocr_uncertain:
+            log(
+                "consensus_uncertain",
+                block_id=consensus_data.get("block_id"),
+                agreement=consensus_data.get("agreement_score"),
+                latex_agreement=consensus_data.get("latex_agreement_score"),
+            )
 
     def do_source(name: str, top_k: int) -> List[Chunk]:
         run_dir = indices.get(name)
@@ -347,6 +522,14 @@ def build_context_bundle(
     assignment_rules = do_source("assignment", k_assignment)
     assessment = do_source("assessment", k_assessment)
     user_chunks = do_source("user", k_user)
+    if consensus_chunk:
+        user_chunks.insert(0, consensus_chunk)
+    elif consensus_data:
+        log(
+            "consensus_missing_text",
+            block_id=consensus_data.get("block_id"),
+            reason="empty_text",
+        )
 
     bundle = ContextBundle(
         task_id=task_id,
@@ -354,10 +537,17 @@ def build_context_bundle(
         rubric=rubric,
         assignment_rules=assignment_rules,
         assessment=assessment,
-        user_answer=UserAnswer(chunks=user_chunks, flags={"ocr_uncertain": False}),
+        user_answer=UserAnswer(chunks=user_chunks, flags={"ocr_uncertain": ocr_uncertain}),
         task_meta=dict(task),
     )
-    log("bundle_done", rubric=len(rubric), assignment=len(assignment_rules), assessment=len(assessment), user=len(user_chunks))
+    log(
+        "bundle_done",
+        rubric=len(rubric),
+        assignment=len(assignment_rules),
+        assessment=len(assessment),
+        user=len(user_chunks),
+        consensus=int(bool(consensus_chunk)),
+    )
     return bundle
 
 

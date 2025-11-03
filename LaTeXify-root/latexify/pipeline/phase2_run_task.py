@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Dict
 
 # Local modules (installed by you in-repo)
-from latexify.pipeline.retrieval_bundle import build_context_bundle  # type: ignore
+from latexify.pipeline.retrieval_bundle import (  # type: ignore
+    build_context_bundle,
+    load_consensus_bundle,
+)
 from latexify.pipeline.synth_latex import synthesize_snippet  # type: ignore
 
 
@@ -41,6 +44,8 @@ def main():
     if not task:
         raise SystemExit(f"Task id {args.task_id} not found in plan {args.plan}")
 
+    consensus_bundle = load_consensus_bundle(plan.get("consensus_bundle"), args.plan.parent)
+
     indices = {
         "assignment": args.assignment,
         "assessment": args.assessment,
@@ -57,6 +62,7 @@ def main():
         k_assignment=args.k_assignment,
         k_assessment=args.k_assessment,
         evidence_dir=Path("evidence"),
+        plan_consensus=consensus_bundle,
     )
 
     # Optionally persist the bundle (operator inspectability)

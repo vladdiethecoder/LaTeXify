@@ -30,11 +30,21 @@ from pathlib import Path
 
 from latexify.pipeline.planner_scaffold import (
     _emit_plan,
+    _load_block_consensus,
     validate_plan,
     _load_layout_blocks,
     _load_asset_manifest,
     _split_list,
+    TEXT_DISAGREEMENT_THRESHOLD,
+    LATEX_DISAGREEMENT_THRESHOLD,
 )
+
+
+def _relativize_path(target: Path, base_dir: Path) -> str:
+    try:
+        return str(target.relative_to(base_dir))
+    except ValueError:
+        return str(target)
 
 
 def main() -> int:
@@ -58,10 +68,23 @@ def main() -> int:
         default=None,
         help="Path to optional asset manifest JSON file",
     )
+    ap.add_argument(
+        "--block-consensus",
+        type=Path,
+        default=None,
+        help="Optional blocks_refined.jsonl containing OCR consensus metadata",
+    )
+    ap.add_argument(
+        "--consensus-out",
+        type=Path,
+        default=None,
+        help="Optional path for the emitted consensus bundle (defaults beside plan)",
+    )
     args = ap.parse_args()
     # Load optional metadata
     layout_blocks = _load_layout_blocks(args.layout_json)
     asset_lookup = _load_asset_manifest(args.asset_manifest)
+    block_consensus = _load_block_consensus(args.block_consensus)
     plan = _emit_plan(
         args.doc_class,
         title=args.title,
@@ -71,7 +94,26 @@ def main() -> int:
         questions=_split_list(args.questions),
         layout_blocks=layout_blocks,
         assets=asset_lookup,
+        block_consensus=block_consensus,
     )
+    if block_consensus:
+        consensus_out = args.consensus_out or args.out.with_name("consensus.bundle.json")
+        consensus_out.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "meta": {
+                "source": str(args.block_consensus) if args.block_consensus else None,
+                "agreement_threshold": TEXT_DISAGREEMENT_THRESHOLD,
+                "latex_agreement_threshold": LATEX_DISAGREEMENT_THRESHOLD,
+            },
+            "blocks": {bid: bc.to_bundle_dict() for bid, bc in block_consensus.items()},
+        }
+        consensus_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        bundle_info = {
+            "path": _relativize_path(consensus_out, args.out.parent),
+        }
+        if args.block_consensus:
+            bundle_info["source"] = str(args.block_consensus)
+        plan["consensus_bundle"] = bundle_info
     # Validate the plan before writing
     validate_plan(plan)
     # Ensure output directory exists
