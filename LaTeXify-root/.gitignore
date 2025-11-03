@@ -7,7 +7,6 @@ models/**
 kb/online/**
 .venv-*/**
 .venv/
-venv/**
 
 # Images & media likely to be large
 *.webp
