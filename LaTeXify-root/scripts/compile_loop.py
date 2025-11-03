@@ -561,8 +561,12 @@ def _log_successful_fix(
         },
         "before": before,
         "after": after,
+        "final_snippet": after,
+        "preamble_additions": fix_payload.get("preamble_additions") or [],
         "auto_fix": fix_payload,
     }
+    if fix_payload.get("kb_suggestions"):
+        entry["kb_suggestions"] = fix_payload.get("kb_suggestions")
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 def _parse_first_error_and_hints(log_text: str, project_root: Path) -> Tuple[Optional[CompileError], Optional[int]]:

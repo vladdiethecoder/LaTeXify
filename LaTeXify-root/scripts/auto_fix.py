@@ -26,7 +26,20 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+try:  # pragma: no cover - optional dependency
+    import faiss  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    try:
+        import faiss_cpu as faiss  # type: ignore
+    except Exception:  # pragma: no cover - optional dependency
+        faiss = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency
+    from sentence_transformers import SentenceTransformer  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    SentenceTransformer = None  # type: ignore
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -87,6 +100,11 @@ MACRO_CAPABILITY_HINTS = {
     "\\cref": "cleveref",
     "\\Cref": "cleveref",
 }
+
+
+_INDEX_CACHE: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
+_MODEL_CACHE: Dict[str, Optional[Any]] = {}
+_CHUNK_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 # ----------- Robust emitter: write JSON to FD 1 and hard-exit ----------------
@@ -262,7 +280,174 @@ def ensure_fallback_definition(
     return True, new_text, f"Inserted fallback definition for {macro}."
 
 
-def retrieve_kb_context(kb_root: Path, query: str, limit: int = 3) -> str:
+def _candidate_index_pairs(kb_root: Path) -> List[Tuple[Path, Path]]:
+    pairs: List[Tuple[Path, Path]] = []
+    for stem in ("faiss", "latex_docs"):
+        idx_path = kb_root / f"{stem}.index"
+        meta_path = kb_root / f"{stem}.meta.json"
+        if idx_path.exists() and meta_path.exists():
+            pairs.append((idx_path, meta_path))
+    return pairs
+
+
+def _load_index_and_meta(kb_root: Path) -> Optional[Tuple[Any, Dict[str, Any]]]:
+    if faiss is None or SentenceTransformer is None:
+        return None
+    for idx_path, meta_path in _candidate_index_pairs(kb_root):
+        try:
+            cache_key = str(idx_path.resolve())
+        except Exception:
+            cache_key = str(idx_path)
+        if cache_key in _INDEX_CACHE:
+            return _INDEX_CACHE[cache_key]
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        try:
+            index = faiss.read_index(str(idx_path))
+        except Exception:
+            continue
+        _INDEX_CACHE[cache_key] = (index, meta)
+        return _INDEX_CACHE[cache_key]
+    return None
+
+
+def _get_model(model_name: str) -> Optional[Any]:
+    if SentenceTransformer is None:
+        return None
+    if model_name in _MODEL_CACHE:
+        return _MODEL_CACHE[model_name]
+    try:  # pragma: no cover - heavy dependency
+        model = SentenceTransformer(model_name)
+    except Exception:
+        _MODEL_CACHE[model_name] = None
+        return None
+    _MODEL_CACHE[model_name] = model
+    return model
+
+
+def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rows.append(json.loads(raw))
+                except Exception:
+                    continue
+    except Exception:
+        return []
+    return rows
+
+
+def _load_chunk_lookup(kb_root: Path) -> Dict[str, Dict[str, Any]]:
+    cache_key = str(kb_root.resolve()) if kb_root.exists() else str(kb_root)
+    if cache_key in _CHUNK_CACHE:
+        return _CHUNK_CACHE[cache_key]
+    mapping: Dict[str, Dict[str, Any]] = {}
+    for candidate in (kb_root / "chunks.jsonl", kb_root / "chunks" / "chunks.jsonl"):
+        rows = _read_jsonl(candidate)
+        if not rows:
+            continue
+        for row in rows:
+            cid = row.get("id")
+            if cid:
+                mapping[str(cid)] = row
+        if mapping:
+            break
+    _CHUNK_CACHE[cache_key] = mapping
+    return mapping
+
+
+def _format_kb_suggestions(suggestions: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for idx, sug in enumerate(suggestions, start=1):
+        score = sug.get("score")
+        meta = sug.get("metadata") or {}
+        label = meta.get("snippet") or meta.get("title") or meta.get("url")
+        header = f"[KB#{idx} score={score:+.3f}]" if isinstance(score, (int, float)) else f"[KB#{idx}]"
+        if label:
+            header = f"{header} {label}"
+        text = (sug.get("text") or "").strip()
+        if text:
+            parts.append(f"{header}\n{text}")
+        else:
+            parts.append(header)
+    return "\n\n".join(parts)
+
+
+def search_promoted_index(kb_root: Path, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
+    query = (query or "").strip()
+    if not query:
+        return []
+    loaded = _load_index_and_meta(kb_root)
+    if not loaded:
+        return []
+    index, meta = loaded
+    ids: List[str] = [str(i) for i in meta.get("ids", []) if i is not None]
+    if not ids:
+        return []
+    model_name = meta.get("model") or "sentence-transformers/all-MiniLM-L6-v2"
+    model = _get_model(model_name)
+    if model is None:
+        return []
+    try:
+        qvec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)[0]
+    except Exception:
+        return []
+    try:
+        qvec = qvec.astype("float32")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        scores, indices = index.search(qvec.reshape(1, -1), max(1, top_k * 2))
+    except Exception:
+        return []
+
+    id_to_ref: Dict[str, Dict[str, Any]] = {}
+    for ref in meta.get("id_to_ref", []) or []:
+        if isinstance(ref, dict) and ref.get("id") is not None:
+            id_to_ref[str(ref["id"])] = ref
+
+    chunk_lookup = None
+    suggestions: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for idx, score in zip(indices[0].tolist(), scores[0].tolist()):
+        if not (0 <= idx < len(ids)):
+            continue
+        chunk_id = ids[idx]
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        ref = id_to_ref.get(chunk_id) or {}
+        text = (ref.get("text") or "").strip()
+        metadata = ref.get("metadata") if isinstance(ref.get("metadata"), dict) else {}
+        if not text:
+            if chunk_lookup is None:
+                chunk_lookup = _load_chunk_lookup(kb_root)
+            chunk = chunk_lookup.get(chunk_id)
+            if chunk:
+                text = (chunk.get("text") or "").strip()
+                if not metadata and isinstance(chunk.get("metadata"), dict):
+                    metadata = chunk.get("metadata")  # type: ignore[assignment]
+        suggestions.append({
+            "id": chunk_id,
+            "score": float(score),
+            "text": text,
+            "metadata": metadata or {},
+        })
+        if len(suggestions) >= top_k:
+            break
+    return suggestions
+
+
+def _legacy_kb_context(kb_root: Path, query: str, limit: int = 3) -> str:
     docs_path = kb_root / "latex_docs.jsonl"
     if not docs_path.exists():
         return ""
@@ -293,6 +478,13 @@ def retrieve_kb_context(kb_root: Path, query: str, limit: int = 3) -> str:
         return ""
     scored.sort(key=lambda t: -t[0])
     return "\n\n".join(body for _, body in scored[:limit])
+
+
+def retrieve_kb_context(kb_root: Path, query: str, limit: int = 3) -> Tuple[str, List[Dict[str, Any]]]:
+    suggestions = search_promoted_index(kb_root, query, top_k=limit)
+    if suggestions:
+        return _format_kb_suggestions(suggestions), suggestions
+    return _legacy_kb_context(kb_root, query, limit), []
 
 
 def macro_capabilities(macro: Optional[str]) -> Set[str]:
@@ -366,20 +558,20 @@ def fix_undefined_control_sequence(
     return changed, "; ".join(notes) if notes else "No capability change.", updated_caps
 
 
-def ensure_preamble_package(main_tex: Path, pkg: str) -> Tuple[bool, str]:
+def ensure_preamble_package(main_tex: Path, pkg: str) -> Tuple[bool, str, Optional[str]]:
     if pkg not in SAFE_PREAMBLE_ALLOWLIST:
-        return False, f"Package {pkg} not on allowlist."
+        return False, f"Package {pkg} not on allowlist.", None
     text = load_text(main_tex)
     if f"\\usepackage{{{pkg}}}" in text:
-        return False, f"{pkg} already present."
+        return False, f"{pkg} already present.", None
     lines = text.splitlines()
     for i, line in enumerate(lines):
         if line.strip().startswith("\\documentclass"):
             lines.insert(i + 1, SAFE_PREAMBLE_ALLOWLIST[pkg])
             save_text(main_tex, "\n".join(lines))
-            return True, f"Inserted \\usepackage{{{pkg}}}."
+            return True, f"Inserted \\usepackage{{{pkg}}}.", SAFE_PREAMBLE_ALLOWLIST[pkg]
     save_text(main_tex, SAFE_PREAMBLE_ALLOWLIST[pkg] + "\n" + text)
-    return True, f"Prepended \\usepackage{{{pkg}}}."
+    return True, f"Prepended \\usepackage{{{pkg}}}.", SAFE_PREAMBLE_ALLOWLIST[pkg]
 
 
 def close_unfinished_environment(file_path: Path) -> Tuple[bool, str]:
@@ -455,30 +647,35 @@ def _replace_includegraphics_with_placeholder(snippet_path: Path, missing: str) 
     return True, f"Replaced includegraphics with placeholder for {Path(missing).name}."
 
 
-def fix_missing_file_or_package(message: str, build_dir: Path, main_tex: Path, snippet_path: Optional[Path] = None) -> Tuple[bool, str, Optional[Path]]:
+def fix_missing_file_or_package(
+    message: str,
+    build_dir: Path,
+    main_tex: Path,
+    snippet_path: Optional[Path] = None,
+) -> Tuple[bool, str, Optional[Path], Optional[str]]:
     msty = re.search(r"File `([^`]+\.sty)` not found", message)
     if msty:
         pkg = Path(msty.group(1)).stem
-        changed, note = ensure_preamble_package(main_tex, pkg)
-        return changed, note, None
+        changed, note, inserted = ensure_preamble_package(main_tex, pkg)
+        return changed, note, None, inserted
 
     missing = _extract_missing_filename(message)
     if missing:
         located = _locate_asset_on_disk(missing, build_dir)
         if located:
-            return False, f"File {missing} exists at {located}; check path usage.", located
+            return False, f"File {missing} exists at {located}; check path usage.", located, None
         if snippet_path:
             changed, note = _replace_includegraphics_with_placeholder(snippet_path, missing)
             if changed:
-                return True, note, snippet_path
+                return True, note, snippet_path, None
         base = build_dir / missing
         for ext in (".pdf", ".png", ".jpg"):
             cand = base.with_suffix(ext)
             if cand.exists():
-                return False, f"Found {cand.name} in build; update \\includegraphics path.", cand
-        return False, f"Missing file {missing}; no snippet updated.", None
+                return False, f"Found {cand.name} in build; update \\includegraphics path.", cand, None
+        return False, f"Missing file {missing}; no snippet updated.", None, None
 
-    return False, "No actionable missing file/package pattern.", None
+    return False, "No actionable missing file/package pattern.", None, None
 
 
 # ------------------------------- Driver --------------------------------------
@@ -507,8 +704,10 @@ def _run() -> dict:
     if snippet is None:
         snippet = detect_main_tex(args.build_dir)
 
-    kb_context = retrieve_kb_context(args.kb_root, args.message)
-    if kb_context:
+    kb_context, kb_suggestions = retrieve_kb_context(args.kb_root, args.message)
+    if kb_suggestions:
+        rationale += ' Retrieved promoted KB suggestions.'
+    elif kb_context:
         rationale += ' Retrieved KB context.'
 
     target = snippet if snippet else None
@@ -520,6 +719,7 @@ def _run() -> dict:
             'what_changed': '',
             'capabilities': [],
             'kb_context': kb_context,
+            'kb_suggestions': kb_suggestions,
             'debug': {'notes': 'missing target'},
         }
 
@@ -527,6 +727,7 @@ def _run() -> dict:
     what_changed = ''
     changed_file: Optional[Path] = None
     capabilities: List[str] = []
+    preamble_additions: List[str] = []
 
     if args.error_category == 'undefined_control_sequence':
         ok, note, caps = fix_undefined_control_sequence(target, args.line, args.message, kb_context)
@@ -543,13 +744,15 @@ def _run() -> dict:
 
     elif args.error_category in ('file_not_found', 'missing_package'):
         main_tex = detect_main_tex(args.build_dir) or target
-        ok, note, changed_path = fix_missing_file_or_package(args.message, args.build_dir, main_tex, target)
+        ok, note, changed_path, inserted = fix_missing_file_or_package(args.message, args.build_dir, main_tex, target)
         if ok:
             changed_file = changed_path if changed_path else main_tex
         else:
             changed_file = changed_path
         what_changed = note
         status = 'fixed' if ok else 'skipped'
+        if inserted:
+            preamble_additions.append(inserted)
 
     else:
         status = 'skipped'
@@ -562,6 +765,8 @@ def _run() -> dict:
         'what_changed': what_changed,
         'capabilities': capabilities,
         'kb_context': kb_context,
+        'kb_suggestions': kb_suggestions,
+        'preamble_additions': preamble_additions,
         'debug': {'notes': 'ok', 'section': str(args.section) if args.section else None},
     }
 
