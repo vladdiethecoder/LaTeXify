@@ -99,7 +99,7 @@ def main():
     }
     bundle_payload = json.loads(json.dumps(bundle_payload))
 
-    decision = router.classify(bundle_payload, task)
+    decision = router.route(bundle_payload, task)
     max_attempts = max(1, critic.max_attempts(task))
     feedback_history: List[str] = []
     snippet = ""

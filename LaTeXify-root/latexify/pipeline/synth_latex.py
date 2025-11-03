@@ -49,7 +49,7 @@ from .model_backends import LlamaCppBackend, LlamaCppConfig
 from .model_router import choose_model_for_text, RouteDecision
 from . import synth_text
 from .synth_shared import capabilities_from_text, read_bundle
-from .specialist_router import select_specialist
+from .specialist_router import SpecialistRouter
 
 
 DEFAULT_CTX = 4096
@@ -216,6 +216,7 @@ def synth_one_bundle(
     backend_cache: Dict[str, LlamaCppBackend],
     args: Args,
     plan_metadata: Dict[str, Dict[str, str]],
+    router: SpecialistRouter,
 ) -> Tuple[Path, Path]:
     b = read_bundle(bundle_path)
     bid = b.get("id") or bundle_path.stem.replace(".bundle", "")
@@ -238,7 +239,7 @@ def synth_one_bundle(
             b["type"] = task_info["type"]
         if task_info.get("kind") and "kind" not in b:
             b["kind"] = task_info["kind"]
-    decision = select_specialist(b, task_info)
+    decision = router.route(b, task_info)
     if decision:
         snippet, caps = decision.run(b)
         return _write_outputs(
@@ -359,6 +360,22 @@ def main() -> int:
     _ensure_out(args.out)
     backend_cache: Dict[str, LlamaCppBackend] = {}
     plan_metadata = _load_plan_metadata(args.plan)
+    router_plan: Dict = {"tasks": []}
+    if args.plan and args.plan.exists():
+        try:
+            router_plan = json.loads(args.plan.read_text(encoding="utf-8"))
+        except Exception:
+            router_plan = {"tasks": []}
+    if "tasks" not in router_plan or not isinstance(router_plan.get("tasks"), list):
+        router_plan["tasks"] = []
+    for tid, info in plan_metadata.items():
+        existing = next((t for t in router_plan["tasks"] if str(t.get("id")) == tid), None)
+        if existing is None:
+            router_plan["tasks"].append({"id": tid, **info})
+        else:
+            for key, value in info.items():
+                existing.setdefault(key, value)
+    router = SpecialistRouter(plan=router_plan)
     bundle_files = sorted([
         p
         for p in args.bundles_dir.rglob("*.json")
@@ -369,7 +386,7 @@ def main() -> int:
         return 0
     for bf in bundle_files:
         try:
-            synth_one_bundle(bf, args.out, backend_cache, args, plan_metadata)
+            synth_one_bundle(bf, args.out, backend_cache, args, plan_metadata, router)
         except Exception as e:
             print(f"[synth][ERR] {bf.name}: {e}", file=sys.stderr)
             continue
