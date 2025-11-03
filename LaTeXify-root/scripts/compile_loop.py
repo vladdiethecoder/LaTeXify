@@ -28,7 +28,16 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    from dev.eval.metrics import bertscore_f1 as _bertscore_f1
+    from dev.eval.metrics import cer as _cer
+    from dev.eval.metrics import wer as _wer
+except Exception:  # pragma: no cover - optional dependency surface
+    _bertscore_f1 = None
+    _cer = None
+    _wer = None
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent  # assumes this file is under <repo>/scripts/
@@ -39,6 +48,86 @@ DEFAULT_PLAN_PATH = DEFAULT_BUILD_DIR / "plan.json"
 DEFAULT_SNIPPET_DIR = DEFAULT_BUILD_DIR / "snippets"
 KB_LATEX_DIR = PROJECT_ROOT / "kb" / "latex"
 AGGREGATOR_SCRIPT = HERE / "aggregator.py"
+
+PROMOTE_WER_THRESHOLD = 0.35
+PROMOTE_CER_THRESHOLD = 0.25
+
+# JSON schema documentation for compile_metrics.json to keep analytics stable.
+COMPILE_METRICS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "required": [
+        "run_id",
+        "generated_at",
+        "compile_report",
+        "compilation_success",
+        "final_status",
+        "passes",
+        "auto_fix_attempts",
+        "auto_fix_status",
+        "pdf_artifact",
+        "provenance",
+        "promote_to_kb",
+        "text_metrics",
+    ],
+    "properties": {
+        "run_id": {"type": "string"},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "compile_report": {"type": "string"},
+        "compilation_success": {"type": "boolean"},
+        "final_status": {"type": ["string", "null"]},
+        "passes": {"type": ["integer", "null"]},
+        "auto_fix_attempts": {"type": ["integer", "null"]},
+        "auto_fix_status": {"type": ["string", "null"]},
+        "pdf_artifact": {"type": ["string", "null"]},
+        "provenance": {"type": ["string", "null"], "enum": ["rag", "rule", None]},
+        "promote_to_kb": {"type": "boolean"},
+        "text_metrics": {
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+                "status": {"type": "string"},
+                "hypothesis_path": {"type": ["string", "null"]},
+                "reference_sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "reference_candidates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "lengths": {
+                    "type": "object",
+                    "properties": {
+                        "hypothesis_chars": {"type": "integer"},
+                        "hypothesis_words": {"type": "integer"},
+                        "reference_chars": {"type": "integer"},
+                        "reference_words": {"type": "integer"},
+                    },
+                },
+                "scores": {
+                    "type": "object",
+                    "properties": {
+                        "cer": {"type": ["number", "null"]},
+                        "wer": {"type": ["number", "null"]},
+                        "bertscore_f1": {"type": ["number", "null"]},
+                    },
+                },
+                "bertscore_available": {"type": "boolean"},
+                "promotion_thresholds": {
+                    "type": "object",
+                    "properties": {
+                        "wer": {"type": "number"},
+                        "cer": {"type": "number"},
+                    },
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 # --- Error classifier: regex -> category -------------------------------------
 
@@ -231,6 +320,225 @@ def _rerun_aggregator(plan_path: Path, snippets_dir: Path, build_dir: Path) -> D
     }
 
 
+def _word_count(text: str) -> int:
+    return len(text.split())
+
+
+def _read_reference_directory(dir_path: Path) -> Tuple[str, List[Path]]:
+    if not dir_path.exists() or not dir_path.is_dir():
+        return "", []
+    files = sorted({*dir_path.glob("*.md"), *dir_path.glob("*.txt")})
+    texts: List[str] = []
+    for file_path in files:
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            content = ""
+        if content:
+            texts.append(content)
+    combined = "\n\n".join(texts).strip()
+    return combined, files
+
+
+def _gather_reference_corpus(
+    runs_root: Path,
+    run_id: str,
+    provenance: str,
+) -> Tuple[str, List[Path], List[Path]]:
+    outputs_dir = runs_root / run_id / "outputs"
+    if not outputs_dir.exists():
+        return "", [], [outputs_dir]
+
+    if provenance == "rag":
+        preference = ["rag", "fallback", "rule"]
+    else:
+        preference = ["rule", "fallback", "rag"]
+
+    tried: List[Path] = []
+    seen: set[str] = set()
+    for label in preference:
+        candidate = outputs_dir / label
+        key = candidate.as_posix()
+        if key in seen:
+            continue
+        seen.add(key)
+        tried.append(candidate)
+        text, files = _read_reference_directory(candidate)
+        if text:
+            return text, files, tried
+
+    # As a last resort, check the outputs directory directly.
+    tried.append(outputs_dir)
+    text, files = _read_reference_directory(outputs_dir)
+    if text:
+        return text, files, tried
+    return "", files, tried
+
+
+def _compute_text_metrics(
+    main_tex: Path,
+    hyp_text: str,
+    reference_text: str,
+    reference_sources: List[Path],
+    candidate_dirs: List[Path],
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "status": "ok",
+        "hypothesis_path": str(main_tex),
+        "reference_sources": [str(p) for p in reference_sources],
+        "reference_candidates": [str(p) for p in candidate_dirs],
+        "lengths": {
+            "hypothesis_chars": len(hyp_text),
+            "hypothesis_words": _word_count(hyp_text),
+            "reference_chars": len(reference_text),
+            "reference_words": _word_count(reference_text),
+        },
+        "scores": {
+            "cer": None,
+            "wer": None,
+            "bertscore_f1": None,
+        },
+        "bertscore_available": False,
+        "promotion_thresholds": {
+            "wer": PROMOTE_WER_THRESHOLD,
+            "cer": PROMOTE_CER_THRESHOLD,
+        },
+    }
+    warnings: List[str] = []
+
+    if _cer is not None:
+        try:
+            result["scores"]["cer"] = float(_cer(hyp_text, reference_text))
+        except Exception as exc:  # pragma: no cover - defensive
+            warnings.append(f"cer_failed: {exc}")
+            result["scores"]["cer"] = None
+    else:
+        warnings.append("cer_unavailable")
+
+    if _wer is not None:
+        try:
+            result["scores"]["wer"] = float(_wer(hyp_text, reference_text))
+        except Exception as exc:  # pragma: no cover - defensive
+            warnings.append(f"wer_failed: {exc}")
+            result["scores"]["wer"] = None
+    else:
+        warnings.append("wer_unavailable")
+
+    bert_f1: Optional[float] = None
+    if _bertscore_f1 is not None and hyp_text.strip() and reference_text.strip():
+        try:
+            bert_val = _bertscore_f1(hyp_text, reference_text)
+            if bert_val is not None:
+                bert_f1 = float(bert_val)
+        except Exception as exc:  # pragma: no cover - defensive
+            warnings.append(f"bertscore_failed: {exc}")
+            bert_f1 = None
+    result["scores"]["bertscore_f1"] = bert_f1
+    result["bertscore_available"] = bert_f1 is not None
+
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
+
+
+def _compute_text_metrics_view(
+    build_dir: Path,
+    runs_root: Path,
+    run_id: str,
+    status: Optional[str],
+    provenance: str,
+) -> Dict[str, Any]:
+    main_tex = build_dir / "main.tex"
+    base: Dict[str, Any] = {
+        "status": "compile_failed" if status != "ok" else "missing_main_tex",
+        "hypothesis_path": str(main_tex),
+        "reference_sources": [],
+        "reference_candidates": [],
+        "lengths": {},
+        "scores": {},
+        "bertscore_available": False,
+        "promotion_thresholds": {
+            "wer": PROMOTE_WER_THRESHOLD,
+            "cer": PROMOTE_CER_THRESHOLD,
+        },
+    }
+
+    if status != "ok":
+        return base
+
+    if not main_tex.exists():
+        return base
+
+    hyp_text = _read_text(main_tex)
+    reference_text, sources, candidates = _gather_reference_corpus(runs_root, run_id, provenance)
+    base["reference_sources"] = [str(p) for p in sources]
+    base["reference_candidates"] = [str(p) for p in candidates]
+    base["lengths"] = {
+        "hypothesis_chars": len(hyp_text),
+        "hypothesis_words": _word_count(hyp_text),
+        "reference_chars": len(reference_text),
+        "reference_words": _word_count(reference_text),
+    }
+
+    if not reference_text.strip():
+        base["status"] = "reference_unavailable"
+        return base
+
+    return _compute_text_metrics(main_tex, hyp_text, reference_text, sources, candidates)
+
+
+def _infer_provenance(build_dir: Path) -> str:
+    snippets_dir = build_dir / "snippets"
+    if snippets_dir.exists():
+        for tex_file in snippets_dir.rglob("*.tex"):
+            if tex_file.is_file():
+                return "rag"
+    return "rule"
+
+
+def _should_promote(report: Dict[str, Any], text_metrics: Dict[str, Any]) -> bool:
+    if report.get("status") != "ok":
+        return False
+    if report.get("provenance") != "rag":
+        return False
+    if text_metrics.get("status") != "ok":
+        return False
+    scores = text_metrics.get("scores") or {}
+    wer_score = scores.get("wer")
+    cer_score = scores.get("cer")
+    if wer_score is None or cer_score is None:
+        return False
+    return wer_score <= PROMOTE_WER_THRESHOLD and cer_score <= PROMOTE_CER_THRESHOLD
+
+
+def _sanitize_text_metrics(data: Any) -> Any:
+    if data is None:
+        return {"status": "unavailable"}
+    try:
+        return json.loads(json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:  # pragma: no cover - defensive
+        return {"status": "unavailable"}
+
+
+def _build_metrics_payload(run_id: str, report_path: Path, report: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "run_id": run_id,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "compile_report": str(report_path),
+        "compilation_success": report.get("status") == "ok",
+        "final_status": report.get("status"),
+        "passes": report.get("passes"),
+        "auto_fix_attempts": int(report.get("retry_policy", {}).get("auto_fix_attempted", False)),
+        "auto_fix_status": (report.get("auto_fix") or {}).get("status"),
+        "pdf_artifact": (report.get("artifacts") or {}).get("pdf_file"),
+        "provenance": report.get("provenance"),
+        "promote_to_kb": bool(report.get("promote_to_kb", False)),
+        "text_metrics": _sanitize_text_metrics(report.get("text_metrics")),
+    }
+    return payload
+
+
 def _log_successful_fix(
     build_dir: Path,
     snippet_path: Optional[Path],
@@ -393,19 +701,13 @@ def write_report(report_path: Path, report: Dict) -> None:
 
 
 def write_metrics(build_dir: Path, run_id: str, report_path: Path, report: Dict) -> Path:
-    """Persist a light-weight metrics view alongside the full report."""
+    """Persist a light-weight metrics view alongside the full report.
+
+    The serialized structure adheres to :data:`COMPILE_METRICS_SCHEMA` so downstream
+    analytics jobs can rely on a stable schema.
+    """
     build_dir.mkdir(parents=True, exist_ok=True)
-    metrics = {
-        "run_id": run_id,
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "compile_report": str(report_path),
-        "compilation_success": report.get("status") == "ok",
-        "final_status": report.get("status"),
-        "passes": report.get("passes"),
-        "auto_fix_attempts": int(report.get("retry_policy", {}).get("auto_fix_attempted", False)),
-        "auto_fix_status": (report.get("auto_fix") or {}).get("status"),
-        "pdf_artifact": (report.get("artifacts") or {}).get("pdf_file"),
-    }
+    metrics = _build_metrics_payload(run_id, report_path, report)
     metrics_path = build_dir / "compile_metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return metrics_path
@@ -591,6 +893,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     })
                 report["artifacts"]["log_file"] = str(log_path2)
 
+    provenance = _infer_provenance(build_dir)
+    report["provenance"] = provenance
+    text_metrics = _compute_text_metrics_view(build_dir, runs_root, run_id, report.get("status"), provenance)
+    report["text_metrics"] = text_metrics
+    report["promote_to_kb"] = _should_promote(report, text_metrics)
     report["run_id"] = run_id
     report_path = run_dir / "compile_report.json"
     write_report(report_path, report)

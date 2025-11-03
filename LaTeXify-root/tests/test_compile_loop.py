@@ -46,6 +46,10 @@ def test_trivial_doc_compiles(tmp_path: Path, monkeypatch):
     assert rc in (0, 1)  # allow failure if LaTeX missing in CI, but prefer 0
     report = json.loads((runs_root / run_id / "compile" / "compile_report.json").read_text())
     assert "status" in report
+    assert report["provenance"] in {"rag", "rule"}
+    assert "text_metrics" in report
+    assert "promotion_thresholds" in report["text_metrics"]
+    assert isinstance(report["promote_to_kb"], bool)
     # If LaTeX is present we expect ok; otherwise fail but report exists
     if shutil.which("pdflatex") or shutil.which("latexmk"):
         assert report["status"] == "ok"
@@ -76,6 +80,10 @@ def test_failing_snippet_triggers_auto_fix(tmp_path: Path, monkeypatch):
 
     report = json.loads((runs_root / run_id / "compile" / "compile_report.json").read_text())
     assert "status" in report
+    assert report["provenance"] in {"rag", "rule"}
+    assert "text_metrics" in report
+    assert "promotion_thresholds" in report["text_metrics"]
+    assert isinstance(report["promote_to_kb"], bool)
     # Deterministic: we either fix by commenting the unknown line or still fail clearly after one retry
     assert report["passes"] >= 1
     assert report["retry_policy"]["auto_fix_attempted"] is True
