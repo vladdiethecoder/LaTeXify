@@ -4,14 +4,15 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 # Local modules (installed by you in-repo)
 from latexify.pipeline.retrieval_bundle import (  # type: ignore
     build_context_bundle,
     load_consensus_bundle,
 )
-from latexify.pipeline.synth_latex import synthesize_snippet  # type: ignore
+from latexify.pipeline.critic_agent import CriticAgent  # type: ignore
+from latexify.pipeline.specialist_router import SpecialistRouter  # type: ignore
 
 
 def _load_plan(path: Path) -> Dict:
@@ -81,8 +82,10 @@ def main():
         args.bundle_out.parent.mkdir(parents=True, exist_ok=True)
         args.bundle_out.write_text(json.dumps(js, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Synthesize deterministic LiX snippet
-    snippet = synthesize_snippet(json.loads(json.dumps({
+    router = SpecialistRouter(plan=plan)
+    critic = CriticAgent(plan=plan)
+
+    bundle_payload = {
         "task_id": bundle.task_id,
         "question": bundle.question,
         "rubric": [c.__dict__ for c in bundle.rubric],
@@ -93,7 +96,35 @@ def main():
             "flags": bundle.user_answer.flags,
         },
         "task_meta": bundle.task_meta,
-    })))
+    }
+    bundle_payload = json.loads(json.dumps(bundle_payload))
+
+    decision = router.classify(bundle_payload, task)
+    max_attempts = max(1, critic.max_attempts(task))
+    feedback_history: List[str] = []
+    snippet = ""
+
+    for attempt in range(1, max_attempts + 1):
+        attempt_bundle = json.loads(json.dumps(bundle_payload))
+        attempt_bundle["critic_feedback"] = list(feedback_history)
+        prompt_sections = [decision.prompt.body]
+        if feedback_history:
+            prompt_sections.append("\n\n# Critic feedback\n" + "\n\n".join(feedback_history))
+        attempt_bundle["specialist_prompt"] = "".join(prompt_sections)
+
+        snippet, _capabilities = decision.run(attempt_bundle)
+        review = critic.review(
+            snippet,
+            bundle=attempt_bundle,
+            decision=decision,
+            attempt=attempt,
+            feedback_history=tuple(feedback_history),
+        )
+        if review.accepted:
+            break
+        feedback = review.feedback.strip()
+        if feedback:
+            feedback_history.append(feedback)
 
     # Write snippet
     args.snippets_dir.mkdir(parents=True, exist_ok=True)

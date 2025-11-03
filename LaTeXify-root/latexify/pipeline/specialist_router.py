@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from . import synth_figure, synth_figure_placeholder, synth_formula, synth_table
+from . import synth_figure, synth_figure_placeholder, synth_formula, synth_table, synth_text
 from .synth_shared import SpecialistPrompt, load_specialist_prompt
 
 
@@ -87,3 +87,66 @@ def select_specialist(bundle: Dict, plan_info: Dict[str, str]) -> Optional[Speci
     }
     reason = f"specialist:{name}"
     return SpecialistDecision(name=name, handler=handler, reason=reason, prompt=prompt, metadata=metadata)
+
+
+def _normalize_metadata(source: Dict | None) -> Dict[str, str]:
+    if not isinstance(source, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for key, value in source.items():
+        if value is None:
+            continue
+        if isinstance(value, (str, int, float)):
+            normalized[str(key)] = str(value)
+        elif isinstance(value, dict):
+            # Flatten only selected nested hints
+            for sub_key in ("kind", "type", "content_type", "asset_source_type"):
+                sub_value = value.get(sub_key)
+                if sub_value is not None:
+                    normalized.setdefault(sub_key, str(sub_value))
+    return normalized
+
+
+class SpecialistRouter:
+    """Light-weight wrapper that caches prompt + plan metadata for routing."""
+
+    def __init__(self, plan: Dict | None = None):
+        self._prompt = load_specialist_prompt()
+        self._plan_lookup: Dict[str, Dict[str, str]] = {}
+        if isinstance(plan, dict):
+            for task in plan.get("tasks", []):
+                if not isinstance(task, dict):
+                    continue
+                task_id = task.get("id")
+                if task_id is None:
+                    continue
+                self._plan_lookup[str(task_id)] = _normalize_metadata(task)
+
+    @property
+    def prompt(self) -> SpecialistPrompt:
+        return self._prompt
+
+    def classify(self, bundle: Dict, plan_task: Dict | None = None) -> SpecialistDecision:
+        task_id = str(bundle.get("task_id") or bundle.get("id") or "")
+        plan_info: Dict[str, str] = {}
+        if plan_task:
+            plan_info.update(_normalize_metadata(plan_task))
+        if task_id in self._plan_lookup:
+            plan_info.update(self._plan_lookup[task_id])
+        decision = select_specialist(bundle, plan_info)
+        if decision:
+            return decision
+        metadata = {
+            "prompt_version": self._prompt.version,
+            "prompt_path": "tasks/synthesis_agent.md",
+            "specialist": "text",
+            "tags": ",".join(_collect_tags(bundle, plan_info)),
+        }
+        reason = "specialist:text"
+        return SpecialistDecision(
+            name="text",
+            handler=synth_text.synthesize,
+            reason=reason,
+            prompt=self._prompt,
+            metadata=metadata,
+        )
