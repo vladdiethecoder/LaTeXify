@@ -11,6 +11,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from . import synth_figure, synth_figure_placeholder, synth_formula, synth_table, synth_text
 from .model_backends import LlamaCppBackend, LlamaCppConfig
 from .synth_shared import SpecialistPrompt, load_specialist_prompt
+from ..utils.paths import tasks_root
 
 
 _ROUTER_PROMPT_CACHE: Optional[SpecialistPrompt] = None
@@ -31,8 +32,10 @@ def load_router_prompt(root: Path | None = None) -> SpecialistPrompt:
     if _ROUTER_PROMPT_CACHE is not None:
         return _ROUTER_PROMPT_CACHE
     if root is None:
-        root = Path(__file__).resolve().parents[2]
-    prompt_path = root / "tasks" / "router.md"
+        prompt_root = tasks_root()
+    else:
+        prompt_root = Path(root)
+    prompt_path = prompt_root / "router.md"
     body = prompt_path.read_text(encoding="utf-8")
     prompt = SpecialistPrompt(version=_extract_prompt_version(body), body=body)
     _ROUTER_PROMPT_CACHE = prompt
@@ -140,11 +143,11 @@ class SpecialistRouter:
         name, handler = self._resolve_specialist(tag)
         metadata = {
             "prompt_version": self._synthesis_prompt.version,
-            "prompt_path": "tasks/synthesis_agent.md",
+            "prompt_path": "docs/tasks/synthesis_agent.md",
             "specialist": name,
             "tags": ",".join(tags),
             "router_prompt_version": self._router_prompt.version,
-            "router_prompt_path": "tasks/router.md",
+            "router_prompt_path": "docs/tasks/router.md",
             "router_model": self._router_model_name,
             "router_source": self._last_classification_source,
         }

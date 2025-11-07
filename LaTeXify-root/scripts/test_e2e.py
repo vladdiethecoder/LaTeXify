@@ -157,7 +157,7 @@ def main() -> None:
     # Phase 0 KB
     run([
         "python", "scripts/build_latex_kb.py",
-        "--seed_jsonl", "tasks/seed_latex_kb_min.jsonl",
+        "--seed_jsonl", "docs/tasks/seed_latex_kb_min.jsonl",
         "--out_jsonl", "data/latex_docs.jsonl",
         "--out_index", "indexes/latex_docs.index",
         "--out_meta", "indexes/latex_docs.meta.json",

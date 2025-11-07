@@ -53,7 +53,7 @@ This file tracks the project's priorities, focusing on robustness and building a
 -   [x] **Document Planner:** The `planner_scaffold.py` agent successfully creates `plan.json` blueprints.
 -   [x] **RAG System:** The LaTeX KB (`/kb/latex/`) is indexed with FAISS, and the `retrieval_agent.py` creates data bundles.
 -   [x] **Advanced Layout Analysis:** The `/pdf-document-layout-analysis/` submodule is integrated for sophisticated document parsing.
--   [x] **Multi-Agent Framework:** The `tasks/` directory and agent scripts (`synth_latex.py`, etc.) provide a "prompt-as-code" framework.
+-   [x] **Multi-Agent Framework:** The `docs/tasks/` directory and agent scripts (`synth_latex.py`, etc.) provide a "prompt-as-code" framework.
 -   [x] **LFS Issue Resolution:** Replaced root LFS pointers with text files.
 
 ## Priority Tasks (NEED to be done)

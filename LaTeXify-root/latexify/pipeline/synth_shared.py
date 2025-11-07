@@ -9,6 +9,8 @@ from typing import Dict, Iterable, List, Sequence
 import json
 import re
 
+from ..utils.paths import tasks_root
+
 
 _ESCAPE_RE = re.compile(r"[\\{}_\%$]")
 
@@ -101,13 +103,15 @@ def _extract_prompt_version(text: str) -> str:
 
 
 def load_specialist_prompt(root: Path | None = None) -> SpecialistPrompt:
-    """Load the specialist prompt definition from tasks/synthesis_agent.md."""
+    """Load the specialist prompt definition from docs/tasks/synthesis_agent.md."""
     global _SPECIALIST_PROMPT_CACHE
     if _SPECIALIST_PROMPT_CACHE is not None:
         return _SPECIALIST_PROMPT_CACHE
     if root is None:
-        root = Path(__file__).resolve().parents[2]
-    prompt_path = root / "tasks" / "synthesis_agent.md"
+        prompt_root = tasks_root()
+    else:
+        prompt_root = Path(root)
+    prompt_path = prompt_root / "synthesis_agent.md"
     text = prompt_path.read_text(encoding="utf-8")
     version = _extract_prompt_version(text)
     prompt = SpecialistPrompt(version=version, body=text)

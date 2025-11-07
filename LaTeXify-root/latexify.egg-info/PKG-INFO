@@ -13,7 +13,16 @@ Description-Content-Type: text/plain
 
 LaTeXify is an advanced document processing pipeline designed to convert input documents (such as PDFs) into high-quality, compilable LaTeX code. A multi-agent, Retrieval-Augmented Generation (RAG) pipeline to convert PDFs into compilable LaTeX. The system uses advanced layout analysis and a "prompt-as-code" framework to deconstruct, plan, and synthesize documents. It leverages a combination of Optical Character Recognition (OCR), Retrieval-Augmented Generation (RAG), and intelligent LaTeX-aware agents to manage the complex task of document synthesis.
 
-The system is built around a multi-stage pipeline that includes:
+### Quickstart
+
+```bash
+python -m venv venv && source venv/bin/activate && pip install -e .
+python run_local.py --pdf "Basic Skills Review Unit Assessment.pdf" --title "Skills Review"
+```
+
+See `HOW_TO_RUN.md` for runtime flags and `HOW_TO_INSTALL.md` for model provisioning details.
+
+The system is built around a multi-stage pipeline that includes (see `HOW_TO_RUN.md` for a hands-on walkthrough):
 1.  **Ingestion & OCR:** Processes input files (e.g., PDFs) and extracts text and layout information using an ensemble of OCR backends.
 2.  **Chunking & Indexing:** Intelligently chunks the extracted content and builds a searchable vector index.
 3.  **Document Planning:** Analyzes the document content to select an appropriate LaTeX document class (e.g., article, textbook, thesis) and plans the overall structure.
@@ -21,13 +30,108 @@ The system is built around a multi-stage pipeline that includes:
 5.  **LaTeX Synthesis:** Generates the final `.tex` file snippet by snippet, assembling the preamble, title, body content, and document-ending commands.
 6.  **Compilation & Post-processing:** Compiles the generated LaTeX code and performs any necessary fix-ups to ensure a valid PDF output.
 
+### Layout Planner (Step 0)
+
+`latexify-layout-planner` primes the pipeline by producing an aesthetic layout blueprint from rough notes or sketches. The CLI can ingest plaintext (`--text` / `--text-file`) and optional draft screenshots (`--image`). When the local vLLM/OpenAI-compatible endpoint exposing **Qwen2.5-VL-32B-Instruct** is online, the planner sends a structured prompt guiding the model to emit JSON describing page format, typographic hierarchy, section ordering, and figure/table placements. The blueprint now includes `content_flags` (e.g., `hasFigures`, `hasMath`, `hasCode`), a `doc_class_hint` (candidate LiX class + confidence) and a `chunks` outline so downstream agents can immediately route tasks to specialists and doc-class selectors. If the endpoint is unavailable, a deterministic heuristic fallback still emits a scaffolded plan so downstream agents retain context. Example:
+
+```bash
+python -m latexify.pipeline.layout_planner \
+  --text-file inputs/draft.txt \
+  --image inputs/draft-page-1.png \
+  --out build/layout_plan.json \
+  --text-out build/layout_plan.txt
+```
+
+The resulting JSON and plaintext summary live in `build/` and can be fed into later steps (class selection, synthesis prompts, or the retrieval bundle) to keep the end-to-end run consistent with the intended visual design.
+
+### Step 1: Ingestion Council (OCR + Parsing)
+
+`latexify-ingest-pdf` replaces the legacy fallback extractor with a four-model "council" that produces complementary views of every layout chunk:
+
+-   **InternVL 3.5-14B (vLLM endpoint):** General handwriting + layout summaries via an OpenAI-compatible vision prompt.
+-   **Florence-2 Large:** Bounding-box aware OCR, returning JSON (`items[] → text, bbox`) suitable for layout linking.
+-   **MinerU:** Table/formula specialist that emits Markdown/HTML-like structures for spreadsheets, rubrics, and math grids.
+-   **Nougat:** LLM-based LaTeX math transcriber that focuses on block equations and inline math recovery.
+
+The CLI automatically chunks the PDF (paragraph-aware), dispatches all backends concurrently, and writes per-backend JSON under `run_dir/outputs/<backend>/chunk-*.json` plus a `run_dir/council/manifest. A post-processing step now writes `run_dir/consensus/chunk-*.json` containing the ensembled snippet, artifact notes, and a content-type classification (text/math/code/table/figure_with_text/chem) so downstream modules know how to route each chunk. json` manifest. A post-processing step now writes `run_dir/consensus/chunk-*.json` containing the ensembled snippet, artifact notes, and a content-type classification (text/math/code/table/figure_with_text/chem) so downstream modules know how to route each chunk.  When GPU endpoints are unavailable, deterministic heuristics keep the pipeline moving, so downstream consensus/plan stages always have structured text. Example:
+
+```bash
+latexify-ingest-pdf \
+  --pdf data/sample.pdf \
+  --run-dir dev/runs/sample \
+  --internvl-endpoint http://127.0.0.1:8001/v1 \
+  --florence-endpoint http://127.0.0.1:8002/v1
+```
+
+Environment variables (`LATEXIFY_COUNCIL_API_KEY`, `OPENAI_API_KEY`) are used for authentication against local vLLM/llama.cpp servers that expose OpenAI-compatible routes.
+
+### Step 2: Judge Model (LLM Evaluator & Synthesizer)
+
+`latexify-judge-council` consumes the council outputs and produces `blocks_refined.jsonl`, the golden view consumed by the planner/RAG agents. For each chunk it:
+
+- Picks a **golden snippet** that fuses handwriting-friendly InternVL text with structured OCR (Florence/MinerU) and, when available, Nougat’s LaTeX math transcription.
+- Emits **artifact notes** (warnings about hallucinations, truncated spans, JSON noise, etc.) plus `flagged` markers so downstream stages can request re-OCR.
+- Computes a **relevance/consistency score** (0–1) describing how closely the winning snippet matches the other council members, and records per-backend outputs for provenance.
+
+When a llama.cpp GGUF model is provided (`--model-path`), the judge prompt (Qwen2.5‑72B sized) scores each chunk via a single JSON reply. Without the model, a deterministic heuristic selects the best backend, detects anomalies, and still emits all metadata. Example:
+
+```bash
+latexify-judge-council   --run-dir dev/runs/sample   --model-path models/Qwen2.5-72B-Instruct-Q4_K_M.gguf
+```
+
+The resulting `blocks_refined.jsonl` slots directly into `planner_scaffold.py` and the specialist routers.
+The `latexify-tex-assembler` CLI can accept `--golden-dir run_dir/golden_snippets` so the coder stage reuses the judged snippets verbatim while still backfilling any missing sections via heuristics.
+
+### Module 3: Judge Evaluation (Synthesis of Content)
+
+`latexify-judge-council` now reads the council outputs plus the structured consensus snippets from Step 2. A Qwen2.7B (llama.cpp) judge prompt merges every chunk into a single golden snippet while noting artifacts and per-backend provenance. Even without the LLM, a deterministic fallback cleans OCR, resolves conflicts, and routes math/tables/figures to specialized formatters (booktabs tables, figure environments with captions, verbatim code blocks, etc.). Each verdict is written to `blocks_refined.jsonl` and the rendered snippet lands in `run_dir/golden_snippets/<chunk>.tex`, ready for aggregation.
+
+- **Inputs:** council outputs under `run_dir/outputs/*` plus optional `run_dir/consensus/chunk-*.json`.
+- **Outputs:** refined `blocks_refined.jsonl`, figure/table-aware LaTeX snippets, and a manifest summarizing golden snippets.
+- **Content routing:** consensus `content_type` tags (text/math/table/code/figure_with_text/chem) automatically trigger the right formatter so downstream agents and preamble selection know which packages to load.
+
+### Orchestration & Automation (LangChain)
+
+`latexify-langchain-orchestrator` links the entire run together using LangChain runnables (when available) or a deterministic fallback when it is not installed. The orchestrator performs setup → layout planner → ingestion council → judge → auto-plan → TeX assembly, passing a shared state dict between stages. Example end-to-end run (sequential fallback):
+
+```bash
+latexify-langchain-orchestrator \
+  --pdf data/sample.pdf \
+  --title "Numerical Methods" \
+  --author "Ada Lovelace" \
+  --aggregate
+```
+
+Add `--langchain` to force LangChain’s `RunnableSequence`, or `--no-langchain` to pin the fallback runner. Outputs (layout plan, consensus, plan.auto.json, snippets) land in `build/` ready for aggregation/compilation.
+
+### Fallback & Resilience Strategies
+
+-   **Permissive OCR fallback:** `latexify-ingest-pdf` now accepts `--permissive`, which appends a lightweight `generic_ocr` backend that reuses raw PDF text whenever the vision backends fail. Each run emits `resilience_report.json` summarizing fallback hits, warning counts, and consensus recoveries so operators can quickly audit problematic chunks.
+-   **Consensus recovery:** the council merger automatically swaps placeholder snippets (e.g., empty math) with the longest meaningful backend output and records the action, ensuring every chunk delivers usable text to the judge.
+-   **Manifest visibility:** backend metadata (warnings, fallback reasons) are persisted alongside each `outputs/<backend>/chunk-*.json`, making it easy to trace why a fallback engaged and how to re-run with higher quality models.
+
+### LLM-Based QA & Validation (Pre-Compilation Check)
+
+-   After snippet generation, the orchestrator runs the QA preflight (disable with `--no-qa`). The checker scans snippets for TODO markers, auto-flagged chunks, and unbalanced environments, writing actionable findings plus auto-fixes under `build/qa/`.
+-   Package inference heuristics alert when snippets use domain macros (chemistry, siunitx, tikz) that are missing from the preamble, mirroring the design doc’s “LLM-based QA” guidance.
+-   Invoke the module directly when needed:
+
+```bash
+python -m latexify.pipeline.qa_validator \
+  --plan build/plan.auto.json \
+  --snippets build/snippets \
+  --attempt-compile  # optional latexmk pass
+```
+
+-   Supplying `--qa-compile` (or `--attempt-compile`) triggers a latexmk dry run; any “Undefined control sequence” entries surface in the QA report so the coder stage can retry with additional context before final compilation.
+
 ## Core Architecture
 
 The conversion process is a modular, multi-stage pipeline:
 
 1.  **Orchestration:** `scripts/pipeline.py` manages the end-to-end flow.
 2.  **Layout Analysis:** The `/pdf-document-layout-analysis/` submodule (using VGT/DiT models) and `scripts/ocr_ensemble.py` extract structured data (text, tables, figures) from the PDF.
-3.  **Agents & Prompts:** Core logic is driven by agents in `/scripts/` using prompts from `/tasks/`.
+3.  **Agents & Prompts:** Core logic is driven by agents in `/scripts/` using prompts from `/docs/tasks/`.
     * `choose_doc_class.py`: Selects the best LaTeX class (e.g., 'article', 'textbook') from `/kb/classes/`.
     * `planner_scaffold.py`: Creates a structural `plan.json` for the document (e.g., [TITLE, Q1, Q2, ...]).
     * `retrieval_agent.py`: Queries the LaTeX KB (`/kb/latex/`) for each item in the plan.
@@ -55,5 +159,5 @@ The conversion process is a modular, multi-stage pipeline:
     -   `/latex/`: A vector-indexed KB for general LaTeX commands, packages, and best practices.
     -   `/classes/`: Profiles and templates for different LaTeX document classes.
 -   `/dev/`: Development scripts, experimental backends, and test runs.
--   `/tasks/`: Markdown files defining the prompts and goals for different agents in the pipeline (e.g., planner, synthesizer).
+-   `/docs/tasks/`: Markdown files defining the prompts and goals for different agents in the pipeline (e.g., planner, synthesizer).
 -   `/build/`: Output directory for generated `.tex` files, logs, and other artifacts.

@@ -1,6 +1,7 @@
 README.txt
 pyproject.toml
 latexify/__init__.py
+latexify.egg-info/.directory
 latexify.egg-info/PKG-INFO
 latexify.egg-info/SOURCES.txt
 latexify.egg-info/dependency_links.txt
@@ -9,6 +10,7 @@ latexify.egg-info/top_level.txt
 latexify/agents/__init__.py
 latexify/agents/class_probe.py
 latexify/ingestion/__init__.py
+latexify/ingestion/ingest_pdf.py
 latexify/kb/__init__.py
 latexify/kb/build_index_bgem3.py
 latexify/kb/build_index_compat.py
@@ -18,10 +20,14 @@ latexify/kb/kb_paths.py
 latexify/kb/query_index.py
 latexify/pipeline/__init__.py
 latexify/pipeline/critic_agent.py
+latexify/pipeline/judge_model.py
+latexify/pipeline/langchain_orchestrator.py
+latexify/pipeline/layout_planner.py
 latexify/pipeline/model_backends.py
 latexify/pipeline/model_router.py
 latexify/pipeline/phase2_run_task.py
 latexify/pipeline/planner_scaffold.py
+latexify/pipeline/qa_validator.py
 latexify/pipeline/retrieval_bundle.py
 latexify/pipeline/specialist_router.py
 latexify/pipeline/synth_figure.py
@@ -31,6 +37,8 @@ latexify/pipeline/synth_latex.py
 latexify/pipeline/synth_shared.py
 latexify/pipeline/synth_table.py
 latexify/pipeline/synth_text.py
+latexify/pipeline/tex_assembler.py
+latexify/utils/paths.py
 latexify/utils/setup_classes.py
 tests/test_aggregator.py
 tests/test_aggregator_fallback.py
@@ -47,12 +55,18 @@ tests/test_class_probe_smoke.py
 tests/test_compile_loop.py
 tests/test_docclass_fallback.py
 tests/test_docclass_map.py
+tests/test_e2e_smoke.py
 tests/test_engine_select.py
+tests/test_ingestion_council.py
+tests/test_judge_model.py
 tests/test_kb_alias.py
+tests/test_langchain_orchestrator.py
 tests/test_latex_deps_check.py
+tests/test_layout_planner.py
 tests/test_lix_fixup.py
 tests/test_phase2_run_task.py
 tests/test_planner_scaffold.py
+tests/test_qa_validator.py
 tests/test_query_bundle.py
 tests/test_query_context_bundle.py
 tests/test_regen_chunks_symlink.py
@@ -62,3 +76,4 @@ tests/test_setup_classes.py
 tests/test_setup_classes_env.py
 tests/test_synth_latex.py
 tests/test_synth_sanitize.py
+tests/test_tex_assembler.py

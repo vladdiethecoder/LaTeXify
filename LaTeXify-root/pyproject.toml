@@ -27,7 +27,10 @@ latexify-phase2-run-task = "latexify.pipeline.phase2_run_task:main"
 latexify-setup-classes = "latexify.utils.setup_classes:main"
 latexify-latex-deps-check = "latexify.utils.latex_deps_check:main"
 latexify-ingest-pdf = "latexify.ingestion.ingest_pdf:main"
+latexify-judge-council = "latexify.pipeline.judge_model:main"
+latexify-layout-planner = "latexify.pipeline.layout_planner:main"
+latexify-tex-assembler = "latexify.pipeline.tex_assembler:main"
+latexify-langchain-orchestrator = "latexify.pipeline.langchain_orchestrator:main"
 
 [tool.setuptools.packages.find]
 include = ["latexify*"]
-
