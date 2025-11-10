@@ -1,0 +1,20 @@
+{
+  "chunk_id": "page0001-chunk001",
+  "text": "Question 1 (6 points) Part 1: Communication Problems Rewrite the following\nrelationships using function notation. The first part of the assignment consists\nof 5 questions that require precise communication of their solutions. They will\nrequire a good understanding of the material presented in this review, but your\nmark will be based on the presentation and communcation of your answers. Use the\nrubric provided to ensure you are meeting all of the expectations. Listen",
+  "content_type": "text",
+  "classification_confidence": 0.5,
+  "classification_explanation": "Defaulted to prose.",
+  "source_backend": "internvl",
+  "supporting_backends": [
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "ocr_outputs": {
+    "internvl": "Question 1 (6 points) Part 1: Communication Problems Rewrite the following\nrelationships using function notation. The first part of the assignment consists\nof 5 questions that require precise communication of their solutions. They will\nrequire a good understanding of the material presented in this review, but your\nmark will be based on the presentation and communcation of your answers. Use the\nrubric provided to ensure you are meeting all of the expectations. Listen",
+    "florence2": "{\"items\": [{\"text\": \"Question 1 (6 points)\\nPart 1: Communication Problems\\nRewrite the following relationships using function notation.\\nThe first part of the assignment consists of 5 questions that require precise communication\\nof their solutions. They will require a good understanding of the material presented in this\\nreview, but your mark will be based on the presentation and communcation of your\\nanswers. Use the rubric provided to ensure you are meeting all of the expectations.\\nListen\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+    "mineru": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+    "nougat": "\\[ \\text{No equations detected} \\]"
+  },
+  "assets": []
+}

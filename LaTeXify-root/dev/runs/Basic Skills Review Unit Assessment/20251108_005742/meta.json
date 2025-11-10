@@ -1,0 +1,17 @@
+{
+  "source_pdf": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/dev/inputs/Basic Skills Review Unit Assessment.pdf",
+  "page_count": 5,
+  "chunk_count": 4,
+  "assets_dir": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/assets",
+  "backends": [
+    "internvl",
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "consensus_dir": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/dev/runs/Basic Skills Review Unit Assessment/20251108_005742/consensus",
+  "resilience_report": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/dev/runs/Basic Skills Review Unit Assessment/20251108_005742/resilience_report.json",
+  "permissive_ocr": false,
+  "chunk_strategy": "semantic",
+  "figures_extracted": 0
+}

@@ -1,0 +1,11 @@
+{
+  "backend": "mineru",
+  "chunk_id": "page0003-chunk001",
+  "page_index": 2,
+  "text": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+  "confidence": 0.3,
+  "metadata": {
+    "columns": [],
+    "rows": 0
+  }
+}

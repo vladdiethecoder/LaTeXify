@@ -1,0 +1,11 @@
+{
+  "backend": "internvl",
+  "chunk_id": "page0008-chunk001",
+  "page_index": 7,
+  "text": "b) g(x) =f(x + 1)−3 The d = −1 (since x −d = x −(−1) =x + 1) indicates a\nhorizontal translation of1 unit to the left and thec = −3 indicates a vertical\ntranslation of3 units down. x′= x k + d = 1 1 + (−1) = 0 y′= a y+ c = 1(−2) +\n(−3) = −5 Therefore, the resulting point is(0, −5) . c) g(x) =−f(2x) The a = −1\nindicates a reflection in thex-axis and thek = 2indicates a horizontal\ncompression by a factor of1/2. x′= x k + d = 1 2 + 0 = 1 2 y′= a y+ c = (−1)(−2)",
+  "confidence": 0.35,
+  "metadata": {
+    "warning": "HF runner failed: Hugging Face runner failed (exit 1). command=/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/.venv/bin/python scripts/run_internvl_hf.py --model-dir models/ocr/internvl-3.5-14b --max-new-tokens 512 --prompt 'Page 8 chunk `page0008-chunk001`.\nDescribe the content faithfully, keeping math inline when possible.\nRaw text excerpt:\nb) g(x) =f(x + 1)−3\nThe d = −1 (since x −d = x −(−1) =x + 1) indicates a horizontal translation of1 unit to the left\nand thec = −3 indicates a vertical translation of3 units down.\nx′= x\nk + d\n= 1\n1 + (−1)\n= 0\ny′= a y+ c\n= 1(−2) + (−3)\n= −5\nTherefore, the resulting point is(0, −5) .\nc) g(x) =−f(2x)\nThe a = −1 indicates a reflection in thex-axis and thek = 2indicates a horizontal compression by\na factor of1/2.\nx′= x\nk + d\n= 1\n2 + 0\n= 1\n2\ny′= a y+ c\n= (−1)(−2) + 0\n= 2\nTherefore, the resulting point is\n(1\n2 , 2\n)\n.\n7' --device-map auto --max-memory cuda:0=21GiB --max-memory cuda:1=21GiB --max-memory cpu=128GiB --offload-folder /tmp/internvl-offload --dtype bfloat16 stdout= stderr=ur environment. Check out the instructions on the\ninstallation page of its repo: https://github.com/google/sentencepiece#installation and follow the ones\nthat match your environment. Please note that you may need to restart your runtime after installation.",
+    "runner": "hf"
+  }
+}

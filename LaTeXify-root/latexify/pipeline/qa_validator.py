@@ -8,8 +8,11 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .critic_agent import CriticAgent
+from .specialist_router import SpecialistDecision
+from .synth_shared import SpecialistPrompt
 from .tex_assembler import determine_packages, load_plan, parse_tasks
 
 PACKAGE_RULES: List[tuple[re.Pattern[str], str, str]] = [
@@ -20,6 +23,14 @@ PACKAGE_RULES: List[tuple[re.Pattern[str], str, str]] = [
 ]
 TODO_RX = re.compile(r"TODO|\\todo|\?\?\?", re.IGNORECASE)
 ENV_RX = re.compile(r"\\(begin|end)\{([A-Za-z*@0-9_-]+)\}")
+PACKAGE_LINE_RX = re.compile(r"\\usepackage(?:\[[^\]]+\])?\{([^}]+)\}")
+CHKTEX_LINE_RX = re.compile(r"^(Warning|Error)\s+(\d+)\s+in\s+.+?line\s+(\d+):\s*(.+)$")
+UNDEFINED_REF_RX = re.compile(r"Reference `([^']+)'\s+on page", re.IGNORECASE)
+MISSING_PKG_RX = re.compile(r"File `([^']+)\.(?:sty|cls)' not found", re.IGNORECASE)
+MATH_ERROR_RX = re.compile(
+    r"Missing \$ inserted|Math mode|Bad math environment delimiter|Extra alignment tab", re.IGNORECASE
+)
+CHK_TEX_BIN = shutil.which("chktex")
 
 
 @dataclass
@@ -45,7 +56,7 @@ def run_preflight(
     max_passes: int = 1,
     main_tex: Optional[Path] = None,
 ) -> Path:
-    plan = load_plan(plan_path)
+    plan_schema = load_plan(plan_path)
     qa_root = report_dir or (build_dir or plan_path.parent) / "qa"
     qa_root.mkdir(parents=True, exist_ok=True)
     snippets_dir = snippets_dir.resolve()
@@ -54,13 +65,14 @@ def run_preflight(
         snippets[path.stem] = path.read_text(encoding="utf-8")
     preamble_text = snippets.get("PREAMBLE", "")
     existing_packages = _extract_packages(preamble_text)
-    inferred_packages = determine_packages(plan.get("content_flags") or {}, snippets.values())
+    inferred_packages = determine_packages(plan_schema.content_flags, snippets.values())
     known_packages = _dedupe(existing_packages + inferred_packages)
     findings: List[Dict[str, Any]] = []
     suggestions: List[str] = []
     auto_fixes: List[Dict[str, Any]] = []
     fixes_dir = qa_root / "fixes"
     fixes_dir.mkdir(parents=True, exist_ok=True)
+    snippet_package_requests: Dict[str, List[str]] = {}
 
     for snippet_id, text in snippets.items():
         if snippet_id in {"PREAMBLE", "TITLE"}:
@@ -86,6 +98,8 @@ def run_preflight(
             )
         missing_pkgs = _detect_missing_packages(text, known_packages)
         suggestions.extend(missing_pkgs)
+        if missing_pkgs:
+            snippet_package_requests.setdefault(snippet_id, []).extend(missing_pkgs)
         env_issues = _detect_env_issues(text)
         if env_issues:
             findings.append(
@@ -101,16 +115,42 @@ def run_preflight(
                 fix_path = fixes_dir / f"{snippet_id}.fixed.tex"
                 fix_path.write_text(fixed, encoding="utf-8")
                 auto_fixes.append({"snippet": snippet_id, "path": str(fix_path)})
+        chktex_findings = _run_chktex(snippets_dir / f"{snippet_id}.tex", snippet_id)
+        findings.extend(chktex_findings)
 
     suggestions = _dedupe(suggestions)
+    preamble_path = snippets_dir / "PREAMBLE.tex"
+    suggestions = _apply_package_suggestions(
+        preamble_path,
+        suggestions,
+        snippet_package_requests,
+        snippets_dir,
+        fixes_dir,
+        auto_fixes,
+    )
 
     compile_summary = CompileSummary(False, False, "pdflatex", None, "compile skipped")
     compile_log_excerpt = ""
     if attempt_compile:
-        main_candidate = main_tex or _synthesize_main(plan, snippets_dir, qa_root)
+        main_candidate = main_tex or _synthesize_main(plan_schema, snippets_dir, qa_root)
         compile_summary, compile_log_excerpt = _attempt_compile(main_candidate, qa_root)
         if compile_log_excerpt:
-            findings.extend(_parse_compile_findings(compile_log_excerpt))
+            compile_findings, compile_missing = _parse_compile_findings(compile_log_excerpt)
+            findings.extend(compile_findings)
+            if compile_missing:
+                remaining_compile = _apply_package_suggestions(
+                    preamble_path,
+                    compile_missing,
+                    {},
+                    snippets_dir,
+                    fixes_dir,
+                    auto_fixes,
+                )
+                suggestions = _dedupe(suggestions + remaining_compile)
+        if attempt_compile and not compile_summary.ok:
+            critic_finding = _run_critic_recheck(plan_schema, snippets_dir, qa_root)
+            if critic_finding:
+                findings.append(critic_finding)
 
     report = {
         "created_at": _now_iso(),
@@ -196,6 +236,136 @@ def _auto_fix_environments(text: str, issues: List[Dict[str, Any]], max_passes: 
     return fixed
 
 
+def _extract_package_name(pkg_line: str) -> Optional[str]:
+    match = PACKAGE_LINE_RX.search(pkg_line)
+    if not match:
+        return None
+    name = match.group(1).strip()
+    if not name:
+        return None
+    return name
+
+
+def _ensure_preamble_packages(preamble_path: Path, packages: Sequence[str]) -> List[str]:
+    if not packages:
+        return []
+    inserted: List[str] = []
+    if preamble_path.exists():
+        preamble = preamble_path.read_text(encoding="utf-8")
+    else:
+        preamble = "\\documentclass{article}\n\\begin{document}\n"
+    lines = preamble.splitlines()
+    try:
+        doc_idx = next(idx for idx, line in enumerate(lines) if "\\begin{document}" in line)
+    except StopIteration:
+        doc_idx = len(lines)
+    for pkg in packages:
+        if not pkg or pkg in preamble:
+            continue
+        lines.insert(doc_idx, pkg)
+        inserted.append(pkg)
+        doc_idx += 1
+    if inserted:
+        preamble_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return inserted
+
+
+def _comment_snippet_packages(
+    snippet_path: Path,
+    packages: Sequence[str],
+) -> Tuple[bool, str]:
+    if not packages or not snippet_path.exists():
+        return False, ""
+    text = snippet_path.read_text(encoding="utf-8")
+    modified = text
+    changed = False
+    noted_pkgs: List[str] = []
+    for pkg_line in packages:
+        pkg_name = _extract_package_name(pkg_line)
+        if not pkg_name:
+            continue
+        pattern = re.compile(rf"(?m)^(\s*\\usepackage[^\n]*\{{\s*{re.escape(pkg_name)}\s*\}}[^\n]*?)$")
+        if not pattern.search(modified):
+            continue
+        modified = pattern.sub(r"% QA commented package: \1", modified, count=1)
+        changed = True
+        noted_pkgs.append(pkg_name)
+    if changed:
+        snippet_path.write_text(modified, encoding="utf-8")
+        return True, ", ".join(noted_pkgs)
+    return False, ""
+
+
+def _apply_package_suggestions(
+    preamble_path: Path,
+    packages: Sequence[str],
+    snippet_pkg_map: Dict[str, List[str]],
+    snippets_dir: Path,
+    fixes_dir: Path,
+    auto_fixes: List[Dict[str, Any]],
+) -> List[str]:
+    if not packages:
+        return []
+    inserted = _ensure_preamble_packages(preamble_path, packages)
+    if inserted:
+        auto_fixes.append(
+            {
+                "snippet": "PREAMBLE",
+                "path": str(preamble_path),
+                "detail": f"Inserted packages: {', '.join(inserted)}",
+            }
+        )
+    for snippet_id, pkg_lines in snippet_pkg_map.items():
+        snippet_path = snippets_dir / f"{snippet_id}.tex"
+        changed, noted = _comment_snippet_packages(snippet_path, pkg_lines)
+        if changed:
+            auto_fixes.append(
+                {
+                    "snippet": snippet_id,
+                    "path": str(snippet_path),
+                    "detail": f"Commented inline packages: {noted}",
+                }
+            )
+    remaining = [pkg for pkg in packages if pkg not in inserted]
+    return remaining
+
+
+def _run_chktex(snippet_path: Path, snippet_id: str) -> List[Dict[str, Any]]:
+    if not CHK_TEX_BIN or not snippet_path.exists():
+        return []
+    try:
+        proc = subprocess.run(
+            [CHK_TEX_BIN, "-q", str(snippet_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return []
+    findings: List[Dict[str, Any]] = []
+    output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    for line in output.splitlines():
+        match = CHKTEX_LINE_RX.match(line.strip())
+        if not match:
+            continue
+        level, code, line_no, message = match.groups()
+        severity = "error" if level.lower() == "error" else "warning"
+        issue_code = "chktex"
+        if "Missing $" in message or "Math" in message:
+            issue_code = "math_delimiter"
+        elif "undefined" in message.lower():
+            issue_code = "undefined_reference"
+        findings.append(
+            {
+                "snippet": snippet_id,
+                "severity": severity,
+                "code": issue_code,
+                "detail": f"chktex {level} {code} (line {line_no}): {message}",
+            }
+        )
+    return findings
+
+
 def _dedupe(values: Iterable[str]) -> List[str]:
     seen: set[str] = set()
     result: List[str] = []
@@ -204,6 +374,89 @@ def _dedupe(values: Iterable[str]) -> List[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _parse_compile_findings(log: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    findings: List[Dict[str, Any]] = []
+    missing_packages: List[str] = []
+    for match in MISSING_PKG_RX.finditer(log):
+        pkg = match.group(1).strip()
+        if not pkg:
+            continue
+        package_line = f"\\usepackage{{{pkg}}}"
+        missing_packages.append(package_line)
+        findings.append(
+            {
+                "snippet": "PREAMBLE",
+                "severity": "error",
+                "code": "missing_package",
+                "detail": f"Package '{pkg}' missing during compile; queued for insertion.",
+            }
+        )
+    for match in UNDEFINED_REF_RX.finditer(log):
+        ref = match.group(1)
+        findings.append(
+            {
+                "snippet": None,
+                "severity": "warning",
+                "code": "undefined_reference",
+                "detail": f"Reference '{ref}' reported as undefined.",
+            }
+        )
+    if MATH_ERROR_RX.search(log):
+        findings.append(
+            {
+                "snippet": None,
+                "severity": "error",
+                "code": "math_delimiter",
+                "detail": "Compile log reported mismatched math delimiters.",
+            }
+        )
+    return findings, missing_packages
+
+
+def _critic_decision() -> SpecialistDecision:
+    prompt = SpecialistPrompt(version="qa-validator", body="QA validator critic rerun")
+    return SpecialistDecision(
+        name="qa_validator",
+        handler=lambda bundle: ("", []),
+        reason="qa_validator_retry",
+        prompt=prompt,
+        metadata={},
+    )
+
+
+def _run_critic_recheck(plan_schema, snippets_dir: Path, qa_root: Path) -> Optional[Dict[str, Any]]:
+    try:
+        critic = CriticAgent(plan_schema.dict())
+    except Exception:
+        return None
+    decision = _critic_decision()
+    tasks = parse_tasks(plan_schema)
+    for task in tasks:
+        if task.task_id in {"PREAMBLE", "TITLE"}:
+            continue
+        snippet_path = snippets_dir / f"{task.task_id}.tex"
+        if not snippet_path.exists():
+            continue
+        snippet_text = snippet_path.read_text(encoding="utf-8")
+        result = critic.review(
+            snippet_text,
+            bundle={"task_id": task.task_id, "title": task.title},
+            decision=decision,
+            attempt=1,
+            feedback_history=[],
+        )
+        if not result.accepted:
+            log_path = qa_root / f"critic_{task.task_id}.txt"
+            log_path.write_text(result.feedback, encoding="utf-8")
+            return {
+                "snippet": task.task_id,
+                "severity": "error",
+                "code": "critic_feedback",
+                "detail": result.feedback,
+            }
+    return None
 
 
 def _synthesize_main(plan: Dict[str, Any], snippets_dir: Path, qa_root: Path) -> Path:
@@ -241,22 +494,6 @@ def _attempt_compile(main_tex: Path, qa_root: Path) -> tuple[CompileSummary, str
     log_path.write_text(log, encoding="utf-8")
     note = None if proc.returncode == 0 else "latexmk reported errors"
     return CompileSummary(True, proc.returncode == 0, engine, log_path, note), log
-
-
-def _parse_compile_findings(log: str) -> List[Dict[str, Any]]:
-    findings: List[Dict[str, Any]] = []
-    pattern = re.compile(r"Undefined control sequence\.\\\\([A-Za-z@]+)")
-    for match in pattern.finditer(log):
-        macro = match.group(1)
-        findings.append(
-            {
-                "snippet": None,
-                "severity": "error",
-                "code": "compile_error",
-                "detail": f"Undefined control sequence \\{macro} during latexmk run.",
-            }
-        )
-    return findings
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

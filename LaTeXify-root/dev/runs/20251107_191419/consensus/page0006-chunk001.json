@@ -1,0 +1,20 @@
+{
+  "chunk_id": "page0006-chunk001",
+  "text": "Domain & Range Domain : {x ∈R} Range : {y ∈R |y ≥−8} Restrictions Domain : None\nRange : y ≥−8 Increasing / De- creasing Decreasing : (−∞, 0) Increasing : (0,\n+∞) x-intercepts (roots) f(x) = 0 0 = 2x2 −8 8 2 = x2 x = ±2 ⇒(2, 0), (−2, 0)\ny-intercepts (x = 0) F(0) = 2(0)2 −8 = −8 ⇒(0, −8) Vertex / Notes x = −b 2a = −0\n2 ·2 = 0 y = 2(0)2 −8 = −8 ⇒(0, −8) (b) f(x) = +√x −2 Domain & Range Domain : {x\n∈R |x ≥2} Range : {y ∈R |y ≥0} Restrictions Domain : x ≥2 Range : y ≥0",
+  "content_type": "table",
+  "classification_confidence": 0.9,
+  "classification_explanation": "Detected tabular delimiters.",
+  "source_backend": "internvl",
+  "supporting_backends": [
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "ocr_outputs": {
+    "internvl": "Domain & Range Domain : {x ∈R} Range : {y ∈R |y ≥−8} Restrictions Domain : None\nRange : y ≥−8 Increasing / De- creasing Decreasing : (−∞, 0) Increasing : (0,\n+∞) x-intercepts (roots) f(x) = 0 0 = 2x2 −8 8 2 = x2 x = ±2 ⇒(2, 0), (−2, 0)\ny-intercepts (x = 0) F(0) = 2(0)2 −8 = −8 ⇒(0, −8) Vertex / Notes x = −b 2a = −0\n2 ·2 = 0 y = 2(0)2 −8 = −8 ⇒(0, −8) (b) f(x) = +√x −2 Domain & Range Domain : {x\n∈R |x ≥2} Range : {y ∈R |y ≥0} Restrictions Domain : x ≥2 Range : y ≥0",
+    "florence2": "{\"items\": [{\"text\": \"Domain &\\nRange\\nDomain : {x ∈R}\\nRange : {y ∈R |y ≥−8}\\nRestrictions Domain : None\\nRange : y ≥−8\\nIncreasing / De-\\ncreasing\\nDecreasing : (−∞, 0)\\nIncreasing : (0, +∞)\\nx-intercepts\\n(roots)\\nf(x) = 0\\n0 = 2x2 −8\\n8\\n2 = x2\\nx = ±2\\n⇒(2, 0), (−2, 0)\\ny-intercepts\\n(x = 0)\\nF(0) = 2(0)2 −8\\n= −8\\n⇒(0, −8)\\nVertex / Notes x = −b\\n2a\\n= −0\\n2 ·2\\n= 0\\ny = 2(0)2 −8\\n= −8\\n⇒(0, −8)\\n(b) f(x) = +√x −2\\nDomain &\\nRange\\nDomain : {x ∈R |x ≥2}\\nRange : {y ∈R |y ≥0}\\nRestrictions Domain : x ≥2\\nRange : y ≥0\\nIncreasing / De-\\ncreasing\\nDecreasing : N/A\\nIncreasing : [2, +∞)\\nx-intercepts\\n(roots)\\nf(x) = 0\\n0 = +\\n√\\nx −2\\nx = 2\\n⇒(2, 0)\\ny-intercepts\\n(x = 0)\\nF(0) = +\\n√\\n0 −2 ⇒N/A (none)\\nVertex / Notes No vertices.\\n5\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+    "mineru": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+    "nougat": "\\[= 0\n0 = 2x2 −8\n8\n2 = x2\nx = ±2\n⇒(2, 0), (−2, 0)\ny-i\\]\n\\[x = 0)\nF(0) = 2(0)2 −8\n= −8\n⇒(0, −8)\nVertex / Notes x = −b\n2a\n= −0\n2 ·2\n= 0\ny = 2(0)2 −8\n= −8\n⇒(0, −8)\n(b) f(x) = +√x −2\nDomai\\]\n\\[= 0\n0 = +\n√\nx −2\nx = 2\n⇒(2, 0)\ny-i\\]\n\\[x = 0)\nF(0) = +\n√\n0 −2 ⇒N/A (\\]"
+  },
+  "assets": []
+}

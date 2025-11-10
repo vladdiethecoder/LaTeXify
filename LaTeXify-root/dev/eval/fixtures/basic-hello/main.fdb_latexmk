@@ -1,0 +1,16 @@
+# Fdb version 4
+["pdflatex"] 1762553550.02464 "main.tex" "main.pdf" "main" 1762553550.11143 0
+  "/usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb" 1248133631 35752 024fb6c41858982481f6968b5fc26508 ""
+  "/usr/share/texlive/texmf-dist/tex/latex/base/article.cls" 1754438400 20144 d5ecf0a5140c8d8d8b72cbe86e320eff ""
+  "/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo" 1754438400 8448 c33a4e1cb35cee9b33c2b21033b73e39 ""
+  "/usr/share/texlive/texmf-dist/tex/latex/l3backend/l3backend-pdftex.def" 1673989714 30429 213676d4c7327a21d91ddaed900e7b81 ""
+  "/usr/share/texlive/texmf-dist/web2c/texmf.cnf" 1754438400 40900 887e0dc8cac988a9e9c574af364cf837 ""
+  "/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map" 1761924217.3845 535249 51d70cc029867fb230102dbf0256c595 ""
+  "/var/lib/texmf/web2c/pdftex/pdflatex.fmt" 1762055207 7571874 31af5916f447ce81a72e777dbb2c320a ""
+  "main.aux" 1762553550.09333 32 3985256e7290058c681f74d7a3565a19 "pdflatex"
+  "main.tex" 1762049077.9503 92 832cb8a8615349e50062d2e7232a6f63 ""
+  (generated)
+  "main.aux"
+  "main.log"
+  "main.pdf"
+  (rewritten before read)

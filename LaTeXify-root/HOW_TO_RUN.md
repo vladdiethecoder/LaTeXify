@@ -24,7 +24,7 @@ This repository is fully self-contained: all OCR, planning, judging, and LaTeX s
 Use the convenience launcher `run_local.py` to tie together layout planning, ingestion, judging, TeX assembly, and QA:
 
 ```bash
-python run_local.py --pdf "Basic Skills Review Unit Assessment.pdf" --title "Skills Review"
+python run_local.py --pdf "Basic Skills Review Unit USER.pdf" --title "Skills Review"
 ```
 
 Key flags:

@@ -49,9 +49,10 @@ def _safe_link_or_copy(src: Path, dst: Path) -> str:
         shutil.copy2(src, dst)
         return "copied"
 
-def stage_lix(lix_repo: Path, texmf_home: Path, log_path: Path) -> list[dict]:
+def stage_lix(lix_repo: Path, texmf_home: Path, log_path: Path) -> tuple[list[dict], list[str], Path]:
     """Stage lix.sty and any *.cls found under classes/ into TEXMFHOME."""
     staged: list[dict] = []
+    issues: list[str] = []
     # 1) lix.sty at repo root
     lix_sty = lix_repo / "lix.sty"
     if lix_sty.exists():
@@ -70,7 +71,9 @@ def stage_lix(lix_repo: Path, texmf_home: Path, log_path: Path) -> list[dict]:
             staged.append({"src": str(cls), "dst": str(dst), "action": action})
             _log(log_path, "staged", src=str(cls), dst=str(dst), action=action)
 
-    return staged
+    else:
+        issues.append("classes_dir_missing")
+    return staged, issues, texmf_home / "tex" / "latex" / "lix"
 
 def write_latexmkrc(out_dir: Path, texmf_home: Path, log_path: Path) -> Path:
     """

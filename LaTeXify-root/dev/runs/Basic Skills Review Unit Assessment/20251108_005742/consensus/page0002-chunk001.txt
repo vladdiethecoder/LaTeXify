@@ -1,0 +1,6 @@
+Question 2 (6 points) Question 3 (6 points) Find the inverses of each of the
+relations below algebraically. . a) An airplane needs to travel 400 km.
+Determine a function for the speed of the airplane, with respect to time. b) An
+ice cream cone is left sitting in the hot sun. Sarah notices that the ice cream
+melts and loses half of its volume every 5 minutes. If the starting volume was
+125 mL, determine a function for the volume, with respect to the amount of time

@@ -8,18 +8,49 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+from latexify.utils.logging import configure_logging, log_info, log_warning
+
 # Hard deps only when actually retrieving
 try:
     import faiss  # type: ignore
     _FAISS_OK = True
-except Exception:
+except Exception as exc:
+    log_warning("FAISS not available; similarity search disabled", error=str(exc))
     _FAISS_OK = False
 
 try:
     from sentence_transformers import SentenceTransformer  # type: ignore
     _SBERT_OK = True
-except Exception:
+except Exception as exc:
+    log_warning("SentenceTransformer not available; embeddings disabled", error=str(exc))
     _SBERT_OK = False
+
+_SBERT_CACHE: Dict[str, "SentenceTransformer"] = {}
+_FAISS_CACHE: Dict[str, Tuple[float, "faiss.Index"]] = {}
+
+
+def _get_sentence_transformer(model_name: str) -> "SentenceTransformer":
+    if not _SBERT_OK:
+        raise RuntimeError("sentence-transformers not installed in this environment.")
+    cached = _SBERT_CACHE.get(model_name)
+    if cached is not None:
+        return cached
+    model = SentenceTransformer(model_name)
+    _SBERT_CACHE[model_name] = model
+    return model
+
+
+def _get_faiss_index(path: Path) -> "faiss.Index":
+    if not _FAISS_OK:
+        raise RuntimeError("FAISS not installed in this environment.")
+    stat = path.stat()
+    key = str(path.resolve())
+    cached = _FAISS_CACHE.get(key)
+    if cached and math.isclose(cached[0], stat.st_mtime, rel_tol=0.0, abs_tol=1e-6):
+        return cached[1]
+    index = faiss.read_index(str(path))
+    _FAISS_CACHE[key] = (stat.st_mtime, index)
+    return index
 
 
 SEED = 42  # determinism for any sorting / selection
@@ -83,10 +114,12 @@ def load_consensus_bundle(
     if not bundle_path.is_absolute():
         bundle_path = (base_dir / bundle_path).resolve()
     if not bundle_path.exists():
+        log_warning("Consensus bundle not found", path=str(bundle_path))
         return {"meta": bundle_meta, "blocks": blocks}
     try:
         raw = json.loads(bundle_path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        log_warning("Failed to parse consensus bundle", path=str(bundle_path), error=str(exc))
         return {"meta": bundle_meta, "blocks": blocks}
     if isinstance(raw, dict):
         meta_obj = raw.get("meta")
@@ -217,15 +250,20 @@ def _read_jsonl(path: Path) -> List[Dict]:
         return []
     rows: List[Dict] = []
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for idx, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
             try:
                 rows.append(json.loads(line))
-            except Exception:
+            except Exception as exc:
+                log_warning(
+                    "Skipping malformed JSONL record",
+                    path=str(path),
+                    line=idx,
+                    error=str(exc),
+                )
                 # tolerate a bad line and keep going
-                pass
     return rows
 
 
@@ -282,7 +320,7 @@ def _load_corpus(run_dir: Path) -> Dict[str, Dict]:
 def _embed_query(q: str, model_name: str) -> Tuple[List[float], "SentenceTransformer"]:
     if not _SBERT_OK:
         raise RuntimeError("sentence-transformers not installed in this environment.")
-    model = SentenceTransformer(model_name)
+    model = _get_sentence_transformer(model_name)
     vec = model.encode([q], convert_to_numpy=True, normalize_embeddings=True)[0].astype("float32")
     return vec, model
 
@@ -302,7 +340,7 @@ def _search(run_dir: Path, query: str, top_k: int, source_name: str) -> List[Tup
 
     model_name = meta.get("model") or "sentence-transformers/all-MiniLM-L6-v2"
     qvec, _ = _embed_query(query, model_name)
-    index = faiss.read_index(str(idx_p))
+    index = _get_faiss_index(idx_p)
     D, I = index.search(qvec.reshape(1, -1), max(1, top_k * 5))  # over-fetch; we MMR later
     scores = D[0].tolist()
     # ids in meta["ids"] are aligned with order in the index build
@@ -571,8 +609,11 @@ def main():
     ap.add_argument("--k_assignment", type=int, default=6)
     ap.add_argument("--k_assessment", type=int, default=6)
     ap.add_argument("--out", type=Path, default=None, help="Optional path to save the bundle JSON")
+    ap.add_argument("--verbose", action="store_true", help="Enable debug logging")
     args = ap.parse_args()
 
+    configure_logging(verbose=args.verbose)
+    log_info("Starting retrieval bundle generation", task_id=args.task_id, plan=str(args.plan))
     plan = _load_plan(args.plan)
     tasks = {t["id"]: t for t in plan.get("tasks", [])}
     task = tasks.get(args.task_id)
@@ -612,9 +653,9 @@ def main():
     js = json.dumps(out_obj, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(js, encoding="utf-8")
-        print(f"Wrote {args.out}")
+        log_info("Wrote retrieval bundle", output=str(args.out), task_id=bundle.task_id)
     else:
-        print(js)
+        log_info("Generated retrieval bundle", bundle=out_obj)
 
 
 if __name__ == "__main__":

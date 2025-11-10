@@ -1,0 +1,28 @@
+{
+  "snippets": [
+    {
+      "block_id": "page0004-chunk001",
+      "path": "golden_snippets/page0004-chunk001.tex",
+      "content_type": "code",
+      "flagged": true
+    },
+    {
+      "block_id": "page0003-chunk001",
+      "path": "golden_snippets/page0003-chunk001.tex",
+      "content_type": "figure_with_text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0001-chunk001",
+      "path": "golden_snippets/page0001-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0002-chunk001",
+      "path": "golden_snippets/page0002-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    }
+  ]
+}

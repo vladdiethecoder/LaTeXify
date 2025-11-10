@@ -1,0 +1,23 @@
+# Example InternVL ingestion configuration (HF runner mode).
+mode: hf
+
+hf_runner:
+  # Tuned for dual RTX 3090s (24 GiB) with headroom for the OS/runtime.
+  script: scripts/run_internvl_hf.py
+  python: null  # default: current interpreter
+  model_dir: models/ocr/internvl-3.5-14b
+  max_new_tokens: 512
+  device_map: auto
+  gpus: "0,1"  # limit to two 3090s; unset to expose all GPUs
+  max_memory:
+    "cuda:0": 21GiB
+    "cuda:1": 21GiB
+    cpu: 128GiB
+  offload_folder: /tmp/internvl-offload
+  timeout_seconds: 240
+  retries: 2
+  extra_args:
+    - --dtype
+    - bfloat16
+  env:
+    HF_HUB_OFFLINE: "1"

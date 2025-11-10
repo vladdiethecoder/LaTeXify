@@ -1,0 +1,20 @@
+{
+  "chunk_id": "page0001-chunk001",
+  "text": "Basic Advanced Functions — Part 1: Communication Problems Your Name October 28,\n2025",
+  "content_type": "text",
+  "classification_confidence": 0.5,
+  "classification_explanation": "Defaulted to prose.",
+  "source_backend": "internvl",
+  "supporting_backends": [
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "ocr_outputs": {
+    "internvl": "Basic Advanced Functions — Part 1: Communication Problems Your Name October 28,\n2025",
+    "florence2": "{\"items\": [{\"text\": \"Basic Advanced Functions — Part 1: Communication Problems\\nYour Name\\nOctober 28, 2025\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+    "mineru": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+    "nougat": "\\[ \\text{No equations detected} \\]"
+  },
+  "assets": []
+}

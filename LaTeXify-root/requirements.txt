@@ -1,0 +1,1 @@
+.[dev,faiss,ocr,llama]

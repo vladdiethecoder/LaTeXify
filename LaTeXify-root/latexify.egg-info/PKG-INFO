@@ -5,159 +5,188 @@ Summary: LaTeX document processing and synthesis toolkit
 Author: LaTeXify Team
 License: MIT
 Requires-Python: >=3.9
-Description-Content-Type: text/plain
+Description-Content-Type: text/markdown
+Requires-Dist: pypdf>=3.9.0
+Requires-Dist: typer>=0.12.5
+Requires-Dist: pydantic>=2.7.0
+Provides-Extra: faiss
+Requires-Dist: faiss-cpu>=1.7.4; extra == "faiss"
+Provides-Extra: ocr
+Requires-Dist: easyocr>=1.7.1; extra == "ocr"
+Requires-Dist: pytesseract>=0.3.10; extra == "ocr"
+Requires-Dist: opencv-python>=4.8.0; extra == "ocr"
+Provides-Extra: llama
+Requires-Dist: llama-cpp-python>=0.2.90; extra == "llama"
+Provides-Extra: hf-runner
+Requires-Dist: transformers>=4.37.2; extra == "hf-runner"
+Requires-Dist: accelerate>=0.28.0; extra == "hf-runner"
+Requires-Dist: pillow>=10.3.0; extra == "hf-runner"
+Requires-Dist: torch>=2.1.0; extra == "hf-runner"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.2.0; extra == "dev"
+Requires-Dist: ruff>=0.6.3; extra == "dev"
+Requires-Dist: pre-commit>=3.7.0; extra == "dev"
+Requires-Dist: aiohttp>=3.9.5; extra == "dev"
+Requires-Dist: chktex>=1.7.9; python_version < "0" and extra == "dev"
 
 # LaTeXify
 
-## Project Overview
+LaTeXify is a modular, multi-agent pipeline that ingests PDFs (and other structured sources), plans the document structure, retrieves LaTeX knowledge, synthesizes snippets, and compiles a polished `.tex` + PDF deliverable. Each stage is implemented as a composable CLI so you can run the full pipeline or invoke individual agents.
 
-LaTeXify is an advanced document processing pipeline designed to convert input documents (such as PDFs) into high-quality, compilable LaTeX code. A multi-agent, Retrieval-Augmented Generation (RAG) pipeline to convert PDFs into compilable LaTeX. The system uses advanced layout analysis and a "prompt-as-code" framework to deconstruct, plan, and synthesize documents. It leverages a combination of Optical Character Recognition (OCR), Retrieval-Augmented Generation (RAG), and intelligent LaTeX-aware agents to manage the complex task of document synthesis.
+## Quick Links
+- `docs/SCHEMAS.md` – JSON schemas for plans, consensus blocks, and layout blueprints.
+- `docs/tasks/` – prompts and task specifications for planner/retrieval/synthesis agents.
+- `configs/` – Hydra-compatible config files (e.g., specialist router weights).
+- `docs/HF_RUNNER.md` – Hugging Face Accelerate runner install/offload guide for InternVL.
+- `HOW_TO_INSTALL.md` / `HOW_TO_RUN.md` – deep dives into environment provisioning and sample runs.
 
-### Quickstart
+## Installation
+1. Create an isolated environment and install the project directly from the pyproject definition:
+   ```bash
+   python -m venv .venv && source .venv/bin/activate
+   pip install -e '.[dev,ocr,llama]'
+   ```
+   - Use `pip install -e .` for the core pipeline only.
+   - Extras: `ocr` pulls GPU/vision dependencies, `hf-runner` adds Transformers/Accelerate/Pillow/Torch for the InternVL HF runner, `llama` enables local LlamaCpp synthesis, `dev` installs pytest/ruff/etc.
+2. Ensure a full TeX toolchain (`latexmk`, `pdflatex`, `chktex`) is available on your PATH. On macOS: `brew install --cask mactex && brew install chktex`; on Linux: install via TeXLive (`tlmgr install latexmk chktex`).
+3. Optional models/backends:
+   - OCR backends expect credentials or local endpoints; see `HOW_TO_INSTALL.md`.
+   - Retrieval requires the KB artifacts under `kb/`; use `python -m latexify.pipeline.build_latex_kb` after editing KB JSONL files.
+   - Hugging Face InternVL runner: after downloading weights, run `pip install -e '.[hf-runner]'` and follow `docs/HF_RUNNER.md` for device_map/`max_memory` guidance plus offload notes.
 
+### Vision OCR Endpoints
+High-quality ingestion relies on InternVL and Florence-2 chat endpoints. Configure them via environment variables or CLI flags:
 ```bash
-python -m venv venv && source venv/bin/activate && pip install -e .
-python run_local.py --pdf "Basic Skills Review Unit Assessment.pdf" --title "Skills Review"
+export LATEXIFY_INTERNVL_ENDPOINT="http://localhost:8080/v1"
+export LATEXIFY_FLORENCE_ENDPOINT="http://localhost:8081/v1"
+```
+Both endpoints must implement the OpenAI-compatible `/v1/chat/completions` contract and accept messages with text + image parts. If you are serving the bundled weights locally via vLLM, a typical launch is:
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model $MODELS/ocr/internvl-3.5-14b \
+  --port 8080
+
+python -m vllm.entrypoints.openai.api_server \
+  --model $MODELS/ocr/florence-2-large \
+  --port 8081
+```
+You can also plug in hosted endpoints from Azure/OpenAI-compatible providers—just point the env vars at their `/v1` base URL. CLI entry points accept `--internvl-endpoint` / `--florence-endpoint` to override per-run, and `--allow-fallback` forces the older heuristic extractor if you need to run without vision models.
+
+### InternVL HF Runner Mode
+If you want to keep InternVL inference in a standalone Accelerate process (device_map auto, CPU offload, process isolation), switch the ingestion council to “HF” mode:
+```bash
+pip install -e '.[hf-runner]'
+python scripts/install_models.py internvl
+INTERNVL_MODE=hf \
+INTERNVL_HF_RUNNER=scripts/run_internvl_hf.py \
+INTERNVL_HF_MAX_MEMORY="cuda:0=21GiB,cuda:1=21GiB,cpu=16GiB" \
+INTERNVL_HF_GPUS="0,1" \
+python -m latexify.ingestion.ingest_pdf --pdf inputs/doc.pdf --run-dir dev/runs/doc
+```
+- Use `configs/ingestion/internvl.yaml` (or set `INTERNVL_CONFIG`) to store persistent settings such as runner script path, `device_map`, `max_memory`, offload folder, timeout, and retry policy. See `docs/HF_RUNNER.md` for a full reference.
+- To revert to the legacy vLLM HTTP path, either unset `INTERNVL_MODE` or set it to `vllm`; the ingestion adapter automatically falls back when HF settings are disabled.
+
+### One-Click Environment Setup
+Prefer an opinionated bootstrapper? Run `scripts/setup_one_click.py` to install Python dependencies, download the default models, launch local vLLM servers for InternVL/Florence, run the HF runner dry-run, and execute both a pipeline smoke test (`run_local.py`) plus selected pytest suites. Example:
+```bash
+python scripts/setup_one_click.py \
+  --pdf "Basic Skills Review Unit USER.pdf" \
+  --internvl-port 8090 --florence-port 8091
+```
+- Pass `--skip-vllm` (or `--skip-pytest`, `--skip-smoke`, etc.) if you are on a CPU-only host.
+- The script auto-detects/install a supported Python (3.10–3.13). If you launch it from Python 3.14, it will re-exec under `python3.12`/`python3.13` when available (override via `--python-bin`). It also creates/uses a `.venv` (change via `--venv-path`), writes logs under `build/setup_logs/`, and tears down background processes on exit.
+
+## Quickstart CLI
+- Run the full ingestion→plan→synthesis→aggregation line in one step:
+  ```bash
+  latexify run inputs/doc.pdf --out-dir build --title "My Lesson"
+  ```
+  This command creates `build/runs/<doc-stem>/`, extracts OCR (including figures/tables), auto-generates a plan from the judge consensus, writes snippets, runs QA, and compiles `main.tex`/`main.pdf`.
+- Still need individual stages? The Typer gateway lets you forward arguments: e.g. `latexify ingest -- --pdf doc.pdf --run-dir dev/runs/doc`.
+- Dev sandbox runner for bundled fixtures (`dev/inputs/*.pdf`):
+  ```bash
+  python run_local.py --pdf all --title "Skills Review"
+  ```
+  Processes every PDF under `dev/inputs/` (rubric/assessment/user responses) sequentially, placing per-file outputs under `dev/runs/<stem>/` and `build/<stem>/`.
+  If OCR endpoints are not configured the script will warn and temporarily enable the heuristic fallback so the run still completes; export the endpoint env vars above for best quality. `run_local.py` automatically re-executes itself inside the project virtualenv (defaults to `.venv`, override via `LATEXIFY_VENV_PATH`) and ensures a supported Python (3.10–3.13) so you always use the same dependency stack prepared by `setup_one_click.py`. Set `LATEXIFY_PYTHON_BIN=/usr/bin/python3.12` if you need to force a particular interpreter.
+
+### Fast Start Checklist
+1. `python -m venv .venv && source .venv/bin/activate`
+2. `pip install -e '.[ocr]'` (add `,llama` if you need local LlamaCpp) and ensure `latexmk` + `chktex` are installed from TeX Live.
+3. Export `LATEXIFY_INTERNVL_ENDPOINT` & `LATEXIFY_FLORENCE_ENDPOINT` or pass `--internvl-endpoint/--florence-endpoint`.
+4. Run `python run_local.py --pdf all --title "Skills Review"` to process every sample PDF and generate textbook-style PDFs under `build/<stem>/`.
+
+## Pipeline Stages & CLI Entry Points
+| Stage | Description | Primary Module / CLI |
+| --- | --- | --- |
+| Layout Blueprint | Converts rough notes / sample pages into `layout_plan.json` (doc class hints, sections, figure slots). | `python -m latexify.pipeline.layout_planner --text-file draft.txt --out build/layout_plan.json`
+| Ingestion Council | Runs pdf chunking + multi-backend OCR (`InternVL`, `Florence`, `MinerU`, `Nougat`) and emits consensus snippets + assets. | `python -m latexify.ingestion.ingest_pdf --pdf input.pdf --run-dir dev/runs/sample`
+| Planner Scaffold | Builds the canonical `plan.json` (tasks, ordering, asset links) using OCR consensus + layout hints. | `python -m latexify.pipeline.planner_scaffold --plan build/plan.json --layout build/layout_plan.json`
+| Retrieval Bundles | Enriches each plan task with KB context (packages, examples) stored under `bundles/`. | `python -m latexify.pipeline.retrieval_bundle --plan build/plan.json --out build/bundles`
+| Specialist Synthesis | Routes every bundle to the right specialist (text/table/math/figure) and generates snippets+metadata. | `python -m latexify.pipeline.synth_latex --bundles build/bundles --plan build/plan.json --out build/snippets`
+| QA & Validator | Static + compile-time QA (`chktex`, env fixes, critic retries) before aggregation. | `python -m latexify.pipeline.qa_validator --plan build/plan.json --snippets build/snippets --attempt-compile`
+| Aggregation & Compile | Writes `main.tex`, copies assets, and runs `latexmk` / auto-fix loop to produce the PDF. | `python scripts/pipeline.py --seed 1337` or `python -m latexify.pipeline.aggregator ...`
+
+You can run everything via `scripts/pipeline.py` (which chains planner → retrieval → synthesis → aggregation) or call each stage independently for debugging.
+
+## Configuration via Hydra (`configs/`)
+We use Hydra-like conventions for tunable components. Configuration files live under `configs/` (e.g., `configs/router.yaml` for the specialist router). To override values:
+```bash
+python -m latexify.pipeline.synth_latex --config-dir configs --config-name router \
+  router.weights.figure=1.2 router.tag_overrides.task_ids.FIGX=figure
+```
+Common configuration surfaces:
+- **Router weights:** adjust specialist biasing without editing code.
+- **Planner/synthesis flags:** pass `hydra.run.dir` overrides when running experimentation via Hydra.
+- **Model endpoints:** Several agents honour environment variables (e.g., `INTERNVL_ENDPOINT`) plus Hydra overrides.
+
+## JSON Schemas & Artifacts
+All cross-stage payloads conform to the schemas documented in `docs/SCHEMAS.md`:
+- `PlanSchema` (`build/plan.json`)
+- `ConsensusBlockSchema` (`run_dir/consensus/*.jsonl`)
+- `LayoutBlueprintSchema` (planner output)
+When editing agents, validate against these schemas (PyDantic models live in `latexify/models/schemas.py`).
+
+## Repository Layout
+```
+latexify/
+  ingestion/           # OCR council + chunkers + orchestrator
+  pipeline/            # Planner, retrieval, synthesis, QA, aggregator
+  assembly/            # Fallback LaTeX snippet renderers & utilities
+  utils/               # Logging, doc-class helpers, dependency checks
+configs/               # Hydra YAML files
+kb/                    # Knowledge-base inputs & build logs
+build/                 # Generated plans/snippets/artifacts (gitignored)
+docs/                  # Developer notes, schemas, prompt specs
+dev/                   # Fixtures, sample runs, evaluation helpers
+tests/                 # Pytest suites covering ingestion, planner, QA, etc.
 ```
 
-See `HOW_TO_RUN.md` for runtime flags and `HOW_TO_INSTALL.md` for model provisioning details.
+## Usage Examples
+1. **Single-command end-to-end run:**
+   ```bash
+   latexify run inputs/doc.pdf --out-dir build --doc-class lix_textbook
+   ```
+2. **Manual stage-by-stage (advanced debugging):**
+   ```bash
+   python -m latexify.ingestion.ingest_pdf --pdf inputs/doc.pdf --run-dir dev/runs/doc
+   python -m latexify.pipeline.planner_scaffold --plan build/plan.json --layout dev/runs/doc/consensus/manifest.json
+   python -m latexify.pipeline.synth_latex --plan build/plan.json --bundles build/bundles --out build/snippets
+   python -m latexify.pipeline.aggregator --plan build/plan.json --snippets build/snippets --out build --compile
+   ```
+3. **Legacy scripts orchestrator:** `python scripts/pipeline.py --seed 4242`
+4. **QA-only pass on existing snippets:**
+   ```bash
+   python -m latexify.pipeline.qa_validator --plan build/plan.json --snippets build/snippets --attempt-compile
+   ```
 
-The system is built around a multi-stage pipeline that includes (see `HOW_TO_RUN.md` for a hands-on walkthrough):
-1.  **Ingestion & OCR:** Processes input files (e.g., PDFs) and extracts text and layout information using an ensemble of OCR backends.
-2.  **Chunking & Indexing:** Intelligently chunks the extracted content and builds a searchable vector index.
-3.  **Document Planning:** Analyzes the document content to select an appropriate LaTeX document class (e.g., article, textbook, thesis) and plans the overall structure.
-4.  **Knowledge Retrieval:** Queries a dedicated LaTeX knowledge base (KB) to retrieve necessary packages, commands, and environment templates.
-5.  **LaTeX Synthesis:** Generates the final `.tex` file snippet by snippet, assembling the preamble, title, body content, and document-ending commands.
-6.  **Compilation & Post-processing:** Compiles the generated LaTeX code and performs any necessary fix-ups to ensure a valid PDF output.
+## Testing & Linting
+- Run the full suite: `pytest -q`. Targeted modules live under `tests/` (e.g., `tests/test_tex_assembler.py`).
+- Static QA depends on `chktex`; install it to enable validator tests.
+- Optional: run `ruff check .` (if you installed the `dev` extra) before submitting patches.
 
-### Layout Planner (Step 0)
-
-`latexify-layout-planner` primes the pipeline by producing an aesthetic layout blueprint from rough notes or sketches. The CLI can ingest plaintext (`--text` / `--text-file`) and optional draft screenshots (`--image`). When the local vLLM/OpenAI-compatible endpoint exposing **Qwen2.5-VL-32B-Instruct** is online, the planner sends a structured prompt guiding the model to emit JSON describing page format, typographic hierarchy, section ordering, and figure/table placements. The blueprint now includes `content_flags` (e.g., `hasFigures`, `hasMath`, `hasCode`), a `doc_class_hint` (candidate LiX class + confidence) and a `chunks` outline so downstream agents can immediately route tasks to specialists and doc-class selectors. If the endpoint is unavailable, a deterministic heuristic fallback still emits a scaffolded plan so downstream agents retain context. Example:
-
-```bash
-python -m latexify.pipeline.layout_planner \
-  --text-file inputs/draft.txt \
-  --image inputs/draft-page-1.png \
-  --out build/layout_plan.json \
-  --text-out build/layout_plan.txt
-```
-
-The resulting JSON and plaintext summary live in `build/` and can be fed into later steps (class selection, synthesis prompts, or the retrieval bundle) to keep the end-to-end run consistent with the intended visual design.
-
-### Step 1: Ingestion Council (OCR + Parsing)
-
-`latexify-ingest-pdf` replaces the legacy fallback extractor with a four-model "council" that produces complementary views of every layout chunk:
-
--   **InternVL 3.5-14B (vLLM endpoint):** General handwriting + layout summaries via an OpenAI-compatible vision prompt.
--   **Florence-2 Large:** Bounding-box aware OCR, returning JSON (`items[] → text, bbox`) suitable for layout linking.
--   **MinerU:** Table/formula specialist that emits Markdown/HTML-like structures for spreadsheets, rubrics, and math grids.
--   **Nougat:** LLM-based LaTeX math transcriber that focuses on block equations and inline math recovery.
-
-The CLI automatically chunks the PDF (paragraph-aware), dispatches all backends concurrently, and writes per-backend JSON under `run_dir/outputs/<backend>/chunk-*.json` plus a `run_dir/council/manifest. A post-processing step now writes `run_dir/consensus/chunk-*.json` containing the ensembled snippet, artifact notes, and a content-type classification (text/math/code/table/figure_with_text/chem) so downstream modules know how to route each chunk. json` manifest. A post-processing step now writes `run_dir/consensus/chunk-*.json` containing the ensembled snippet, artifact notes, and a content-type classification (text/math/code/table/figure_with_text/chem) so downstream modules know how to route each chunk.  When GPU endpoints are unavailable, deterministic heuristics keep the pipeline moving, so downstream consensus/plan stages always have structured text. Example:
-
-```bash
-latexify-ingest-pdf \
-  --pdf data/sample.pdf \
-  --run-dir dev/runs/sample \
-  --internvl-endpoint http://127.0.0.1:8001/v1 \
-  --florence-endpoint http://127.0.0.1:8002/v1
-```
-
-Environment variables (`LATEXIFY_COUNCIL_API_KEY`, `OPENAI_API_KEY`) are used for authentication against local vLLM/llama.cpp servers that expose OpenAI-compatible routes.
-
-### Step 2: Judge Model (LLM Evaluator & Synthesizer)
-
-`latexify-judge-council` consumes the council outputs and produces `blocks_refined.jsonl`, the golden view consumed by the planner/RAG agents. For each chunk it:
-
-- Picks a **golden snippet** that fuses handwriting-friendly InternVL text with structured OCR (Florence/MinerU) and, when available, Nougat’s LaTeX math transcription.
-- Emits **artifact notes** (warnings about hallucinations, truncated spans, JSON noise, etc.) plus `flagged` markers so downstream stages can request re-OCR.
-- Computes a **relevance/consistency score** (0–1) describing how closely the winning snippet matches the other council members, and records per-backend outputs for provenance.
-
-When a llama.cpp GGUF model is provided (`--model-path`), the judge prompt (Qwen2.5‑72B sized) scores each chunk via a single JSON reply. Without the model, a deterministic heuristic selects the best backend, detects anomalies, and still emits all metadata. Example:
-
-```bash
-latexify-judge-council   --run-dir dev/runs/sample   --model-path models/Qwen2.5-72B-Instruct-Q4_K_M.gguf
-```
-
-The resulting `blocks_refined.jsonl` slots directly into `planner_scaffold.py` and the specialist routers.
-The `latexify-tex-assembler` CLI can accept `--golden-dir run_dir/golden_snippets` so the coder stage reuses the judged snippets verbatim while still backfilling any missing sections via heuristics.
-
-### Module 3: Judge Evaluation (Synthesis of Content)
-
-`latexify-judge-council` now reads the council outputs plus the structured consensus snippets from Step 2. A Qwen2.7B (llama.cpp) judge prompt merges every chunk into a single golden snippet while noting artifacts and per-backend provenance. Even without the LLM, a deterministic fallback cleans OCR, resolves conflicts, and routes math/tables/figures to specialized formatters (booktabs tables, figure environments with captions, verbatim code blocks, etc.). Each verdict is written to `blocks_refined.jsonl` and the rendered snippet lands in `run_dir/golden_snippets/<chunk>.tex`, ready for aggregation.
-
-- **Inputs:** council outputs under `run_dir/outputs/*` plus optional `run_dir/consensus/chunk-*.json`.
-- **Outputs:** refined `blocks_refined.jsonl`, figure/table-aware LaTeX snippets, and a manifest summarizing golden snippets.
-- **Content routing:** consensus `content_type` tags (text/math/table/code/figure_with_text/chem) automatically trigger the right formatter so downstream agents and preamble selection know which packages to load.
-
-### Orchestration & Automation (LangChain)
-
-`latexify-langchain-orchestrator` links the entire run together using LangChain runnables (when available) or a deterministic fallback when it is not installed. The orchestrator performs setup → layout planner → ingestion council → judge → auto-plan → TeX assembly, passing a shared state dict between stages. Example end-to-end run (sequential fallback):
-
-```bash
-latexify-langchain-orchestrator \
-  --pdf data/sample.pdf \
-  --title "Numerical Methods" \
-  --author "Ada Lovelace" \
-  --aggregate
-```
-
-Add `--langchain` to force LangChain’s `RunnableSequence`, or `--no-langchain` to pin the fallback runner. Outputs (layout plan, consensus, plan.auto.json, snippets) land in `build/` ready for aggregation/compilation.
-
-### Fallback & Resilience Strategies
-
--   **Permissive OCR fallback:** `latexify-ingest-pdf` now accepts `--permissive`, which appends a lightweight `generic_ocr` backend that reuses raw PDF text whenever the vision backends fail. Each run emits `resilience_report.json` summarizing fallback hits, warning counts, and consensus recoveries so operators can quickly audit problematic chunks.
--   **Consensus recovery:** the council merger automatically swaps placeholder snippets (e.g., empty math) with the longest meaningful backend output and records the action, ensuring every chunk delivers usable text to the judge.
--   **Manifest visibility:** backend metadata (warnings, fallback reasons) are persisted alongside each `outputs/<backend>/chunk-*.json`, making it easy to trace why a fallback engaged and how to re-run with higher quality models.
-
-### LLM-Based QA & Validation (Pre-Compilation Check)
-
--   After snippet generation, the orchestrator runs the QA preflight (disable with `--no-qa`). The checker scans snippets for TODO markers, auto-flagged chunks, and unbalanced environments, writing actionable findings plus auto-fixes under `build/qa/`.
--   Package inference heuristics alert when snippets use domain macros (chemistry, siunitx, tikz) that are missing from the preamble, mirroring the design doc’s “LLM-based QA” guidance.
--   Invoke the module directly when needed:
-
-```bash
-python -m latexify.pipeline.qa_validator \
-  --plan build/plan.auto.json \
-  --snippets build/snippets \
-  --attempt-compile  # optional latexmk pass
-```
-
--   Supplying `--qa-compile` (or `--attempt-compile`) triggers a latexmk dry run; any “Undefined control sequence” entries surface in the QA report so the coder stage can retry with additional context before final compilation.
-
-## Core Architecture
-
-The conversion process is a modular, multi-stage pipeline:
-
-1.  **Orchestration:** `scripts/pipeline.py` manages the end-to-end flow.
-2.  **Layout Analysis:** The `/pdf-document-layout-analysis/` submodule (using VGT/DiT models) and `scripts/ocr_ensemble.py` extract structured data (text, tables, figures) from the PDF.
-3.  **Agents & Prompts:** Core logic is driven by agents in `/scripts/` using prompts from `/docs/tasks/`.
-    * `choose_doc_class.py`: Selects the best LaTeX class (e.g., 'article', 'textbook') from `/kb/classes/`.
-    * `planner_scaffold.py`: Creates a structural `plan.json` for the document (e.g., [TITLE, Q1, Q2, ...]).
-    * `retrieval_agent.py`: Queries the LaTeX KB (`/kb/latex/`) for each item in the plan.
-    * `synth_latex.py`: Generates a `.tex` snippet for each plan item using its specific data bundle.
-    * `aggregator.py`: Assembles all snippets from `/build/snippets/` into the final `build/main.tex`.
-4.  **Data Flow:**
-    * `/kb/`: Source of truth for RAG (LaTeX commands, class profiles).
-    * `/bundles/`: Data packets (OCR + RAG context) for the Synthesis agent.
-    * `/build/`: Output directory for generated snippets, `plan.json`, and the final `main.tex`.
-5.  **Evaluation:**
-    * `/dev/runs/`: Contains end-to-end test runs on various document types (e.g., `assignment_e2e`).
-    * `/dev/eval/metrics.py`: Script for scoring output quality.
-    * `/tests/`: Pytest suite for core components.
-
-## Key Components
-
--   `/scripts/`: Core Python scripts driving the pipeline.
-    -   `pipeline.py`: Main orchestration script.
-    -   `ingest_pdf.py`, `ocr_ensemble.py`: Handles file ingestion and OCR.
-    -   `build_chunks.py`, `build_index.py`: Manages content chunking and vector store creation.
-    -   `choose_doc_class.py`: Selects the LaTeX document class.
-    -   `retrieval_agent.py`, `query_index.py`: Manages retrieval from the KBs.
-    -   `synth_latex.py`: The final LaTeX generation agent.
--   `/kb/`: Knowledge Bases
-    -   `/latex/`: A vector-indexed KB for general LaTeX commands, packages, and best practices.
-    -   `/classes/`: Profiles and templates for different LaTeX document classes.
--   `/dev/`: Development scripts, experimental backends, and test runs.
--   `/docs/tasks/`: Markdown files defining the prompts and goals for different agents in the pipeline (e.g., planner, synthesizer).
--   `/build/`: Output directory for generated `.tex` files, logs, and other artifacts.
+## Support & Troubleshooting
+- `docs/DEV_NOTES.md` – current developer road map and architectural notes.
+- `docs/SCHEMAS.md` – keep your agent outputs compliant.
+- `evidence/` – QA/preflight logs from previous runs.
+- File an issue or PR with logs (`build/qa/preflight-compile.log`) when reporting problems.

@@ -8,10 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+try:
+    import yaml
+except Exception:  # pragma: no cover - pyyaml optional
+    yaml = None
+
 from . import synth_figure, synth_figure_placeholder, synth_formula, synth_table, synth_text
 from .model_backends import LlamaCppBackend, LlamaCppConfig
 from .synth_shared import SpecialistPrompt, load_specialist_prompt
-from ..utils.paths import tasks_root
+from ..utils.paths import repo_root, tasks_root
+from ..utils.logging import log_info, log_warning
 
 
 _ROUTER_PROMPT_CACHE: Optional[SpecialistPrompt] = None
@@ -83,11 +89,14 @@ class SpecialistRouter:
     }
     ROUTER_MODEL_ENV = "LATEXIFY_ROUTER_MODEL"
 
+    CONFIG_ENV = "LATEXIFY_ROUTER_CONFIG"
+
     def __init__(
         self,
         plan: Dict | None = None,
         *,
         model_client: Optional[Callable[[str], str]] = None,
+        config_path: Optional[Path | str] = None,
     ):
         self._synthesis_prompt = load_specialist_prompt()
         self._router_prompt = load_router_prompt()
@@ -100,6 +109,9 @@ class SpecialistRouter:
                 if task_id is None:
                     continue
                 self._plan_lookup[str(task_id)] = self._normalize_metadata(task)
+        self._config = self._load_router_config(config_path)
+        self._weights = {self._normalize_tag(k) or k: float(v) for k, v in (self._config.get("weights", {}) or {}).items() if isinstance(v, (int, float))}
+        self._tag_overrides = self._config.get("tag_overrides", {}) or {}
         self._model_client, self._router_model_name = self._resolve_model_client(model_client)
         self._last_classification_source = "heuristic"
         self._last_raw_response = ""
@@ -116,7 +128,12 @@ class SpecialistRouter:
             try:
                 raw_response = self._model_client(prompt) or ""
                 tag = self._normalize_tag(raw_response)
-            except Exception:
+            except Exception as exc:
+                log_warning(
+                    "Router model invocation failed",
+                    error=str(exc),
+                    task_id=task_bundle.get("task_id"),
+                )
                 raw_response = ""
                 tag = None
         if not tag:
@@ -139,7 +156,13 @@ class SpecialistRouter:
             plan_meta = {**self._plan_lookup[task_id], **plan_meta}
         tags = self._collect_tags(bundle, plan_meta)
         router_payload = {"bundle": bundle, "plan": plan_meta, "tags": tags}
-        tag = self.classify(router_payload)
+        override_tag = self._override_tag(task_id, plan_meta, bundle)
+        if override_tag:
+            tag = override_tag
+            self._last_classification_source = "override"
+            self._last_raw_response = ""
+        else:
+            tag = self.classify(router_payload)
         name, handler = self._resolve_specialist(tag)
         metadata = {
             "prompt_version": self._synthesis_prompt.version,
@@ -154,6 +177,13 @@ class SpecialistRouter:
         if self._last_raw_response:
             metadata["router_raw_response"] = self._last_raw_response
         reason = f"router:{self._last_classification_source}:{name}"
+        log_info(
+            "router decision",
+            task_id=task_id,
+            decision=name,
+            tags="|".join(tags),
+            source=self._last_classification_source,
+        )
         return SpecialistDecision(
             name=name,
             handler=handler,
@@ -200,6 +230,49 @@ class SpecialistRouter:
 
         return _client, model_path.name or str(model_path)
 
+    def _load_router_config(self, config_override: Optional[Path | str]) -> Dict[str, Dict[str, float]]:
+        path = Path(config_override).expanduser() if config_override else None
+        if path is None:
+            env = os.environ.get(self.CONFIG_ENV)
+            if env:
+                path = Path(env).expanduser()
+        if path is None:
+            default = repo_root() / "configs" / "router.yaml"
+            path = default if default.exists() else None
+        if path is None or not path.exists():
+            return {}
+        try:
+            if path.suffix.lower() in {".yaml", ".yml"}:
+                if yaml is None:
+                    log_warning("PyYAML not installed; skipping router config", path=str(path))
+                    return {}
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            else:
+                data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log_warning("Failed to load router config", path=str(path), error=str(exc))
+            return {}
+        if not isinstance(data, dict):
+            log_warning("Router config must be an object", path=str(path))
+            return {}
+        log_info("Loaded router config", path=str(path))
+        return data
+
+    def _override_tag(self, task_id: str, plan_meta: Dict[str, str], bundle: Dict) -> Optional[str]:
+        overrides = self._tag_overrides
+        if not overrides:
+            return None
+        task_map = overrides.get("task_ids") if isinstance(overrides, dict) else None
+        if isinstance(task_map, dict) and task_id and task_id in task_map:
+            return self._normalize_tag(task_map[task_id])
+        kind_map = overrides.get("kinds") if isinstance(overrides, dict) else None
+        plan_kind = (plan_meta.get("kind") or "").lower()
+        if isinstance(kind_map, dict) and plan_kind:
+            for raw_key, forced in kind_map.items():
+                if str(raw_key).lower() == plan_kind:
+                    return self._normalize_tag(forced)
+        return None
+
     def _heuristic_tag(
         self,
         bundle: Dict,
@@ -207,28 +280,33 @@ class SpecialistRouter:
         tags: Optional[Iterable[str]],
     ) -> str:
         tag_list = list(tags) if tags is not None else self._collect_tags(bundle, plan_info)
-        normalized_tags = [self._normalize_tag(tag) for tag in tag_list]
+        normalized_tags = [self._normalize_tag(tag) for tag in tag_list if isinstance(tag, str)]
         raw_tags = [str(tag).lower() for tag in tag_list if isinstance(tag, str)]
-        if "figure_placeholder" in normalized_tags:
-            return "figure_placeholder"
-        if plan_info.get("kind") == "figure_placeholder":
-            return "figure_placeholder"
+        candidates: List[Tuple[str, float]] = []
+
+        def add_candidate(tag: Optional[str], score: float) -> None:
+            normalized = self._normalize_tag(tag)
+            if not normalized:
+                return
+            weight = float(self._weights.get(normalized, 1.0))
+            candidates.append((normalized, score * weight))
+
+        if "figure_placeholder" in normalized_tags or plan_info.get("kind") == "figure_placeholder":
+            add_candidate("figure_placeholder", 100.0)
         if any(tag in ("figure", "figure_placeholder") for tag in normalized_tags):
-            return "figure"
+            add_candidate("figure", 90.0)
         if any(tag in self.FIGURE_HINTS for tag in raw_tags):
-            return "figure"
-        if any(tag in ("table",) for tag in normalized_tags):
-            return "table"
-        if any(tag in self.TABLE_HINTS for tag in raw_tags):
-            return "table"
-        if any(tag in ("math",) for tag in normalized_tags):
-            return "math"
-        if any(tag in self.MATH_HINTS for tag in raw_tags):
-            return "math"
-        if any(tag in ("code",) for tag in normalized_tags):
-            return "code"
-        if any(tag in self.CODE_HINTS for tag in raw_tags):
-            return "code"
+            add_candidate("figure", 80.0)
+        if any(tag in ("table",) for tag in normalized_tags) or any(tag in self.TABLE_HINTS for tag in raw_tags):
+            add_candidate("table", 70.0)
+        if any(tag in ("math",) for tag in normalized_tags) or any(tag in self.MATH_HINTS for tag in raw_tags):
+            add_candidate("math", 60.0)
+        if any(tag in ("code",) for tag in normalized_tags) or any(tag in self.CODE_HINTS for tag in raw_tags):
+            add_candidate("code", 50.0)
+
+        if candidates:
+            candidates.sort(key=lambda item: (-item[1], item[0]))
+            return candidates[0][0]
         return "text"
 
     def _resolve_specialist(

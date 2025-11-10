@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "generated_at": "2025-11-08T00:14:19.882206Z",
+  "entries": [
+    {
+      "task_id": "PREAMBLE",
+      "main": {
+        "start": 5,
+        "end": 7
+      },
+      "section_file": "sections/00_preamble.tex",
+      "snippet_file": "build/snippets/PREAMBLE.tex",
+      "snippet": {
+        "start": 1,
+        "end": 9
+      }
+    },
+    {
+      "task_id": "TITLE",
+      "main": {
+        "start": 8,
+        "end": 10
+      },
+      "section_file": "sections/01_title.tex",
+      "snippet_file": "build/snippets/TITLE.tex",
+      "snippet": {
+        "start": 1,
+        "end": 4
+      }
+    },
+    {
+      "task_id": "page0006-chunk001",
+      "main": {
+        "start": 11,
+        "end": 13
+      },
+      "section_file": "sections/02_page0006_chunk001.tex",
+      "snippet_file": "build/snippets/page0006-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 1
+      }
+    },
+    {
+      "task_id": "page0004-chunk001",
+      "main": {
+        "start": 14,
+        "end": 16
+      },
+      "section_file": "sections/03_page0004_chunk001.tex",
+      "snippet_file": "build/snippets/page0004-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 16
+      }
+    },
+    {
+      "task_id": "page0007-chunk001",
+      "main": {
+        "start": 17,
+        "end": 19
+      },
+      "section_file": "sections/04_page0007_chunk001.tex",
+      "snippet_file": "build/snippets/page0007-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 1
+      }
+    },
+    {
+      "task_id": "page0009-chunk001",
+      "main": {
+        "start": 20,
+        "end": 22
+      },
+      "section_file": "sections/05_page0009_chunk001.tex",
+      "snippet_file": "build/snippets/page0009-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 19
+      }
+    },
+    {
+      "task_id": "page0003-chunk001",
+      "main": {
+        "start": 23,
+        "end": 25
+      },
+      "section_file": "sections/06_page0003_chunk001.tex",
+      "snippet_file": "build/snippets/page0003-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 92
+      }
+    },
+    {
+      "task_id": "page0001-chunk001",
+      "main": {
+        "start": 26,
+        "end": 28
+      },
+      "section_file": "sections/07_page0001_chunk001.tex",
+      "snippet_file": "build/snippets/page0001-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 5
+      }
+    },
+    {
+      "task_id": "page0002-chunk001",
+      "main": {
+        "start": 29,
+        "end": 31
+      },
+      "section_file": "sections/08_page0002_chunk001.tex",
+      "snippet_file": "build/snippets/page0002-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 24
+      }
+    },
+    {
+      "task_id": "page0008-chunk001",
+      "main": {
+        "start": 32,
+        "end": 34
+      },
+      "section_file": "sections/09_page0008_chunk001.tex",
+      "snippet_file": "build/snippets/page0008-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 20
+      }
+    },
+    {
+      "task_id": "page0005-chunk001",
+      "main": {
+        "start": 35,
+        "end": 37
+      },
+      "section_file": "sections/10_page0005_chunk001.tex",
+      "snippet_file": "build/snippets/page0005-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 13
+      }
+    }
+  ],
+  "sections": {
+    "sections/00_preamble.tex": {
+      "task_id": "PREAMBLE",
+      "snippet": "build/snippets/PREAMBLE.tex",
+      "line_count": 9
+    },
+    "sections/01_title.tex": {
+      "task_id": "TITLE",
+      "snippet": "build/snippets/TITLE.tex",
+      "line_count": 4
+    },
+    "sections/02_page0006_chunk001.tex": {
+      "task_id": "page0006-chunk001",
+      "snippet": "build/snippets/page0006-chunk001.tex",
+      "line_count": 1
+    },
+    "sections/03_page0004_chunk001.tex": {
+      "task_id": "page0004-chunk001",
+      "snippet": "build/snippets/page0004-chunk001.tex",
+      "line_count": 16
+    },
+    "sections/04_page0007_chunk001.tex": {
+      "task_id": "page0007-chunk001",
+      "snippet": "build/snippets/page0007-chunk001.tex",
+      "line_count": 1
+    },
+    "sections/05_page0009_chunk001.tex": {
+      "task_id": "page0009-chunk001",
+      "snippet": "build/snippets/page0009-chunk001.tex",
+      "line_count": 19
+    },
+    "sections/06_page0003_chunk001.tex": {
+      "task_id": "page0003-chunk001",
+      "snippet": "build/snippets/page0003-chunk001.tex",
+      "line_count": 92
+    },
+    "sections/07_page0001_chunk001.tex": {
+      "task_id": "page0001-chunk001",
+      "snippet": "build/snippets/page0001-chunk001.tex",
+      "line_count": 5
+    },
+    "sections/08_page0002_chunk001.tex": {
+      "task_id": "page0002-chunk001",
+      "snippet": "build/snippets/page0002-chunk001.tex",
+      "line_count": 24
+    },
+    "sections/09_page0008_chunk001.tex": {
+      "task_id": "page0008-chunk001",
+      "snippet": "build/snippets/page0008-chunk001.tex",
+      "line_count": 20
+    },
+    "sections/10_page0005_chunk001.tex": {
+      "task_id": "page0005-chunk001",
+      "snippet": "build/snippets/page0005-chunk001.tex",
+      "line_count": 13
+    }
+  }
+}

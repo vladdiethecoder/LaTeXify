@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "generated_at": "2025-11-08T05:58:01.262242Z",
+  "entries": [
+    {
+      "task_id": "PREAMBLE",
+      "main": {
+        "start": 5,
+        "end": 7
+      },
+      "section_file": "sections/00_preamble.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/PREAMBLE.tex",
+      "snippet": {
+        "start": 1,
+        "end": 12
+      }
+    },
+    {
+      "task_id": "TITLE",
+      "main": {
+        "start": 8,
+        "end": 10
+      },
+      "section_file": "sections/01_title.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/TITLE.tex",
+      "snippet": {
+        "start": 1,
+        "end": 4
+      }
+    },
+    {
+      "task_id": "page0004-chunk001",
+      "main": {
+        "start": 11,
+        "end": 13
+      },
+      "section_file": "sections/02_page0004_chunk001.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0004-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 7
+      }
+    },
+    {
+      "task_id": "page0003-chunk001",
+      "main": {
+        "start": 14,
+        "end": 16
+      },
+      "section_file": "sections/03_page0003_chunk001.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0003-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 6
+      }
+    },
+    {
+      "task_id": "page0001-chunk001",
+      "main": {
+        "start": 17,
+        "end": 19
+      },
+      "section_file": "sections/04_page0001_chunk001.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0001-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 5
+      }
+    },
+    {
+      "task_id": "page0002-chunk001",
+      "main": {
+        "start": 20,
+        "end": 22
+      },
+      "section_file": "sections/05_page0002_chunk001.tex",
+      "snippet_file": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0002-chunk001.tex",
+      "snippet": {
+        "start": 1,
+        "end": 8
+      }
+    }
+  ],
+  "sections": {
+    "sections/00_preamble.tex": {
+      "task_id": "PREAMBLE",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/PREAMBLE.tex",
+      "line_count": 12
+    },
+    "sections/01_title.tex": {
+      "task_id": "TITLE",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/TITLE.tex",
+      "line_count": 4
+    },
+    "sections/02_page0004_chunk001.tex": {
+      "task_id": "page0004-chunk001",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0004-chunk001.tex",
+      "line_count": 7
+    },
+    "sections/03_page0003_chunk001.tex": {
+      "task_id": "page0003-chunk001",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0003-chunk001.tex",
+      "line_count": 6
+    },
+    "sections/04_page0001_chunk001.tex": {
+      "task_id": "page0001-chunk001",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0001-chunk001.tex",
+      "line_count": 5
+    },
+    "sections/05_page0002_chunk001.tex": {
+      "task_id": "page0002-chunk001",
+      "snippet": "/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/build/Basic Skills Review Unit Assessment/snippets/page0002-chunk001.tex",
+      "line_count": 8
+    }
+  }
+}

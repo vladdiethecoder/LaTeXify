@@ -1,0 +1,10 @@
+{
+  "backend": "internvl",
+  "chunk_id": "page0002-chunk001",
+  "page_index": 1,
+  "text": "Question 1 (6 points) Rewrite each relationship using function notation.All\ngiven text retained; one “=” per line; equals aligned. a) An airplane must\ntravel400km. Let t be the travel time (in hours) and lets(t) denote the speed\n(in km/h). Speed = Distance Time s(t) =400 t (t >0, km/h) b) An ice cream cone\nstarts at125 mL and loses half its volume every5 min. Let t be in minutes and\nv(t) be the volume (mL); the discrete half-life model is v(t) =v0 ( 1 2 )t/T1/2",
+  "confidence": 0.35,
+  "metadata": {
+    "warning": "internvl endpoint not configured; using fallback"
+  }
+}

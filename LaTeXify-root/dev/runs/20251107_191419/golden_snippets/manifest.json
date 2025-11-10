@@ -1,0 +1,58 @@
+{
+  "snippets": [
+    {
+      "block_id": "page0006-chunk001",
+      "path": "golden_snippets/page0006-chunk001.tex",
+      "content_type": "table",
+      "flagged": true
+    },
+    {
+      "block_id": "page0004-chunk001",
+      "path": "golden_snippets/page0004-chunk001.tex",
+      "content_type": "chem",
+      "flagged": true
+    },
+    {
+      "block_id": "page0007-chunk001",
+      "path": "golden_snippets/page0007-chunk001.tex",
+      "content_type": "table",
+      "flagged": true
+    },
+    {
+      "block_id": "page0009-chunk001",
+      "path": "golden_snippets/page0009-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0003-chunk001",
+      "path": "golden_snippets/page0003-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0001-chunk001",
+      "path": "golden_snippets/page0001-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0002-chunk001",
+      "path": "golden_snippets/page0002-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0008-chunk001",
+      "path": "golden_snippets/page0008-chunk001.tex",
+      "content_type": "text",
+      "flagged": true
+    },
+    {
+      "block_id": "page0005-chunk001",
+      "path": "golden_snippets/page0005-chunk001.tex",
+      "content_type": "chem",
+      "flagged": true
+    }
+  ]
+}

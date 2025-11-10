@@ -1,0 +1,20 @@
+{
+  "chunk_id": "page0003-chunk001",
+  "text": "a) p(r) = 2r2 + 2r −1 x = 2y2 + 2y −1 x + 1 = 2 ( y2 + y ) x + 1 = 2 [( y + 1 2\n)2 −1 4 ] x + 1 = 2 ( y + 1 2 )2 −1 2 x + 3 2 = 2 ( y + 1 2 )2 x 2 + 3 4 = ( y +\n1 2 )2 y + 1 2 = ± √ x 2 + 3 4 y = −1 2 ± √ x 2 + 3 4 p−1(x) =−1 2 ± √ x 2 + 3 4\nb) 3y + 5x = 18 3y + 5x = 18 3y = −5x + 18 y = −5 3 x + 6 x = −5 3 y + 6 x −6\n=−5 3 y y = −3 5 (x −6) y = −3 5 x + 18 5 f−1(x) =−3 5 x + 18 5 c) h(t) =−4.9(t\n+ 3)2 + 45.8 x = −4.9(y + 3)2 + 45.8 x −45.8 =−4.9(y + 3)2 45.8 −x = 4.9(y + 3)2",
+  "content_type": "text",
+  "classification_confidence": 0.5,
+  "classification_explanation": "Defaulted to prose.",
+  "source_backend": "internvl",
+  "supporting_backends": [
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "ocr_outputs": {
+    "internvl": "a) p(r) = 2r2 + 2r −1 x = 2y2 + 2y −1 x + 1 = 2 ( y2 + y ) x + 1 = 2 [( y + 1 2\n)2 −1 4 ] x + 1 = 2 ( y + 1 2 )2 −1 2 x + 3 2 = 2 ( y + 1 2 )2 x 2 + 3 4 = ( y +\n1 2 )2 y + 1 2 = ± √ x 2 + 3 4 y = −1 2 ± √ x 2 + 3 4 p−1(x) =−1 2 ± √ x 2 + 3 4\nb) 3y + 5x = 18 3y + 5x = 18 3y = −5x + 18 y = −5 3 x + 6 x = −5 3 y + 6 x −6\n=−5 3 y y = −3 5 (x −6) y = −3 5 x + 18 5 f−1(x) =−3 5 x + 18 5 c) h(t) =−4.9(t\n+ 3)2 + 45.8 x = −4.9(y + 3)2 + 45.8 x −45.8 =−4.9(y + 3)2 45.8 −x = 4.9(y + 3)2",
+    "florence2": "{\"items\": [{\"text\": \"a) p(r) = 2r2 + 2r −1\\nx = 2y2 + 2y −1\\nx + 1 = 2\\n(\\ny2 + y\\n)\\nx + 1 = 2\\n[(\\ny + 1\\n2\\n)2\\n−1\\n4\\n]\\nx + 1 = 2\\n(\\ny + 1\\n2\\n)2\\n−1\\n2\\nx + 3\\n2 = 2\\n(\\ny + 1\\n2\\n)2\\nx\\n2 + 3\\n4 =\\n(\\ny + 1\\n2\\n)2\\ny + 1\\n2 = ±\\n√\\nx\\n2 + 3\\n4\\ny = −1\\n2 ±\\n√\\nx\\n2 + 3\\n4\\np−1(x) =−1\\n2 ±\\n√\\nx\\n2 + 3\\n4\\nb) 3y + 5x = 18\\n3y + 5x = 18\\n3y = −5x + 18\\ny = −5\\n3 x + 6\\nx = −5\\n3 y + 6\\nx −6 =−5\\n3 y\\ny = −3\\n5 (x −6)\\ny = −3\\n5 x + 18\\n5\\nf−1(x) =−3\\n5 x + 18\\n5\\nc) h(t) =−4.9(t + 3)2 + 45.8\\nx = −4.9(y + 3)2 + 45.8\\nx −45.8 =−4.9(y + 3)2\\n45.8 −x = 4.9(y + 3)2\\n45.8 −x\\n4.9 = (y + 3)2\\ny + 3 =±\\n√\\n45.8 −x\\n4.9\\ny = −3 ±\\n√\\n45.8 −x\\n4.9\\nh−1(x) =−3 ±\\n√\\n45.8 −x\\n4.9\\n2\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+    "mineru": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+    "nougat": "\\[= 2r2 + 2r −1\nx = 2y2 + 2y −1\nx + 1 = 2\n(\ny2 + y\n)\nx + 1 = 2\n[(\ny + 1\n2\n)2\n−1\n4\n]\nx + 1 = 2\n(\ny + 1\n2\n)2\n−1\n2\nx + 3\n2 = 2\n(\ny + 1\n2\n)2\nx\n2 + 3\n4 =\n(\ny + 1\n2\n)2\ny + 1\n2 = ±\n√\nx\n2 + 3\n4\ny = −1\n2 ±\n√\nx\n2 + 3\n4\np−1(x) =−1\n2 ±\n√\nx\n2 + 3\n4\nb) 3y + 5x = 18\n3y + 5x = 18\n3y = −5x + 18\ny = −5\n3 x + 6\nx = −5\n3 y + 6\nx −6 =−5\n3 y\ny = −3\n5 (x −6)\ny = −3\n5 x + 18\n5\nf−1(x) =−3\n5 x + 18\n5\nc) h(t) =−4.9(t + 3)2 + 45.8\nx = −4.9(y + 3)2 + 45.8\nx −45.8 =−4.9(y + 3)2\n45.8 −x = 4.9(y + 3)2\n45.8 −x\n4.9 = (y + 3)2\ny + 3 =±\n√\n45.8 −x\n4.9\ny = −3 ±\n√\n45.8 −x\n4.9\nh−1(x) =−3 ±\n√\n45.8 −x\n4.9\n2\\]"
+  },
+  "assets": []
+}

@@ -7,9 +7,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from latexify.utils.logging import configure_logging, log_info, log_warning
+
 try:
     from .model_backends import LlamaCppBackend, LlamaCppConfig
-except Exception:  # pragma: no cover - llama backend optional
+except Exception as exc:  # pragma: no cover - llama backend optional
+    log_warning("Llama backend unavailable for judge_model", error=str(exc))
     LlamaCppBackend = None  # type: ignore
     LlamaCppConfig = None  # type: ignore
 
@@ -413,7 +416,8 @@ def _load_consensus(consensus_dir: Optional[Path]) -> Dict[str, Dict[str, Any]]:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as exc:
+            log_warning("Failed to parse consensus file", path=str(path), error=str(exc))
             continue
         chunk_id = data.get("chunk_id") or path.stem
         lookup[str(chunk_id)] = data
@@ -459,19 +463,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", type=Path, default=None, help="Destination blocks_refined.jsonl path")
     ap.add_argument("--model-path", type=Path, default=None, help="Optional GGUF model path for llama.cpp judge")
     ap.add_argument("--consensus-dir", type=Path, default=None, help="Optional consensus directory (defaults to run_dir/consensus)")
+    ap.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return ap
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
+    configure_logging(verbose=args.verbose)
+    log_info("Starting judge_model", run_dir=str(args.run_dir), model_path=str(args.model_path) if args.model_path else None)
     out = run_judge(
         args.run_dir,
         out_path=args.out,
         model_path=args.model_path,
         consensus_dir=args.consensus_dir,
     )
-    print(json.dumps({"run_dir": str(args.run_dir), "blocks_refined": str(out)}))
+    log_info("judge_model completed", run_dir=str(args.run_dir), blocks_refined=str(out))
     return 0
 
 

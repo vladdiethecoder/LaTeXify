@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import json
 import mimetypes
@@ -16,6 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, MutableMapping, Sequence
 
+try:  # optional for async HTTP
+    import aiohttp
+except Exception:  # pragma: no cover - aiohttp optional
+    aiohttp = None  # type: ignore[assignment]
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a creative document layout designer. Study the provided draft "
@@ -180,19 +185,54 @@ class LayoutPlanner:
         self.cfg = cfg
 
     def generate(self, draft_text: str, images: Sequence[Path]) -> LayoutBlueprint:
+        """Synchronous wrapper for generate_async with fast heuristic shortcut."""
+
+        if not self.cfg.prefer_remote:
+            fallback = self._heuristic_blueprint(draft_text or "", images)
+            plan = fallback["plan"]
+            self._enrich_plan(plan, draft_text or "")
+            blueprint = LayoutBlueprint(
+                version=self.cfg.blueprint_version,
+                model_name="heuristic",
+                created_at=_now_iso(),
+                plan=plan,
+                raw_response=None,
+                source={
+                    "text_chars": len(draft_text or ""),
+                    "image_count": len(images),
+                    "latency_ms": None,
+                    "prefer_remote": False,
+                },
+                warnings=fallback.get("warnings", []),
+            )
+            return blueprint
+
+        return asyncio.run(self.generate_async(draft_text, images))
+
+    async def generate_async(self, draft_text: str, images: Sequence[Path]) -> LayoutBlueprint:
         draft_text = (draft_text or "").strip()
         if not draft_text and not images:
             raise LayoutPlannerError("Draft text or at least one image is required")
-        fallback = self._heuristic_blueprint(draft_text, images)
-        warnings = list(fallback.get("warnings", []))
-        raw_response = None
+        fallback_task = asyncio.to_thread(self._heuristic_blueprint, draft_text, images)
+        warnings: List[str] = []
         remote_json: Dict[str, Any] | None = None
+        raw_response = None
         latency_ms = None
         if self.cfg.prefer_remote:
-            try:
-                remote_json, raw_response, latency_ms = self._invoke_remote(draft_text, images)
-            except LayoutPlannerError as exc:
-                warnings.append(str(exc))
+            remote_task = asyncio.create_task(self._invoke_remote_async(draft_text, images))
+            fallback_result, remote_result = await asyncio.gather(fallback_task, remote_task, return_exceptions=True)
+            if isinstance(fallback_result, Exception):  # pragma: no cover - defensive
+                raise LayoutPlannerError(f"Heuristic planner failed: {fallback_result}") from fallback_result
+            fallback = fallback_result
+            if isinstance(remote_result, Exception):
+                warnings.append(str(remote_result))
+            else:
+                remote_json, raw_response, latency_ms = remote_result
+        else:
+            fallback = await fallback_task
+        fallback_warnings = fallback.get("warnings", [])
+        if isinstance(fallback_warnings, list):
+            warnings.extend(str(item) for item in fallback_warnings)
         plan = fallback["plan"]
         if remote_json:
             plan = self._merge_plan(plan, remote_json)
@@ -217,7 +257,49 @@ class LayoutPlanner:
         )
         return blueprint
 
-    def _invoke_remote(
+    async def _invoke_remote_async(
+        self,
+        draft_text: str,
+        images: Sequence[Path],
+    ) -> tuple[Dict[str, Any] | None, str | None, float | None]:
+        if aiohttp is None:
+            return await asyncio.to_thread(self._invoke_remote_sync, draft_text, images)
+        if not self.cfg.endpoint:
+            raise LayoutPlannerError("Remote endpoint not configured")
+        endpoint = _normalize_endpoint(self.cfg.endpoint)
+        headers: MutableMapping[str, str] = {"Content-Type": "application/json"}
+        api_key = self.cfg.api_key or os.environ.get("LATEXIFY_VISION_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": self.cfg.model,
+            "temperature": self.cfg.temperature,
+            "max_tokens": self.cfg.max_tokens,
+            "messages": self._build_messages(draft_text, images),
+        }
+        start = time.time()
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.cfg.timeout)) as session:
+                async with session.post(endpoint, json=payload, headers=headers) as resp:
+                    resp.raise_for_status()
+                    body = await resp.text()
+        except aiohttp.ClientError as exc:  # pragma: no cover - network failure
+            raise LayoutPlannerError(f"layout planner API call failed: {exc}") from exc
+        latency_ms = (time.time() - start) * 1000.0
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError as exc:  # pragma: no cover
+            raise LayoutPlannerError(f"layout planner API returned invalid JSON: {exc}") from exc
+        choices = parsed.get("choices") or []
+        if not choices:
+            raise LayoutPlannerError("layout planner API returned no choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content", "")
+        content_str = content if isinstance(content, str) else json.dumps(content)
+        json_payload = _extract_json_maybe(content_str)
+        return json_payload, content_str, latency_ms
+
+    def _invoke_remote_sync(
         self,
         draft_text: str,
         images: Sequence[Path],

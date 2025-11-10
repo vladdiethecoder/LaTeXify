@@ -19,3 +19,24 @@ Rules:
 4. Use `table` when tabular reconstruction is required.
 5. Use `code` when the deliverable is source code or pseudocode.
 6. Default to `text` if none of the other categories clearly apply.
+
+## Configuration
+
+The router loads optional tuning parameters from `configs/router.yaml` (override by setting the `LATEXIFY_ROUTER_CONFIG` environment variable). The file accepts two sections:
+
+- `weights`: adjust heuristic priorities per tag (e.g., boost `figure` or `math` when both cues fire).
+- `tag_overrides`: force tags for specific plan/kind identifiers:
+
+```yaml
+weights:
+  figure: 1.1
+  figure_placeholder: 1.2
+
+tag_overrides:
+  task_ids:
+    FIGURE_PLACEHOLDER: figure_placeholder
+  kinds:
+    appendix: text
+```
+
+The router logs whether a decision came from the LLM, heuristics, or a config override, making it easy to audit routing behavior.

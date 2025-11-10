@@ -1,0 +1,10 @@
+{
+  "backend": "nougat",
+  "chunk_id": "page0008-chunk001",
+  "page_index": 7,
+  "text": "\\[=f(x + 1)−3\nThe d = −1 (si\\]\n\\[d = x −(−1) =x + 1) i\\]\n\\[ndicates a horizontal translation of1 unit to the left\nand thec = −3 i\\]\n\\[d\n= 1\n1 + (−1)\n= 0\ny′= a y+ c\n= 1(−2) + (−3)\n= −5\nTherefore, the resulti\\]\n\\[=−f(2x)\nThe a = −1 i\\]\n\\[axis and thek = 2i\\]",
+  "confidence": 0.55,
+  "metadata": {
+    "equation_count": 6
+  }
+}

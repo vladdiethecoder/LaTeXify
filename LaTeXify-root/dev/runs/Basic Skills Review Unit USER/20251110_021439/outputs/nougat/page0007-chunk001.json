@@ -1,0 +1,10 @@
+{
+  "backend": "nougat",
+  "chunk_id": "page0007-chunk001",
+  "page_index": 6,
+  "text": "\\[=(x + 1)\n(x −1)\nDomai\\]\n\\[= 0\n0 =x + 1\nx −1\nx = −1\n⇒(−1, 0)\ny-i\\]\n\\[x = 0)\nF(0) =0 + 1\n0 −1\n= −1\n⇒(0, −1)\nVertex / Notes No vertices.\nQuestio\\]\n\\[=a f\n(\nk(x −d)\n)\n+ c,\nx′= x\nk + d,\ny′= a y+ c.\na) g(x) = 2f(x) + 3\nThe a = 2i\\]\n\\[ndicates a vertical stretch by a factor of2 and thec = 3i\\]\n\\[d\n= 1\n1 + 0\n= 1\ny′= a y+ c\n= 2(−2) + 3\n= −1\nTherefore, the resulti\\]",
+  "confidence": 0.55,
+  "metadata": {
+    "equation_count": 6
+  }
+}

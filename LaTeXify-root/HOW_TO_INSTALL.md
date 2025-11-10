@@ -38,6 +38,22 @@ Key flags:
 | `ocr/nougat-small`      | `models/ocr/nougat-small/`         | `facebook/nougat-small`                       | Math-aware LaTeX reconstructor. |
 | `ocr/mineru-1.2b`       | `models/ocr/mineru-1.2b/`          | Manual (https://github.com/NiuTrans/MinerU)   | MinerU weights are distributed outside HF. The installer creates a placeholder with instructions. |
 
+### Standing Up OCR Endpoints
+InternVL and Florence are exposed to the pipeline through OpenAI-compatible HTTP servers. After downloading the weights, start local vLLM API servers (one per model) and point LaTeXify at them:
+```bash
+python -m vllm.entrypoints.openai.api_server \
+  --model $REPO_ROOT/models/ocr/internvl-3.5-14b \
+  --port 8080 --tensor-parallel-size 2
+
+python -m vllm.entrypoints.openai.api_server \
+  --model $REPO_ROOT/models/ocr/florence-2-large \
+  --port 8081 --dtype bfloat16
+
+export LATEXIFY_INTERNVL_ENDPOINT="http://127.0.0.1:8080/v1"
+export LATEXIFY_FLORENCE_ENDPOINT="http://127.0.0.1:8081/v1"
+```
+Any OpenAI-compatible host can be used instead (Azure, OpenRouter, LocalAI, etc.)—set the env vars to their `/v1` base URLs and provide the API key via `LATEXIFY_COUNCIL_API_KEY` or `OPENAI_API_KEY`.
+
 The installer writes an `install_manifest.json` inside each automatically downloaded directory so you can audit what was pulled. Manual entries such as MinerU produce a `MANUAL_DOWNLOAD.txt` with the upstream URL and expected file placement.
 
 ## 4. Manual MinerU Setup

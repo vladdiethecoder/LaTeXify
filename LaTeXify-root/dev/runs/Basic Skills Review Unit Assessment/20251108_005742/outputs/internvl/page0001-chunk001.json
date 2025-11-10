@@ -1,0 +1,11 @@
+{
+  "backend": "internvl",
+  "chunk_id": "page0001-chunk001",
+  "page_index": 0,
+  "text": "Question 1 (6 points) Part 1: Communication Problems Rewrite the following\nrelationships using function notation. The first part of the assignment consists\nof 5 questions that require precise communication of their solutions. They will\nrequire a good understanding of the material presented in this review, but your\nmark will be based on the presentation and communcation of your answers. Use the\nrubric provided to ensure you are meeting all of the expectations. Listen",
+  "confidence": 0.35,
+  "metadata": {
+    "warning": "HF runner failed: Hugging Face runner failed (exit 1). command=/run/media/vdubrov/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/LaTeXify-root/.venv/bin/python scripts/run_internvl_hf.py --model-dir models/ocr/internvl-3.5-14b --max-new-tokens 512 --prompt 'Page 1 chunk `page0001-chunk001`.\nDescribe the content faithfully, keeping math inline when possible.\nRaw text excerpt:\nQuestion 1 (6 points)\nPart 1: Communication Problems\nRewrite the following relationships using function notation.\nThe first part of the assignment consists of 5 questions that require precise communication\nof their solutions. They will require a good understanding of the material presented in this\nreview, but your mark will be based on the presentation and communcation of your\nanswers. Use the rubric provided to ensure you are meeting all of the expectations.\nListen' --device-map auto --max-memory cuda:0=22GiB --max-memory cuda:1=22GiB --max-memory cpu=128GiB --offload-folder /tmp/internvl-offload --dtype bfloat16 stdout= stderr=ur environment. Check out the instructions on the\ninstallation page of its repo: https://github.com/google/sentencepiece#installation and follow the ones\nthat match your environment. Please note that you may need to restart your runtime after installation.",
+    "runner": "hf"
+  }
+}

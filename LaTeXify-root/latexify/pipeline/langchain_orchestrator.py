@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -38,6 +39,9 @@ class PipelineConfig:
     qa_enabled: bool = True
     qa_attempt_compile: bool = False
     qa_max_passes: int = 1
+    internvl_endpoint: Optional[str] = field(default_factory=lambda: os.environ.get("LATEXIFY_INTERNVL_ENDPOINT"))
+    florence_endpoint: Optional[str] = field(default_factory=lambda: os.environ.get("LATEXIFY_FLORENCE_ENDPOINT"))
+    require_vision_endpoints: bool = False
 
 
 @dataclass
@@ -83,11 +87,23 @@ def step_ingest(state: PipelineState) -> PipelineState:
     if not state.run_dir:
         raise RuntimeError("Run dir missing")
     cfg = state.config
+    if cfg.require_vision_endpoints:
+        missing: List[str] = []
+        if not cfg.internvl_endpoint:
+            missing.append("InternVL (set --internvl-endpoint or LATEXIFY_INTERNVL_ENDPOINT)")
+        if not cfg.florence_endpoint:
+            missing.append("Florence-2 (set --florence-endpoint or LATEXIFY_FLORENCE_ENDPOINT)")
+        if missing:
+            raise RuntimeError(
+                "Missing OCR endpoints: " + ", ".join(missing) + ". Pass --allow-fallback to bypass this guard."
+            )
     ingest_pdf(
         cfg.pdf,
         state.run_dir,
         assets_dir=cfg.build_dir / "assets",
         pages_override=cfg.pages_override,
+        internvl_endpoint=cfg.internvl_endpoint,
+        florence_endpoint=cfg.florence_endpoint,
     )
     return state
 

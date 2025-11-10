@@ -1,0 +1,22 @@
+{
+  "chunk_id": "page0005-chunk001",
+  "text": "c) h−1 i Inverse (reflection acrossy = x).  ii Vertical line test: fails.\nConstruct inverse: reflect graph ofy = h(x) across y = x ⇒ relation h−1 Apply\nVLT toh−1 : fails (some verticals cut twice) ⇒ Inverse isnot a function\nDomain/Range swap: Dom(h−1) =Ran(h), Ran(h−1) =Dom(h) Question 4 (24 points) All\noriginal answers preserved. Reformatted into three readable “summary cards” (no\nclipping; full-size math). (a) f(x) = 2x2 −8 4",
+  "content_type": "chem",
+  "classification_confidence": 0.7,
+  "classification_explanation": "Chemical formula pattern detected.",
+  "source_backend": "internvl",
+  "supporting_backends": [
+    "florence2",
+    "mineru",
+    "nougat"
+  ],
+  "ocr_outputs": {
+    "internvl": "c) h−1 i Inverse (reflection acrossy = x).  ii Vertical line test: fails.\nConstruct inverse: reflect graph ofy = h(x) across y = x ⇒ relation h−1 Apply\nVLT toh−1 : fails (some verticals cut twice) ⇒ Inverse isnot a function\nDomain/Range swap: Dom(h−1) =Ran(h), Ran(h−1) =Dom(h) Question 4 (24 points) All\noriginal answers preserved. Reformatted into three readable “summary cards” (no\nclipping; full-size math). (a) f(x) = 2x2 −8 4",
+    "florence2": "{\"items\": [{\"text\": \"c) h−1\\ni Inverse (reflection acrossy = x).\\n ii Vertical line test: fails.\\nConstruct inverse: reflect graph ofy = h(x) across y = x ⇒ relation h−1\\nApply VLT toh−1 : fails (some verticals cut twice) ⇒ Inverse isnot a function\\nDomain/Range swap: Dom(h−1) =Ran(h), Ran(h−1) =Dom(h)\\nQuestion 4 (24 points)\\nAll original answers preserved. Reformatted into three readable “summary cards” (no clipping;\\nfull-size math).\\n(a) f(x) = 2x2 −8\\n4\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+    "mineru": "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |",
+    "nougat": "\\[reflection acrossy = x).\n ii Vertical li\\]\n\\[reflect graph ofy = h(x) across y = x ⇒ relatio\\]\n\\[=Ra\\]\n\\[=Dom(h)\nQuestio\\]\n\\[= 2x2 −8\n4\\]"
+  },
+  "assets": [
+    "build/assets/page0005-img01.png"
+  ]
+}

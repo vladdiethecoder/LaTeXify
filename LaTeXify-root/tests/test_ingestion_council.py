@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from latexify.ingestion.ingest_pdf import ingest_pdf, LayoutChunk, _chunk_pages
+from latexify.ingestion.chunkers import semantic_chunk_pages
+from latexify.ingestion.ingest_pdf import ingest_pdf
 
 
 def test_chunk_pages_simple():
     pages = ["Header\n\nParagraph one.\n\nParagraph two with more text."]
-    chunks = _chunk_pages(pages, chunk_chars=40, min_chars=5)
+    chunks = semantic_chunk_pages(pages, chunk_chars=40, min_chars=5)
     assert len(chunks) >= 1
     assert chunks[0].chunk_id.startswith("page0001")
     assert chunks[0].text

@@ -1,0 +1,10 @@
+{
+  "backend": "internvl",
+  "chunk_id": "page0005-chunk001",
+  "page_index": 4,
+  "text": "c) h−1 i Inverse (reflection acrossy = x).  ii Vertical line test: fails.\nConstruct inverse: reflect graph ofy = h(x) across y = x ⇒ relation h−1 Apply\nVLT toh−1 : fails (some verticals cut twice) ⇒ Inverse isnot a function\nDomain/Range swap: Dom(h−1) =Ran(h), Ran(h−1) =Dom(h) Question 4 (24 points) All\noriginal answers preserved. Reformatted into three readable “summary cards” (no\nclipping; full-size math). (a) f(x) = 2x2 −8 4",
+  "confidence": 0.35,
+  "metadata": {
+    "warning": "internvl endpoint not configured; using fallback"
+  }
+}

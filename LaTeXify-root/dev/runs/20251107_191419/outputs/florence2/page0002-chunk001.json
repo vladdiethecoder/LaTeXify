@@ -1,0 +1,10 @@
+{
+  "backend": "florence2",
+  "chunk_id": "page0002-chunk001",
+  "page_index": 1,
+  "text": "{\"items\": [{\"text\": \"Question 1 (6 points)\\nRewrite each relationship using function notation.All given text retained; one “=” per line; equals\\naligned.\\na)\\nAn airplane must travel400km. Let t be the travel time (in hours) and lets(t) denote the speed\\n(in km/h).\\nSpeed = Distance\\nTime\\ns(t) =400\\nt\\n(t >0, km/h)\\nb)\\nAn ice cream cone starts at125 mL and loses half its volume every5 min. Let t be in minutes and\\nv(t) be the volume (mL); the discrete half-life model is\\nv(t) =v0\\n(\\n1\\n2\\n)t/T1/2\\nv(t) = 125\\n(\\n1\\n2\\n)t/5\\nc)\\nScott drives at a constant speed of50 km/h. If d(t) is the distance (km) aftert hours,\\nd(t) = 50t\\nQuestion 2 (6 points)\\nFormatting: parts (a) and (b) are side by side with a clean divider; all “=” signs aligned inside each\\nblock.\\n1\", \"bbox\": [0.0, 0.0, 1.0, 1.0], \"source\": \"heuristic\"}]}",
+  "confidence": 0.35,
+  "metadata": {
+    "warning": "florence2 endpoint not configured; using fallback"
+  }
+}

@@ -1,0 +1,6 @@
+(c) f(x) =(x + 1) (x −1) Domain & Range Domain : {x ∈R |x ̸= 1} Range : {y ∈R |y
+̸= 1} Restrictions Domain : x ̸= 1 Range : y ̸= 1 Increasing / De- creasing
+Decreasing : (−∞, 1) ∪(1, +∞) Increasing : N/A x-intercepts (roots) f(x) = 0 0
+=x + 1 x −1 x = −1 ⇒(−1, 0) y-intercepts (x = 0) F(0) =0 + 1 0 −1 = −1 ⇒(0, −1)
+Vertex / Notes No vertices. Question 5 (8 points) The point(1, −2) is on the
+graph off. Describe the following transformations onf, and determine the

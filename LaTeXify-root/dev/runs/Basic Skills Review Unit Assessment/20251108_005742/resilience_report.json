@@ -1,0 +1,19 @@
+{
+  "created_at": "2025-11-08T05:58:01Z",
+  "chunks": 4,
+  "permissive_backends": [],
+  "stats": {
+    "backend_warnings": 8,
+    "fallback_hits": 0,
+    "permissive_hits": 0,
+    "consensus_recovered": 1,
+    "empty_consensus": 3
+  },
+  "recoveries": [
+    {
+      "chunk_id": "page0002-chunk001",
+      "backend": "internvl",
+      "reason": "consensus_replacement"
+    }
+  ]
+}

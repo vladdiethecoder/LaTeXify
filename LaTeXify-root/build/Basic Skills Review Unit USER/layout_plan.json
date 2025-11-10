@@ -1,0 +1,148 @@
+{
+  "version": "layout-planner/v0.1",
+  "model": "heuristic",
+  "created_at": "2025-11-10T07:14:39+00:00",
+  "plan": {
+    "page_layout": {
+      "format": "US Letter portrait",
+      "columns": "two-column",
+      "title_area": "Title spans top 30% with subtitle and metadata stacked",
+      "margins": "1in margins, baseline grid for quick alignment"
+    },
+    "typography": {
+      "title": "Large serif (e.g., 28pt) paired with thin rule",
+      "headings": "Small caps with generous spacing",
+      "body": "11pt serif with 14pt leading",
+      "color_accents": "Muted blue for sidebars and figure captions"
+    },
+    "sections": [
+      {
+        "id": null,
+        "title": "Basic Advanced Functions \u2014 Part 1: Communication Problems",
+        "goal": "No content provided.",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "Your Name",
+        "goal": "No content provided.",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "October 28, 2025",
+        "goal": "Question 1 (6 points) Rewrite each relationship using function notation.All given text retained; one \u201c=\u201d per line; equals aligned. a) An airplane must travel400km. Let t be the travel time (in hours) and lets(t) denote\u2026",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "Speed = Distance",
+        "goal": "No content provided.",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "Time",
+        "goal": "s(t) =400 t (t >0, km/h) b) An ice cream cone starts at125 mL and loses half its volume every5 min. Let t be in minutes and v(t) be the volume (mL); the discrete half-life model is v(t) =v0 ( 1 2 )t/T1/2 v(t) = 125 ( 1\u2026",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      }
+    ],
+    "callouts": [
+      {
+        "title": "Key Findings",
+        "placement": "left sidebar",
+        "purpose": "Summarize the most important insight from the draft."
+      }
+    ],
+    "assets": [],
+    "global_guidelines": [
+      "Respect the layout planner scaffold and keep the hierarchy consistent.",
+      "Use shaded sidebars for tips or highlighted learning goals when present.",
+      "Switch to two columns after the lead section for denser reading."
+    ],
+    "stats": {
+      "word_count": 158,
+      "section_count": 5,
+      "images_attached": 0
+    },
+    "narrative": "Lead with a hero title, follow with overview prose, then transition into columnar content anchored by figures/tables called out in the draft.",
+    "content_flags": {
+      "has_figures": false,
+      "has_tables": false,
+      "has_math": false,
+      "has_code": false,
+      "has_appendix": false,
+      "has_chapters": false,
+      "two_column": true
+    },
+    "chunks": [
+      {
+        "id": "S01",
+        "title": "Basic Advanced Functions \u2014 Part 1: Communication Problems",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
+      },
+      {
+        "id": "S02",
+        "title": "Your Name",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
+      },
+      {
+        "id": "S03",
+        "title": "October 28, 2025",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
+      },
+      {
+        "id": "S04",
+        "title": "Speed = Distance",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
+      },
+      {
+        "id": "S05",
+        "title": "Time",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
+      }
+    ],
+    "doc_class_hint": {
+      "candidate": "lix_article",
+      "confidence": 0.7,
+      "reason": "Compact article-like layout (single/two column).",
+      "flags": {
+        "has_figures": false,
+        "has_tables": false,
+        "has_math": false,
+        "has_code": false,
+        "has_appendix": false,
+        "has_chapters": false,
+        "two_column": true
+      }
+    }
+  },
+  "raw_response": null,
+  "source": {
+    "text_chars": 808,
+    "image_count": 0,
+    "latency_ms": null,
+    "prefer_remote": false
+  },
+  "warnings": []
+}

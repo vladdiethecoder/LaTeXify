@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
+
+if __name__ == "__main__":
+    from scripts.env_bootstrap import ensure_supported_python, ensure_virtualenv
+
+    _SCRIPT_PATH = Path(__file__).resolve()
+    ensure_supported_python(_SCRIPT_PATH, sys.argv, os.environ.get("LATEXIFY_PYTHON_BIN"))
+    venv_path = Path(os.environ.get("LATEXIFY_VENV_PATH", ".venv"))
+    ensure_virtualenv(venv_path, _SCRIPT_PATH, sys.argv)
 
 from latexify.pipeline.langchain_orchestrator import PipelineConfig, run_pipeline
 
@@ -21,6 +31,17 @@ def _resolve_pdf(path_like: str | None) -> Path:
     if fallback.exists():
         return fallback.resolve()
     raise FileNotFoundError(f"Could not find PDF at {candidate} or {fallback}")
+
+
+def _collect_pdfs(arg: str) -> list[Path]:
+    arg = arg.strip()
+    if arg.lower() == "all":
+        DEV_INPUTS.mkdir(parents=True, exist_ok=True)
+        files = sorted(DEV_INPUTS.glob("*.pdf"))
+        if not files:
+            raise FileNotFoundError(f"No PDFs found in {DEV_INPUTS}")
+        return [path.resolve() for path in files]
+    return [_resolve_pdf(arg)]
 
 
 def _list_inputs() -> None:
@@ -47,6 +68,23 @@ def main() -> int:
     parser.add_argument("--skip-qa", action="store_true", help="Disable QA/auto-fix stage")
     parser.add_argument("--qa-compile", action="store_true", help="Attempt latexmk inside QA preflight")
     parser.add_argument("--no-aggregate", action="store_true", help="Skip snippet aggregation into main.tex")
+    parser.add_argument(
+        "--internvl-endpoint",
+        type=str,
+        default=os.environ.get("LATEXIFY_INTERNVL_ENDPOINT"),
+        help="OpenAI-compatible endpoint for InternVL (defaults to LATEXIFY_INTERNVL_ENDPOINT)",
+    )
+    parser.add_argument(
+        "--florence-endpoint",
+        type=str,
+        default=os.environ.get("LATEXIFY_FLORENCE_ENDPOINT"),
+        help="OpenAI-compatible endpoint for Florence-2 (defaults to LATEXIFY_FLORENCE_ENDPOINT)",
+    )
+    parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="Permit OCR fallbacks when vision endpoints are missing",
+    )
     parser.add_argument("--list-inputs", action="store_true", help="List PDFs in dev/inputs and exit")
     args = parser.parse_args()
 
@@ -56,30 +94,61 @@ def main() -> int:
     if not args.pdf:
         parser.error("--pdf is required (or pass --list-inputs)")
 
-    pdf_path = _resolve_pdf(args.pdf)
-    title = args.title or pdf_path.stem.replace("_", " ")
-    cfg = PipelineConfig(
-        pdf=pdf_path,
-        title=title,
-        author=args.author,
-        course=args.course,
-        run_root=args.run_root,
-        build_dir=args.build_dir,
-        prefer_remote_layout=args.prefer_remote_layout,
-        aggregate=not args.no_aggregate,
-        qa_enabled=not args.skip_qa,
-        qa_attempt_compile=args.qa_compile,
-    )
-    state = run_pipeline(cfg, use_langchain=args.langchain)
-    summary = {
-        "run_dir": str(state.run_dir) if state.run_dir else None,
-        "build_dir": str(cfg.build_dir.resolve()),
-        "plan": str(state.plan_path) if state.plan_path else None,
-        "consensus": str(state.consensus_path) if state.consensus_path else None,
-        "snippets": str(state.snippets_dir) if state.snippets_dir else None,
-        "qa_report": str(state.qa_report) if state.qa_report else None,
-    }
-    print(json.dumps(summary, indent=2))
+    pdf_paths = _collect_pdfs(args.pdf)
+    multi = len(pdf_paths) > 1
+    summaries = []
+    for pdf_path in pdf_paths:
+        stem_title = pdf_path.stem.replace("_", " ")
+        if args.title and multi:
+            title = f"{args.title} ({stem_title})"
+        else:
+            title = args.title or stem_title
+        run_root = (args.run_root / pdf_path.stem).resolve()
+        build_dir = (args.build_dir / pdf_path.stem).resolve()
+        internvl_endpoint = args.internvl_endpoint or os.environ.get("LATEXIFY_INTERNVL_ENDPOINT")
+        florence_endpoint = args.florence_endpoint or os.environ.get("LATEXIFY_FLORENCE_ENDPOINT")
+        missing = []
+        if not internvl_endpoint:
+            missing.append("InternVL endpoint (set --internvl-endpoint or LATEXIFY_INTERNVL_ENDPOINT)")
+        if not florence_endpoint:
+            missing.append("Florence endpoint (set --florence-endpoint or LATEXIFY_FLORENCE_ENDPOINT)")
+        require_endpoints = not args.allow_fallback and not missing
+        if missing and not args.allow_fallback:
+            print(
+                "[warn] "
+                + " and ".join(missing)
+                + " missing; continuing with heuristic OCR fallback. Pass --allow-fallback to hide this warning."
+            )
+        cfg = PipelineConfig(
+            pdf=pdf_path,
+            title=title,
+            author=args.author,
+            course=args.course,
+            run_root=run_root,
+            build_dir=build_dir,
+            prefer_remote_layout=args.prefer_remote_layout,
+            aggregate=not args.no_aggregate,
+            qa_enabled=not args.skip_qa,
+            qa_attempt_compile=args.qa_compile,
+            internvl_endpoint=internvl_endpoint,
+            florence_endpoint=florence_endpoint,
+            require_vision_endpoints=require_endpoints,
+        )
+        state = run_pipeline(cfg, use_langchain=args.langchain)
+        summaries.append(
+            {
+                "pdf": str(pdf_path),
+                "title": title,
+                "run_dir": str(state.run_dir) if state.run_dir else None,
+                "build_dir": str(cfg.build_dir.resolve()),
+                "plan": str(state.plan_path) if state.plan_path else None,
+                "consensus": str(state.consensus_path) if state.consensus_path else None,
+                "snippets": str(state.snippets_dir) if state.snippets_dir else None,
+                "qa_report": str(state.qa_report) if state.qa_report else None,
+            }
+        )
+    payload = summaries[0] if len(summaries) == 1 else {"runs": summaries}
+    print(json.dumps(payload, indent=2))
     return 0
 
 

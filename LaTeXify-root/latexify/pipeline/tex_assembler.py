@@ -7,28 +7,25 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from pydantic import ValidationError
+
+from latexify.assembly.snippets import body_snippet, figure_snippet, math_snippet
+from latexify.assembly.utils import escape_tex, inject_packages, _unique
+from latexify.models.schemas import ConsensusBlockSchema, LayoutBlueprintSchema, PlanSchema
 
 from .synth_shared import capabilities_from_text, slugify
+from ..utils.logging import configure_logging, log_info
+
+TABLE_DIVIDER_RX = re.compile(r"^[\s\-\+=|:._]+$")
+NUMERIC_RX = re.compile(r"^[+-]?\d+(?:[.,]\d+)?(?:%|/\d+)?$")
 
 try:  # optional llama backend for local coder models
     from .model_backends import LlamaCppBackend, LlamaCppConfig
 except Exception:  # pragma: no cover - llama backend might be unavailable
     LlamaCppBackend = None  # type: ignore
     LlamaCppConfig = None  # type: ignore
-
-_RE_WHITESPACE = re.compile(r"\s+")
-_ESCAPE_MAP = str.maketrans({
-    "\\": r"\\textbackslash{}",
-    "{": r"\{",
-    "}": r"\}",
-    "%": r"\%",
-    "#": r"\#",
-    "&": r"\&",
-    "$": r"\$",
-    "_": r"\_",
-})
-
 
 @dataclass
 class PlanTask:
@@ -50,6 +47,7 @@ class ConsensusBlock:
     page_index: int
     flagged: bool
     ocr_outputs: Dict[str, str]
+    assets: List[str]
 
 
 class LocalLLM:
@@ -78,10 +76,11 @@ class TexAssembler:
         self,
         *,
         llm: Optional[LocalLLM],
-        blueprint: Dict[str, Any] | None = None,
+        blueprint: LayoutBlueprintSchema | Dict[str, Any] | None = None,
     ) -> None:
         self.llm = llm
         self.blueprint = blueprint or {}
+        self._layout_plan = self._resolve_layout_plan(self.blueprint)
 
     # ------------------------------------------------------------------
     # Public API
@@ -93,7 +92,7 @@ class TexAssembler:
             generated = self.llm.generate(prompt)
             cleaned = self._extract_latex(generated)
             if cleaned:
-                return self._inject_packages(cleaned, packages)
+                return inject_packages(cleaned, packages)
         return self._fallback_preamble(doc_class, blueprint_note, packages)
 
     def title_snippet(self, frontmatter: Dict[str, Any]) -> str:
@@ -113,13 +112,15 @@ class TexAssembler:
 
     def section_snippet(self, task: PlanTask, block: Optional[ConsensusBlock]) -> str:
         context = self._build_section_context(task, block)
+        layout_meta = self._layout_section_meta(task)
+        section_head = self._section_command(task, layout_meta.get("level"))
         if self.llm:
             prompt = self._section_prompt(task, block, context)
             completion = self.llm.generate(prompt)
             cleaned = self._extract_latex(completion)
             if cleaned:
                 return cleaned if cleaned.endswith("\n") else cleaned + "\n"
-        return self._fallback_section(task, block, context)
+        return self._render_fallback_section(task, block, context, section_head, layout_meta.get("multicolumn", False))
 
     # ------------------------------------------------------------------
     # Prompt helpers
@@ -156,98 +157,77 @@ class TexAssembler:
     # Fallback renderers
     # ------------------------------------------------------------------
     def _fallback_preamble(self, doc_class: str, blueprint_note: str, packages: Sequence[str]) -> str:
-        lines = [f"\\documentclass{{{doc_class or 'lix_textbook'}}}"]
         defaults = [
             "\\usepackage{microtype}",
             "\\usepackage{geometry}",
             "\\usepackage{hyperref}",
         ]
-        pkg_lines = _unique(defaults + list(packages))
-        lines.extend(pkg_lines)
-        lines.append(r"\geometry{margin=1in}")
-        lines.append(r"\hypersetup{hidelinks}")
+        combined_packages = _unique(defaults + list(packages))
+        lines = [f"\\documentclass{{{doc_class or 'lix_textbook'}}}"]
         if blueprint_note:
             lines.append(f"% Layout: {blueprint_note}")
+        lines.append(r"\geometry{margin=1in}")
+        lines.append(r"\hypersetup{hidelinks}")
         lines.append(r"\begin{document}")
-        return "\n".join(lines) + "\n"
+        base = "\n".join(lines) + "\n"
+        return inject_packages(base, combined_packages)
 
-    def _fallback_section(self, task: PlanTask, block: Optional[ConsensusBlock], context: Dict[str, str]) -> str:
-        label = slugify(task.task_id or task.title)
-        title = escape_tex(task.title or task.task_id)
-        section_head = self._section_command(task)
-        if block and block.block_type.lower().startswith("figure"):
-            return self._figure_snippet(task, block, title, label)
-        if block and "table" in block.block_type.lower():
-            return self._table_snippet(task, block, context, title, label)
-        if block and "math" in block.block_type.lower():
-            return self._math_snippet(block, title, label)
-        body = text_to_paragraphs(context.get("source_text", "")) or "% TODO: add content"
-        return "\n".join([
-            f"{section_head}{{{title}}}",
-            f"\\label{{sec:{label}}}",
-            body,
-            "",
-        ])
+    def _render_fallback_section(
+        self,
+        task: PlanTask,
+        block: Optional[ConsensusBlock],
+        context: Dict[str, str],
+        section_head: str,
+        multicolumn: bool,
+    ) -> str:
+        title = task.title or task.task_id
+        label = slugify(task.task_id or title)
+        block_kind = (block.block_type if block else task.kind or task.content_type or "").lower() if (block or task.kind or task.content_type) else ""
+        if block and block_kind.startswith("figure"):
+            asset_path = task.asset_path
+            if not asset_path and block.assets:
+                asset_path = block.assets[0]
+            return figure_snippet(asset_path or "assets/figure-placeholder.pdf", title, label)
+        if block and "table" in block_kind:
+            raw_text = context.get("source_text", block.text)
+            return self._render_table_from_text(raw_text, title, label)
+        if block and "math" in block_kind:
+            return math_snippet(block.text, title, label)
+        body_source = context.get("source_text", block.text if block else "")
+        return body_snippet(section_head, title, label, body_source, multicolumn=multicolumn)
 
-    def _figure_snippet(self, task: PlanTask, block: ConsensusBlock, title: str, label: str) -> str:
-        asset = task.asset_path or "assets/figure-placeholder.pdf"
-        return "\n".join([
-            "\\begin{figure}[ht]",
-            "  \\centering",
-            f"  \\includegraphics[width=0.85\\linewidth]{{{asset}}}",
-            f"  \\caption{{{title}}}",
-            f"  \\label{{fig:{label}}}",
-            "\\end{figure}",
-            "",
-        ])
-
-    def _table_snippet(self, task: PlanTask, block: ConsensusBlock, context: Dict[str, str], title: str, label: str) -> str:
-        rows = parse_table_rows(context.get("source_text", block.text))
-        if not rows:
+    def _render_table_from_text(self, raw_text: str | None, title: str, label: str) -> str:
+        header, body, alignment = _parse_table_from_text(raw_text or "")
+        if not header:
             return "% TODO: add table content\n"
-        width = max(len(r) for r in rows)
-        fmt = " ".join(["l"] * width)
-        header = rows[0]
-        body = rows[1:] or [[""] * width]
+        fmt = alignment or ("l" * len(header)) or "l"
         lines = [
             "\\begin{table}[ht]",
             "  \\centering",
-            f"  \\caption{{{title}}}",
+            f"  \\caption{{{escape_tex(title)}}}",
             f"  \\label{{tab:{label}}}",
             f"  \\begin{{tabular}}{{{fmt}}}",
             "    \\toprule",
-            "    " + " & ".join(header) + r" \\",
+            "    " + " & ".join(escape_tex(cell) for cell in header) + r" \\",
             "    \\midrule",
         ]
         for row in body:
-            padded = row + [""] * (width - len(row))
-            lines.append("    " + " & ".join(escape_tex(cell) for cell in padded) + r" \\")
-        lines += [
+            escaped = [escape_tex(cell) for cell in row]
+            lines.append("    " + " & ".join(escaped) + r" \\")
+        lines.extend([
             "    \\bottomrule",
             "  \\end{tabular}",
             "\\end{table}",
             "",
-        ]
-        return "\n".join(lines)
-
-    def _math_snippet(self, block: ConsensusBlock, title: str, label: str) -> str:
-        math_text = block.text.strip()
-        if not math_text.startswith("\\") and not math_text.startswith("$"):
-            math_text = "$" + math_text + "$"
-        return "\n".join([
-            f"% {title}",
-            math_text,
-            f"% label: eq:{label}",
-            "",
         ])
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Utility helpers
     # ------------------------------------------------------------------
     def _blueprint_summary(self) -> str:
-        layout = self.blueprint.get("plan", {}).get("page_layout") if isinstance(self.blueprint.get("plan"), dict) else None
-        if not isinstance(layout, dict):
-            layout = self.blueprint.get("page_layout", {}) if isinstance(self.blueprint, dict) else {}
+        plan = self._layout_plan if isinstance(self._layout_plan, dict) else {}
+        layout = plan.get("page_layout") if isinstance(plan.get("page_layout"), dict) else {}
         columns = layout.get("columns") if isinstance(layout, dict) else None
         title_area = layout.get("title_area") if isinstance(layout, dict) else None
         if columns or title_area:
@@ -255,9 +235,8 @@ class TexAssembler:
         return ""
 
     def _blueprint_detail_for(self, title: str) -> str:
-        if not isinstance(self.blueprint, dict):
-            return ""
-        sections = self.blueprint.get("sections") or self.blueprint.get("plan", {}).get("sections")
+        plan = self._layout_plan if isinstance(self._layout_plan, dict) else {}
+        sections = plan.get("sections")
         if not isinstance(sections, list):
             return ""
         for section in sections:
@@ -267,7 +246,15 @@ class TexAssembler:
                 return section.get("layout", "")
         return ""
 
-    def _section_command(self, task: PlanTask) -> str:
+    def _section_command(self, task: PlanTask, override: Optional[str] = None) -> str:
+        if override:
+            level = override.lower()
+            if level.startswith("sub"):
+                return "\\subsection"
+            if "chapter" in level:
+                return "\\chapter"
+            if "appendix" in level:
+                return "\\section"
         kind = (task.kind or task.content_type or "body").lower()
         if "subsection" in kind:
             return "\\subsection"
@@ -287,6 +274,165 @@ class TexAssembler:
             ctx["hints"] = "no block data"
         return ctx
 
+    def _layout_section_meta(self, task: PlanTask) -> Dict[str, Any]:
+        plan = self._layout_plan if isinstance(self._layout_plan, dict) else {}
+        meta: Dict[str, Any] = {"level": None, "multicolumn": False}
+        if not plan:
+            return meta
+        section_entry = self._match_layout_entry(task, plan.get("sections"))
+        if section_entry is None:
+            section_entry = self._match_layout_entry(task, plan.get("chunks"))
+        if section_entry:
+            layout_text = str(section_entry.get("layout") or "").lower()
+            notes = " ".join(section_entry.get("notes", [])) if isinstance(section_entry.get("notes"), list) else ""
+            if _looks_multicolumn(f"{layout_text} {notes}"):
+                meta["multicolumn"] = True
+            kind = str(section_entry.get("kind") or "").lower()
+            if "subsection" in kind:
+                meta["level"] = "subsection"
+            elif "appendix" in kind:
+                meta["level"] = "appendix"
+            elif "chapter" in kind:
+                meta["level"] = "chapter"
+        if not meta["multicolumn"]:
+            columns_desc = str(plan.get("page_layout", {}).get("columns", "")).lower()
+            if _looks_multicolumn(columns_desc):
+                meta["multicolumn"] = True
+        return meta
+
+    def _match_layout_entry(self, task: PlanTask, entries: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(entries, list):
+            return None
+        task_title = (task.title or "").lower()
+        task_id = (task.task_id or "").lower()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            entry_title = str(entry.get("title") or "").lower()
+            entry_id = str(entry.get("id") or "").lower()
+            if entry_title and task_title and (entry_title in task_title or task_title in entry_title):
+                return entry
+            if entry_id and task_id and entry_id == task_id:
+                return entry
+        return None
+
+    @property
+    def layout_flags(self) -> Dict[str, bool]:
+        plan = self._layout_plan if isinstance(self._layout_plan, dict) else {}
+        flags = plan.get("content_flags")
+        return flags if isinstance(flags, dict) else {}
+
+    def _resolve_layout_plan(self, blueprint: LayoutBlueprintSchema | Dict[str, Any] | None) -> Dict[str, Any]:
+        if isinstance(blueprint, LayoutBlueprintSchema):
+            return blueprint.plan or {}
+        if isinstance(blueprint, dict):
+            plan = blueprint.get("plan")
+            if isinstance(plan, dict):
+                return plan
+            return blueprint
+        return {}
+
+
+def _looks_multicolumn(value: str) -> bool:
+    lowered = (value or "").lower()
+    return any(token in lowered for token in ("two-column", "two column", "double column", "multicol", "multi-column"))
+
+
+def _parse_table_from_text(raw_text: str) -> Tuple[List[str], List[List[str]], str]:
+    lines = [line.strip() for line in (raw_text or "").splitlines() if line.strip()]
+    lines = [line for line in lines if not TABLE_DIVIDER_RX.match(line)]
+    if not lines:
+        return [], [], ""
+    pipe_votes = sum("|" in line for line in lines)
+    use_pipes = pipe_votes >= max(1, len(lines) // 2)
+    rows: List[List[str]] = []
+    max_width = 0
+    carry = ""
+    for line in lines:
+        cells = _split_table_line(line, use_pipes)
+        if cells is None:
+            carry = f"{carry} {line.strip()}".strip() if carry else line.strip()
+            continue
+        if carry:
+            if cells:
+                cells[0] = f"{carry} {cells[0]}".strip()
+            else:
+                cells = [carry]
+            carry = ""
+        rows.append(cells)
+        max_width = max(max_width, len(cells))
+    if not rows:
+        return [], [], ""
+    if carry and rows:
+        rows[-1][0] = f"{rows[-1][0]} {carry}".strip()
+    normalized = [_pad_row(row, max_width) for row in rows]
+    header = normalized[0]
+    body = normalized[1:] or [["" for _ in range(max_width)]]
+    alignment = _infer_alignment(normalized)
+    return header, body, alignment
+
+
+def _split_table_line(line: str, use_pipes: bool) -> List[str] | None:
+    if use_pipes:
+        if "|" not in line:
+            return None
+        parts = [part.strip() for part in line.strip("|").split("|")]
+        cells = [part for part in parts if part]
+        return cells or None
+    parts = [part.strip() for part in re.split(r"\s{2,}", line) if part.strip()]
+    if len(parts) <= 1:
+        return None
+    return parts
+
+
+def _pad_row(row: List[str], width: int) -> List[str]:
+    if len(row) >= width:
+        return list(row)
+    padded = list(row)
+    padded.extend(["" for _ in range(width - len(row))])
+    return padded
+
+
+def _infer_alignment(rows: Sequence[Sequence[str]]) -> str:
+    if not rows:
+        return ""
+    width = len(rows[0])
+    result: List[str] = []
+    for col_idx in range(width):
+        column = [row[col_idx] for row in rows if col_idx < len(row)]
+        result.append(_infer_column_alignment(column))
+    return "".join(result)
+
+
+def _infer_column_alignment(values: Sequence[str]) -> str:
+    tokens = [value.strip() for value in values if value and value.strip()]
+    if not tokens:
+        return "l"
+    payload = tokens[1:] or tokens
+    numeric_hits = sum(1 for token in payload if _looks_numeric(token))
+    if numeric_hits and numeric_hits / len(payload) >= 0.6:
+        return "r"
+    short_hits = sum(1 for token in payload if _looks_short_token(token))
+    if short_hits and short_hits / len(payload) >= 0.7:
+        return "c"
+    return "l"
+
+
+def _looks_numeric(value: str) -> bool:
+    cleaned = value.replace(",", "").replace("%", "").replace("−", "-").strip()
+    if not cleaned:
+        return False
+    return bool(NUMERIC_RX.match(cleaned))
+
+
+def _looks_short_token(value: str) -> bool:
+    token = value.strip()
+    if not token:
+        return False
+    if len(token) <= 3:
+        return True
+    return token.isalpha() and token.isupper() and len(token) <= 5
+
     def _extract_latex(self, completion: str) -> str:
         text = completion.strip()
         if not text:
@@ -296,44 +442,9 @@ class TexAssembler:
             text = text[:fence_idx].strip()
         return text
 
-    def _inject_packages(self, preamble: str, packages: Sequence[str]) -> str:
-        if not packages:
-            return preamble if preamble.endswith("\n") else preamble + "\n"
-        lines = preamble.splitlines()
-        idx = 1 if lines else 0
-        new_lines = lines[:idx] + list(_unique(packages)) + lines[idx:]
-        result = "\n".join(new_lines)
-        return result if result.endswith("\n") else result + "\n"
-
-
-# ----------------------------------------------------------------------
-# Parsing helpers
-# ----------------------------------------------------------------------
-
-def escape_tex(value: str) -> str:
-    return value.translate(_ESCAPE_MAP)
-
-
-def text_to_paragraphs(text: str) -> str:
-    chunks = [segment.strip() for segment in re.split(r"\n\s*\n", text or "") if segment.strip()]
-    if not chunks:
-        return ""
-    return "\n\n".join(escape_tex(chunk) for chunk in chunks) + "\n"
-
-
-def parse_table_rows(text: str) -> List[List[str]]:
-    rows: List[List[str]] = []
-    for line in (text or "").splitlines():
-        raw = line.strip().strip("|")
-        if not raw:
-            continue
-        if "|" in raw:
-            cells = [cell.strip() for cell in raw.split("|")]
-        else:
-            cells = [cell.strip() for cell in re.split(r"\s{2,}", raw) if cell.strip()]
-        if cells:
-            rows.append([escape_tex(c) for c in cells])
-    return rows
+    # ------------------------------------------------------------------
+    # Parsing helpers
+    # ------------------------------------------------------------------
 
 
 def determine_packages(flags: Dict[str, bool], snippets: Iterable[str]) -> List[str]:
@@ -369,51 +480,38 @@ def _load_golden_snippet(golden_dir: Optional[Path], task_id: str) -> Optional[s
     return None
 
 
-def _inject_packages(preamble: str, packages: Sequence[str]) -> str:
-    lines = preamble.splitlines()
-    pkg_lines = [line for line in packages if line.strip()]
-    if not pkg_lines:
-        return preamble if preamble.endswith("\n") else preamble + "\n"
-    insertion_idx = 1 if lines else 0
-    new_lines = lines[:insertion_idx] + list(pkg_lines) + lines[insertion_idx:]
-    result = "\n".join(new_lines)
-    return result if result.endswith("\n") else result + "\n"
+def load_plan(path: Path) -> PlanSchema:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard
+        raise ValueError(f"Plan file {path} is not valid JSON") from exc
+    try:
+        return PlanSchema.parse_obj(payload)
+    except ValidationError as exc:
+        raise ValueError(f"Plan file {path} failed validation: {exc}") from exc
 
 
-def _unique(values: Iterable[str]) -> List[str]:
-    seen = set()
-    ordered: List[str] = []
-    for value in values:
-        val = value.strip()
-        if not val or val in seen:
-            continue
-        seen.add(val)
-        ordered.append(val)
-    return ordered
-
-
-def load_plan(path: Path) -> Dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def parse_tasks(plan: Dict[str, Any]) -> List[PlanTask]:
+def parse_tasks(plan: PlanSchema) -> List[PlanTask]:
     tasks: List[PlanTask] = []
-    for task in plan.get("tasks", []):
-        if not isinstance(task, dict):
-            continue
-        task_id = str(task.get("id") or task.get("task_id") or "")
-        if not task_id:
-            continue
+    for task_schema in plan.tasks:
+        task_id = task_schema.id
+        raw_extra = {
+            key: value
+            for key, value in task_schema.__dict__.items()
+            if not key.startswith("_") and key not in task_schema.__fields__
+        }
+        notes = {**raw_extra, **(task_schema.notes or {})}
+        order = task_schema.order if task_schema.order is not None else len(tasks)
         tasks.append(
             PlanTask(
                 task_id=task_id,
-                title=task.get("title") or task.get("name") or task_id,
-                kind=task.get("kind") or task.get("type") or "section",
-                content_type=task.get("content_type") or task.get("type") or "section",
-                block_id=task.get("layout_block_id") or task.get("block_id"),
-                order=int(task.get("order", len(tasks))),
-                asset_path=task.get("asset_path"),
-                notes={k: v for k, v in task.items() if k not in {"id", "title", "kind", "content_type", "layout_block_id", "block_id", "order", "asset_path"}},
+                title=task_schema.title or task_id,
+                kind=task_schema.kind or task_schema.content_type or "section",
+                content_type=task_schema.content_type or task_schema.kind or "section",
+                block_id=task_schema.layout_block_id or task_schema.block_id,
+                order=int(order),
+                asset_path=task_schema.asset_path,
+                notes=notes,
             )
         )
     tasks.sort(key=lambda t: t.order)
@@ -429,17 +527,28 @@ def load_consensus(path: Path) -> Dict[str, ConsensusBlock]:
             line = line.strip()
             if not line:
                 continue
-            data = json.loads(line)
-            block_id = data.get("block_id") or data.get("id")
-            if not block_id:
-                continue
-            mapping[str(block_id)] = ConsensusBlock(
-                block_id=str(block_id),
-                text=data.get("text") or data.get("golden_text") or "",
-                block_type=data.get("block_type") or "text",
-                page_index=int(data.get("page_index") or 0),
-                flagged=bool(data.get("flagged")),
-                ocr_outputs=data.get("ocr_outputs") or {},
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                raise ValueError(f"Consensus file {path} contains invalid JSON")
+            try:
+                parsed = ConsensusBlockSchema.parse_obj(data)
+            except ValidationError as exc:
+                raise ValueError(f"Consensus block validation failed: {exc}") from exc
+            assets_field = data.get("assets") if isinstance(data, dict) else None
+            assets: List[str] = []
+            if isinstance(assets_field, list):
+                for entry in assets_field:
+                    if isinstance(entry, str) and entry.strip():
+                        assets.append(entry.strip())
+            mapping[parsed.block_id] = ConsensusBlock(
+                block_id=parsed.block_id,
+                text=parsed.text,
+                block_type=parsed.block_type,
+                page_index=parsed.page_index,
+                flagged=parsed.flagged,
+                ocr_outputs=parsed.ocr_outputs,
+                assets=assets,
             )
     return mapping
 
@@ -449,12 +558,25 @@ def load_consensus(path: Path) -> Dict[str, ConsensusBlock]:
 # ----------------------------------------------------------------------
 
 def assemble(args: argparse.Namespace) -> Path:
+    log_info(
+        "Starting tex assembly",
+        plan=str(args.plan),
+        snippets_dir=str(args.snippets_dir),
+        aggregate=args.aggregate,
+    )
     plan = load_plan(args.plan)
     tasks = parse_tasks(plan)
     consensus = load_consensus(args.consensus) if args.consensus else {}
-    blueprint = {}
+    blueprint: LayoutBlueprintSchema | Dict[str, Any] | None = None
     if args.layout_plan and args.layout_plan.exists():
-        blueprint = json.loads(args.layout_plan.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(args.layout_plan.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:  # pragma: no cover
+            raise ValueError(f"Layout plan {args.layout_plan} is not valid JSON") from exc
+        try:
+            blueprint = LayoutBlueprintSchema.parse_obj(payload)
+        except ValidationError as exc:
+            raise ValueError(f"Layout plan {args.layout_plan} failed validation: {exc}") from exc
     llm = None
     if args.model_path:
         llm = LocalLLM(args.model_path, n_ctx=args.n_ctx, temperature=args.temperature, max_tokens=args.max_tokens)
@@ -462,8 +584,9 @@ def assemble(args: argparse.Namespace) -> Path:
     snippets_dir = args.snippets_dir
     snippets_dir.mkdir(parents=True, exist_ok=True)
 
-    doc_class = plan.get("doc_class") or (plan.get("doc_class_hint") or {}).get("candidate", "lix_article")
-    frontmatter = plan.get("frontmatter", {})
+    doc_class_hint = plan.doc_class_hint or {}
+    doc_class = plan.doc_class or doc_class_hint.get("candidate", "lix_article")
+    frontmatter = plan.frontmatter
     golden_dir = args.golden_dir or (args.plan.parent / "golden_snippets")
 
     snippet_store: Dict[str, str] = {}
@@ -484,7 +607,9 @@ def assemble(args: argparse.Namespace) -> Path:
             "auto_flagged": bool(block.flagged) if block else False,
         }
 
-    packages = determine_packages(plan.get("content_flags") or {}, snippet_store.values())
+    content_flags = dict(assembler.layout_flags)
+    content_flags.update(plan.content_flags)
+    packages = determine_packages(content_flags, snippet_store.values())
 
     preamble_path = snippets_dir / "PREAMBLE.tex"
     preamble_path.write_text(assembler.preamble_snippet(doc_class, packages), encoding="utf-8")
@@ -504,6 +629,7 @@ def assemble(args: argparse.Namespace) -> Path:
     if args.aggregate:
         run_aggregator(args.plan, snippets_dir, args.build_dir)
 
+    log_info("Completed tex assembly", snippets_dir=str(snippets_dir))
     return snippets_dir
 
 
@@ -511,6 +637,7 @@ def run_aggregator(plan_path: Path, snippets_dir: Path, build_dir: Optional[Path
     build_root = build_dir or plan_path.parent
     build_root.mkdir(parents=True, exist_ok=True)
     aggregator = Path(__file__).resolve().parents[2] / "scripts" / "aggregator.py"
+    log_info("Invoking aggregator", plan=str(plan_path), snippets=str(snippets_dir), build=str(build_root))
     cmd = [
         sys.executable,
         str(aggregator),
@@ -537,12 +664,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--max-tokens", type=int, default=900)
     ap.add_argument("--aggregate", action="store_true", help="Run aggregator after generating snippets")
     ap.add_argument("--build-dir", type=Path, default=None, help="Destination build dir when --aggregate is set")
+    ap.add_argument("--verbose", action="store_true", help="Enable debug logging")
     return ap
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = build_arg_parser()
     args = ap.parse_args(argv)
+    configure_logging(verbose=args.verbose)
     assemble(args)
     return 0
 

@@ -1,7 +1,7 @@
 {
   "version": "layout-planner/v0.1",
   "model": "Qwen2.5-VL-32B-Instruct",
-  "created_at": "2025-11-07T05:49:03+00:00",
+  "created_at": "2025-11-08T00:14:19+00:00",
   "plan": {
     "page_layout": {
       "format": "US Letter portrait",
@@ -18,35 +18,7 @@
     "sections": [
       {
         "id": null,
-        "title": "Body",
-        "goal": "Question 1 (6 points)",
-        "layout": "Single-column body text",
-        "visuals": [],
-        "notes": []
-      },
-      {
-        "id": null,
-        "title": "Part 1: Communication Problems",
-        "goal": "Rewrite the following relationships using function notation. The first part of the assignment consists of 5 questions that require precise communication of their solutions. They will require a good understanding of the\u2026",
-        "layout": "Two-column narrative with inline callouts",
-        "visuals": [
-          "table"
-        ],
-        "notes": []
-      },
-      {
-        "id": null,
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
-        "goal": "Question 2 (6 points) Question 3 (6 points) Find the inverses of each of the relations below algebraically. . a) An airplane needs to travel 400 km. Determine a function for the speed of the airplane, with respect to\u2026",
-        "layout": "Two-column narrative with inline callouts",
-        "visuals": [
-          "figure"
-        ],
-        "notes": []
-      },
-      {
-        "id": null,
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
+        "title": "Basic Advanced Functions \u2014 Part 1: Communication Problems",
         "goal": "No content provided.",
         "layout": "Single-column body text",
         "visuals": [],
@@ -54,8 +26,32 @@
       },
       {
         "id": null,
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
+        "title": "Your Name",
         "goal": "No content provided.",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "October 28, 2025",
+        "goal": "Question 1 (6 points) Rewrite each relationship using function notation.All given text retained; one \u201c=\u201d per line; equals aligned. a) An airplane must travel400km. Let t be the travel time (in hours) and lets(t) denote\u2026",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "Speed = Distance",
+        "goal": "No content provided.",
+        "layout": "Single-column body text",
+        "visuals": [],
+        "notes": []
+      },
+      {
+        "id": null,
+        "title": "Time",
+        "goal": "s(t) =400 t (t >0, km/h) b) An ice cream cone starts at125 mL and loses half its volume every5 min. Let t be in minutes and v(t) be the volume (mL); the discrete half-life model is v(t) =v0 ( 1 2 )t/T1/2 v(t) = 125 ( 1\u2026",
         "layout": "Single-column body text",
         "visuals": [],
         "notes": []
@@ -68,34 +64,21 @@
         "purpose": "Summarize the most important insight from the draft."
       }
     ],
-    "assets": [
-      {
-        "slot": "inferred-01",
-        "type": "figure",
-        "placement": "float",
-        "source": "Keyword 'graph' detected"
-      },
-      {
-        "slot": "inferred-02",
-        "type": "table",
-        "placement": "span-columns",
-        "source": "Keyword 'rubric' detected"
-      }
-    ],
+    "assets": [],
     "global_guidelines": [
       "Respect the layout planner scaffold and keep the hierarchy consistent.",
       "Use shaded sidebars for tips or highlighted learning goals when present.",
       "Switch to two columns after the lead section for denser reading."
     ],
     "stats": {
-      "word_count": 241,
+      "word_count": 158,
       "section_count": 5,
       "images_attached": 0
     },
     "narrative": "Lead with a hero title, follow with overview prose, then transition into columnar content anchored by figures/tables called out in the draft.",
     "content_flags": {
-      "has_figures": true,
-      "has_tables": true,
+      "has_figures": false,
+      "has_tables": false,
       "has_math": false,
       "has_code": false,
       "has_appendix": false,
@@ -105,39 +88,35 @@
     "chunks": [
       {
         "id": "S01",
-        "title": "Body",
+        "title": "Basic Advanced Functions \u2014 Part 1: Communication Problems",
         "kind": "section",
         "visuals": [],
         "layout": "Single-column body text"
       },
       {
         "id": "S02",
-        "title": "Part 1: Communication Problems",
-        "kind": "table",
-        "visuals": [
-          "table"
-        ],
-        "layout": "Two-column narrative with inline callouts"
+        "title": "Your Name",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
       },
       {
         "id": "S03",
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
-        "kind": "figure",
-        "visuals": [
-          "figure"
-        ],
-        "layout": "Two-column narrative with inline callouts"
+        "title": "October 28, 2025",
+        "kind": "section",
+        "visuals": [],
+        "layout": "Single-column body text"
       },
       {
         "id": "S04",
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
+        "title": "Speed = Distance",
         "kind": "section",
         "visuals": [],
         "layout": "Single-column body text"
       },
       {
         "id": "S05",
-        "title": "\ue902Listen\ue91a\ue91b\uec6d",
+        "title": "Time",
         "kind": "section",
         "visuals": [],
         "layout": "Single-column body text"
@@ -148,8 +127,8 @@
       "confidence": 0.7,
       "reason": "Compact article-like layout (single/two column).",
       "flags": {
-        "has_figures": true,
-        "has_tables": true,
+        "has_figures": false,
+        "has_tables": false,
         "has_math": false,
         "has_code": false,
         "has_appendix": false,
@@ -160,7 +139,7 @@
   },
   "raw_response": null,
   "source": {
-    "text_chars": 1335,
+    "text_chars": 808,
     "image_count": 0,
     "latency_ms": null,
     "prefer_remote": false

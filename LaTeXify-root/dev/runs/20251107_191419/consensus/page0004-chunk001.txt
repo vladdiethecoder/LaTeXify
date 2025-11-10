@@ -1,0 +1,6 @@
+Question 3 (6 points) Using graphs, decide whether each inverse is a function.
+Figures are side by side (uniform size) with concise captions. Below each pair,
+the reasoning lines up the “⇒” arrows and the verdict is boxed. a) p−1 i Inverse
+(reflection acrossy = x).  ii Vertical line test: fails. Construct inverse:
+reflect graph ofy = p(x) across y = x ⇒ graph ofp−1 Apply VLT top−1 : some
+verticals cut the graph twice ⇒ Inverse isnot a function Domain/Range swap:

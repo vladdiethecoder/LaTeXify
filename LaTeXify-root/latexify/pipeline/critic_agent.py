@@ -2,10 +2,24 @@ from __future__ import annotations
 
 """Lightweight critic agent placeholder for deterministic orchestration tests."""
 
+import re
+import shutil
+import subprocess
+import tempfile
+import textwrap
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from .specialist_router import SpecialistDecision
+
+LATEXMK_BIN = shutil.which("latexmk")
+LATEXMK_ARGS = [
+    "-halt-on-error",
+    "-interaction=nonstopmode",
+    "-pdf",
+    "-quiet",
+]
 
 
 def _extract_max_attempts(source: Dict | None) -> Optional[int]:
@@ -41,16 +55,17 @@ class ReviewResult:
 
 
 class CriticAgent:
-    """Simple synchronous critic wrapper.
+    """Critic that verifies snippets via latexmk or heuristic fallbacks."""
 
-    The real implementation will route to a 70B verifier model. For the test
-    harness we optimistically accept the first draft to keep the pipeline
-    deterministic while still exercising the review loop plumbing.
-    """
-
-    def __init__(self, plan: Dict | None = None):
+    def __init__(
+        self,
+        plan: Dict | None = None,
+        *,
+        compiler: Optional[Callable[[str], Tuple[bool, str]]] = None,
+    ):
         default_attempts = _extract_max_attempts(plan) or 1
         self._default_attempts = max(1, int(default_attempts))
+        self._compiler = compiler or self._run_latexmk
 
     def max_attempts(self, task: Dict | None = None) -> int:
         attempt_override = _extract_max_attempts(task)
@@ -67,7 +82,62 @@ class CriticAgent:
         attempt: int,
         feedback_history: Iterable[str],
     ) -> ReviewResult:
-        """Return a placeholder acceptance response."""
+        """Verify snippet and emit actionable feedback when it fails."""
 
-        # TODO: integrate real critique backend. For now always accept.
-        return ReviewResult(accepted=True, feedback="")
+        compile_ok, compile_log = self._compiler(snippet)
+        flag_messages = self._detect_placeholder_flags(snippet)
+        issues: List[str] = []
+        if not compile_ok:
+            issues.append(f"Compilation failed ({compile_log.strip() or 'unknown error'}).")
+        issues.extend(flag_messages)
+        if not issues:
+            return ReviewResult(accepted=True, feedback="")
+
+        remaining = max(self.max_attempts(bundle) - attempt, 0)
+        hint = f"{remaining} attempt(s) left." if remaining > 0 else "No attempts remain; escalate."
+        feedback = " ".join(issues + [hint])
+        return ReviewResult(accepted=False, feedback=feedback)
+
+    def _detect_placeholder_flags(self, snippet: str) -> List[str]:
+        issues: List[str] = []
+        if re.search(r"TODO|\\todo|\\placeholder", snippet, re.IGNORECASE):
+            issues.append("Remove TODO/placeholder markers before submission.")
+        if re.search(r"\?\?\?", snippet):
+            issues.append("Replace '???' markers with real values.")
+        return issues
+
+    def _run_latexmk(self, snippet: str) -> Tuple[bool, str]:
+        if not LATEXMK_BIN:
+            return True, "latexmk_not_available"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            tex_path = tmp_path / "snippet.tex"
+            wrapped = textwrap.dedent(
+                r"""
+                \documentclass{article}
+                \usepackage{amsmath}
+                \usepackage{graphicx}
+                \usepackage{booktabs}
+                \begin{document}
+                """
+            ).strip() + "\n" + snippet + "\n\\end{document}\n"
+            tex_path.write_text(wrapped, encoding="utf-8")
+            try:
+                subprocess.run(
+                    [LATEXMK_BIN, *LATEXMK_ARGS, tex_path.name],
+                    cwd=tmp_path,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                return True, ""
+            except subprocess.CalledProcessError as exc:
+                log_excerpt = ""
+                log_file = tmp_path / "snippet.log"
+                if log_file.exists():
+                    log_excerpt = log_file.read_text(encoding="utf-8")[-400:].strip()
+                err = log_excerpt or exc.stderr.decode("utf-8", errors="ignore")
+                return False, err
+            except Exception as exc:  # pragma: no cover - defensive
+                return False, str(exc)

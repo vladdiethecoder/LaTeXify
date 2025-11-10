@@ -1,4 +1,5 @@
 [console_scripts]
+latexify = latexify.cli:run
 latexify-aggregate = latexify.pipeline.aggregator:main
 latexify-build-index-bgem3 = latexify.kb.build_index_bgem3:main
 latexify-build-index-compat = latexify.kb.build_index_compat:main
@@ -7,6 +8,7 @@ latexify-class-probe = latexify.agents.class_probe:main
 latexify-ensure-kb-alias = latexify.kb.ensure_kb_alias:main
 latexify-ingest-pdf = latexify.ingestion.ingest_pdf:main
 latexify-judge-council = latexify.pipeline.judge_model:main
+latexify-judgecouncil = latexify.pipeline.judge_model:main
 latexify-langchain-orchestrator = latexify.pipeline.langchain_orchestrator:main
 latexify-latex-deps-check = latexify.utils.latex_deps_check:main
 latexify-layout-planner = latexify.pipeline.layout_planner:main
