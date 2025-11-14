@@ -1,0 +1,36 @@
+\documentclass[12pt]{book}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,enumitem,booktabs,tcolorbox}
+\tcbset{colback=white,colframe=black!15!white,boxrule=0.4pt,arc=2pt}
+\newenvironment{questionbox}[1]{\begin{tcolorbox}[title={#1},breakable]}{\end{tcolorbox}}
+\begin{document}
+\title{ {{ title|default('Worksheet') }} }
+\author{ {{ author|default('LaTeXify') }} }
+\date{ {{ date|default('') }} }
+\maketitle
+{% for question in questions %}
+\begin{questionbox}{Question {{ loop.index }}{% if question.points %} ({{ question.points }}){% endif %}}
+{{ question.prompt }}
+{% if question.parts %}
+\begin{enumerate}[label=\alph*)]
+{% for part in question.parts %}
+\item {{ part.prompt }}
+{% if part.math %}
+\begin{align*}
+{{ part.math }}
+\end{align*}
+{% endif %}
+{% if part.solution %}\textbf{Solution:} {{ part.solution }}{% endif %}
+{% endfor %}
+\end{enumerate}
+{% endif %}
+\end{questionbox}
+{% if question.figure %}
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.8\linewidth]{ {{ question.figure }} }
+\caption{ {{ question.caption|default('') }} }
+\end{figure}
+{% endif %}
+{% endfor %}
+\end{document}

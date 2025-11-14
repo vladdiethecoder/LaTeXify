@@ -1,0 +1,17 @@
+* text=auto
+
+# Treat archives/binaries as binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.bz2 binary
+*.7z binary
+
+# Keep executable bit for scripts
+release/scripts/*.py text eol=lf

@@ -1,6 +1,0 @@
-Domain & Range Domain : {x ∈R} Range : {y ∈R |y ≥−8} Restrictions Domain : None
-Range : y ≥−8 Increasing / De- creasing Decreasing : (−∞, 0) Increasing : (0,
-+∞) x-intercepts (roots) f(x) = 0 0 = 2x2 −8 8 2 = x2 x = ±2 ⇒(2, 0), (−2, 0)
-y-intercepts (x = 0) F(0) = 2(0)2 −8 = −8 ⇒(0, −8) Vertex / Notes x = −b 2a = −0
-2 ·2 = 0 y = 2(0)2 −8 = −8 ⇒(0, −8) (b) f(x) = +√x −2 Domain & Range Domain : {x
-∈R |x ≥2} Range : {y ∈R |y ≥0} Restrictions Domain : x ≥2 Range : y ≥0

@@ -1,0 +1,16 @@
+\subsection*{Spectral graph laplacian}
+
+Consider an undirected graph $G=(V,E)$ with degree matrix $D$ and adjacency
+matrix $A$. The combinatorial Laplacian is defined as $L = D - A$. The following
+eigenproblem characterizes diffusion modes:
+\[
+  L u_k = \lambda_k u_k, \qquad 0 = \lambda_1 \le \lambda_2 \le \cdots \le \lambda_n.
+\]
+
+The normalized Laplacian $\mathcal{L} = I - D^{-1/2} A D^{-1/2}$ admits the Rayleigh
+quotient
+\[
+  \lambda_k = \min_{\substack{S \subset \mathbb{R}^n \\ \dim S = k}}
+    \max_{\boldsymbol{0} \ne f \in S} \frac{f^\top \mathcal{L} f}{f^\top f},
+\]
+which is frequently used to study community structure.

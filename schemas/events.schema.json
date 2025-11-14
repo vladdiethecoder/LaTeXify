@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SSEEvent",
+  "type": "object",
+  "required": ["type", "ts"],
+  "properties": {
+    "type": { "enum": ["plan", "status", "token", "block_done", "done", "error"] },
+    "ts": { "type": "string", "format": "date-time" },
+    "plan": { "type": "object" },
+    "status": {
+      "type": "object",
+      "properties": {
+        "agent": { "type": "string" },
+        "task": { "type": "string" },
+        "state": { "enum": ["QUEUED", "WORKING", "DONE", "FAILED"] }
+      },
+      "required": ["agent", "state"]
+    },
+    "id": { "type": "string" },
+    "token": { "type": "string" },
+    "message": { "type": "string" }
+  },
+  "additionalProperties": true
+}

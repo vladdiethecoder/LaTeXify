@@ -1,0 +1,17 @@
+\documentclass{article}
+\usepackage{tikz}
+\begin{document}
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[scale=0.9]
+    \draw[->] (0,0) -- (6,0) node[right] {$x$ (cm)};
+    \draw[->] (0,0) -- (0,4) node[above] {$T$ (\si{\celsius})};
+    \draw[thick,blue!70!black,domain=0:5,samples=100] plot (\x,{3.5*exp(-0.4*\x)+0.3}) node[right] {$T = T_0 e^{-\alpha x}$};
+    \draw[dashed] (0,3.8) -- (5,3.8) node[right] {$T_0$};
+    \draw[dashed] (5,0) -- (5,1.0) node[right] {$x=L$};
+  \end{tikzpicture}
+  \caption{Exponential thermal profile through a fin with base temperature $T_0$.}
+\end{figure}
+
+\end{document}

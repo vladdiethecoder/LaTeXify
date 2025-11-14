@@ -1,1 +1,48 @@
-.aider*
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+.eggs/
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+release/.venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE/editor junk
+*.swp
+*.swo
+*.DS_Store
+.vscode/
+.idea/
+
+# Hugging Face / model weights
+models/
+release/models/
+release/inputs/*.pdf
+release/cache/
+
+# Pipeline outputs + artifacts
+release/outputs/
+release/artifacts/
+release/main.*
+release/smoke_run/
+
+# Logs
+*.log
+*.aux
+*.fdb_latexmk
+*.fls
+
+# One-off bootstrap temp directories
+/tmp/

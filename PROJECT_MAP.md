@@ -92,6 +92,49 @@ scripts/
 
 ---
 
+## Release Runner Overview
+
+run_release.py — One-shot orchestrator that wires every `release/pipeline` stage and emits run artifacts under `release/outputs`. [link](run_release.py)
+
+release/
+  README.md — Usage guide for the streamlined Florence→InternVL→Nougat stack. [link](release/README.md)
+  AGENTS.md — LangGraph-oriented contribution guidelines. [link](release/AGENTS.md)
+
+  pipeline/
+    ingestion.py — Merge PDF text + OCR spans (Florence/InternVL/Nougat/tesseract) into chunk manifests. [link](release/pipeline/ingestion.py)
+    semantic_chunking.py — Transformer-or-hash sentence embeddings to place semantic breakpoints ahead of planning. [link](release/pipeline/semantic_chunking.py)
+    planner.py — JSON-schema constrained layout planning + document metadata. [link](release/pipeline/planner.py)
+    layout.py — Region ordering heuristics that prep structure graph inputs. [link](release/pipeline/layout.py)
+    structure_graph.py — Builds Detect-Order-Construct-inspired graphs linking plan nodes, sections, and extracted figures. [link](release/pipeline/structure_graph.py)
+    retrieval.py / rag.py — Curate exemplar snippets from `reference_tex/` and attach per-block grounding. [link](release/pipeline/retrieval.py) [link](release/pipeline/rag.py)
+    specialists.py — Selects LaTeX specialists per block (text/table/figure/math) with package registration. [link](release/pipeline/specialists.py)
+    synthesis.py — Task router that calls specialists, normalizes snippets, and records package needs. [link](release/pipeline/synthesis.py)
+    synthesis_coverage.py — Audits `master_plan.json` vs `snippets.json` to surface missing chunk IDs. [link](release/pipeline/synthesis_coverage.py)
+    assembly.py — Concatenate preamble/body/postamble, sanitize Unicode, and emit `main.tex`. [link](release/pipeline/assembly.py)
+    validation.py / critique.py — Compile checkpoints, parse logs, and record critique metrics. [link](release/pipeline/validation.py) [link](release/pipeline/critique.py)
+    reward.py / reward_mm.py — Scalarize syntax/semantic/aesthetic rewards and provide the interim multimodal stub. [link](release/pipeline/reward.py) [link](release/pipeline/reward_mm.py)
+    metrics.py — Roll up latency + fidelity summaries for smoke + benchmark runs. [link](release/pipeline/metrics.py)
+
+  core/
+    common.py — Shared dataclasses + JSON loaders for plan/chunk/snippet payloads. [link](release/core/common.py)
+    reference_loader.py — Enumerates curated `.tex` exemplars and tags them for retrieval/RAG. [link](release/core/reference_loader.py)
+    sanitizer/ — Unicode + macro sanitizers invoked by `assembly.py`. [link](release/core/sanitizer)
+
+  models/
+    llm_refiner.py — Optional Qwen-based refiner with style exemplars + GPU placement control. [link](release/models/llm_refiner.py)
+    model_adapters.py — Bridges Florence/InternVL/Nougat checkpoints into ingestion’s OCR hooks. [link](release/models/model_adapters.py)
+
+  agents/
+    orchestrator_graph.py — Creative→Compile→Evaluate→Research LangGraph skeleton for refiners. [link](release/agents/orchestrator_graph.py)
+
+  scripts/ — Bootstrap helpers, PPO harnesses, SFT/DPO prep, PDF render tools. [link](release/scripts)
+  tests/ — Unit + smoke coverage for ingestion/layout/synthesis/reward plumbing. [link](release/tests)
+
+reference_tex/ — Domain-styled exemplars consumed by RAG + refiner. [link](release/reference_tex)
+inputs/ + outputs/ — Sample PDFs plus generated artifacts/metrics. [link](release/inputs) [link](release/outputs)
+
+---
+
 ## ADRs (embedded)
 - **ADR-001: Keep JSONL index limited to active pipeline — Status: Accepted.**
 - **ADR-003: KB alias via `kb/latex` — Status: Accepted.**

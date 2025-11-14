@@ -1,0 +1,25 @@
+\documentclass[11pt]{book}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amsthm,amssymb}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\begin{document}
+\title{ {{ title|default('Proof Document') }} }
+\author{ {{ author|default('LaTeXify') }} }
+\date{ {{ date|default('') }} }
+\maketitle
+{% for block in proofs %}
+\section*{ {{ block.title }} }
+{{ block.statement }}
+\begin{proof}
+{% if block.steps %}
+\begin{align*}
+{% for step in block.steps %}
+{{ step }}\\
+{% endfor %}
+\end{align*}
+{% endif %}
+{{ block.text }}
+\end{proof}
+{% endfor %}
+\end{document}

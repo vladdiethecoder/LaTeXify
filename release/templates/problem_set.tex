@@ -1,0 +1,24 @@
+\documentclass[12pt]{book}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,enumitem}
+\begin{document}
+\title{ {{ title|default('Problem Set') }} }
+\author{ {{ author|default('LaTeXify') }} }
+\date{ {{ date|default('') }} }
+\maketitle
+{% if instructions %}
+\section*{Instructions}
+{{ instructions }}
+{% endif %}
+\begin{enumerate}
+{% for problem in problems %}
+\item {% if problem.points %}[{{ problem.points }} pts] {% endif %}{{ problem.prompt }}
+{% if problem.math %}
+\begin{align*}
+{{ problem.math }}
+\end{align*}
+{% endif %}
+{% if problem.answer %}\textbf{Answer:} {{ problem.answer }}{% endif %}
+{% endfor %}
+\end{enumerate}
+\end{document}

@@ -1,0 +1,26 @@
+\section*{Baseline Styling}
+
+This short exemplar demonstrates the expected tone and TeX hygiene for the
+LaTeXify refiner. Keep sentences crisp and prefer semantic macros over raw
+formatting commands.
+
+\begin{theorem}
+Let $f$ be continuous on $[a,b]$ and differentiable on $(a,b)$. There exists
+$\xi \in (a,b)$ such that
+\[
+  f(b) - f(a) = f'(\xi)(b-a).
+\]
+\end{theorem}
+
+\begin{table}[H]
+  \centering
+  \caption{Reference numerical stability sweep}
+  \begin{tabular}{lcc}
+    \toprule
+    Solver & $\Delta t$ & Residual \\
+    \midrule
+    BDF2 & $10^{-3}$ & $2.1 \times 10^{-5}$ \\
+    RK4  & $10^{-4}$ & $7.4 \times 10^{-6}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
