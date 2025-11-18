@@ -18,6 +18,17 @@ UNICODE_LATEX_MAP: Dict[str, str] = {
     "−": "-",  # minus sign
     "–": "--",
     "—": "---",
+    "“": "``",
+    "”": "''",
+    "‘": "`",
+    "’": "'",
+    "‚": ",",
+    "„": ",,",
+    "™": "(TM)",
+    "¢": r"\textcent",
+    "£": r"\pounds",
+    "¥": r"\textyen",
+    "�": "?",  # replacement character
     "∈": r"\in",
     "∉": r"\notin",
     "∪": r"\cup",
@@ -38,7 +49,27 @@ UNICODE_LATEX_MAP: Dict[str, str] = {
     "′": r"^{\prime}",
     "″": r"^{\prime\prime}",
     "̸": r"\not",  # combining long solidus overlay (fallback)
+    "²": r"^{2}",
+    "¹": r"^{1}",
+    "⁻": r"^{-}",
+    "·": r"\cdot",
+    "γ": r"\gamma",
+    "€": r"\texteuro",
+    "«": "<<",
+    "»": ">>",
+    "‹": "<",
+    "›": ">",
+    "…": r"\ldots",
+    "•": r"\textbullet",
+    "°": r"^{\circ}",
+    "ℝ": r"\mathbb{R}",
+    "©": "(C)",
 }
+
+CONTROL_CHAR_TRANSLATION = {code: " " for code in range(0, 32)}
+for code in (9, 10, 13):
+    CONTROL_CHAR_TRANSLATION.pop(code, None)
+CONTROL_CHAR_TRANSLATION[0x7F] = " "
 
 
 def sanitize_unicode_to_latex(payload: str) -> str:
@@ -46,7 +77,7 @@ def sanitize_unicode_to_latex(payload: str) -> str:
 
     if not payload:
         return payload
-    sanitized = payload
+    sanitized = payload.translate(CONTROL_CHAR_TRANSLATION)
     for needle, replacement in SEQUENCE_LATEX_MAP.items():
         sanitized = sanitized.replace(needle, replacement)
     for needle, replacement in UNICODE_LATEX_MAP.items():

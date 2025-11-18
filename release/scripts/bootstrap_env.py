@@ -17,7 +17,7 @@ REQUIREMENTS_FILE = RELEASE_DIR / "requirements.txt"
 REQUIRED_MODELS = [
     "layout/qwen2.5-vl-32b",
     "judge/qwen2.5-72b-gguf",
-    "ocr/internvl-3.5-14b",
+    "ocr/internvl",
     "ocr/florence-2-large",
     "ocr/nougat-small",
     "ocr/mineru-1.2b",

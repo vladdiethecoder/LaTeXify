@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
@@ -55,6 +55,7 @@ class RAGEntry:
     packages: List[str]
     embedding: List[float]
     domain: str | None = None
+    quantization_levels: int | None = None
 
     def to_json(self) -> Dict[str, object]:
         return {
@@ -65,6 +66,7 @@ class RAGEntry:
             "packages": self.packages,
             "embedding": self.embedding,
             "domain": self.domain,
+            "quantization_levels": self.quantization_levels,
         }
 
     @classmethod
@@ -77,7 +79,31 @@ class RAGEntry:
             packages=payload.get("packages", []),
             embedding=payload.get("embedding", _embed(payload["text"])),
             domain=payload.get("domain"),
+            quantization_levels=payload.get("quantization_levels"),
         )
+
+    def embedding_vector(self) -> List[float]:
+        if not self.quantization_levels:
+            return list(self.embedding)
+        scale = max(1, int(self.quantization_levels) - 1)
+        return [min(1.0, max(0.0, value / scale)) for value in self.embedding]
+
+    def quantized_copy(self, levels: int) -> "RAGEntry":
+        if levels <= 1:
+            return self
+        if self.quantization_levels == levels:
+            return self
+        scale = max(1, levels - 1)
+        source = self.embedding_vector()
+        quantized = [min(scale, max(0, int(round(value * scale)))) for value in source]
+        return replace(self, embedding=quantized, quantization_levels=levels)
+
+    def footprint_bytes(self) -> int:
+        text_bytes = len(self.text.encode("utf-8"))
+        per_value = 1 if self.quantization_levels else 8
+        embed_bytes = len(self.embedding) * per_value
+        aux = 64 + len(self.packages) * 8
+        return text_bytes + embed_bytes + aux
 
 
 class RAGIndex:
@@ -100,7 +126,7 @@ class RAGIndex:
         candidates = self._by_type.get(snippet_type, self._entries) if snippet_type else self._entries
         scored = []
         for entry in candidates:
-            score = _cosine(vec, entry.embedding)
+            score = _cosine(vec, entry.embedding_vector())
             if domain:
                 if entry.domain == domain:
                     score += 0.05
@@ -117,6 +143,9 @@ class RAGIndex:
 
     def to_json(self) -> List[Dict[str, object]]:
         return [entry.to_json() for entry in self._entries]
+
+    def entries(self) -> List[RAGEntry]:
+        return list(self._entries)
 
 
 def _infer_domain(tex_path: Path, source_dir: Path) -> str | None:
@@ -167,6 +196,67 @@ def build_index(source_dir: Path, output_path: Path) -> Path:
     return output_path
 
 
+def _deduplicate_entries(entries: Iterable[RAGEntry]) -> List[RAGEntry]:
+    seen: set[tuple[str, str]] = set()
+    unique: List[RAGEntry] = []
+    for entry in entries:
+        signature = (entry.snippet_type, entry.text.strip())
+        if signature in seen:
+            continue
+        seen.add(signature)
+        unique.append(entry)
+    return unique
+
+
+def optimize_entries(
+    entries: Iterable[RAGEntry],
+    *,
+    budget_bytes: int | None = None,
+    quantization_levels: int | None = 64,
+) -> List[RAGEntry]:
+    prioritized: List[RAGEntry] = []
+    optional: List[RAGEntry] = []
+    for entry in _deduplicate_entries(entries):
+        if entry.snippet_type in {"equation", "table", "figure"} or entry.domain:
+            prioritized.append(entry)
+        else:
+            optional.append(entry)
+    ordered = prioritized + optional
+    total = 0
+    result: List[RAGEntry] = []
+    for entry in ordered:
+        optimized = entry.quantized_copy(quantization_levels or 0)
+        size = optimized.footprint_bytes()
+        if budget_bytes is not None and total and total + size > budget_bytes:
+            continue
+        result.append(optimized)
+        total += size
+        if budget_bytes is not None and total >= budget_bytes:
+            break
+    return result
+
+
+def optimize_index(
+    index: RAGIndex,
+    *,
+    budget_mb: int | None = None,
+    quantization_levels: int | None = 64,
+) -> RAGIndex:
+    budget_bytes = None
+    if budget_mb:
+        budget_bytes = max(1, budget_mb) * 1024**2
+    optimized_entries = optimize_entries(index.entries(), budget_bytes=budget_bytes, quantization_levels=quantization_levels)
+    if len(optimized_entries) == len(index.entries()):
+        return index
+    LOGGER.info(
+        "RAG cache optimized: %s → %s entries (budget=%s MB).",
+        len(index.entries()),
+        len(optimized_entries),
+        budget_mb or "unbounded",
+    )
+    return RAGIndex(optimized_entries)
+
+
 def load_or_build_index(source_dir: Path, cache_path: Path | None = None) -> RAGIndex:
     if cache_path and cache_path.exists():
         return RAGIndex.load(cache_path)
@@ -181,4 +271,12 @@ def load_or_build_index(source_dir: Path, cache_path: Path | None = None) -> RAG
     return RAGIndex(entries)
 
 
-__all__ = ["build_index", "extract_environments", "load_or_build_index", "RAGIndex", "RAGEntry"]
+__all__ = [
+    "build_index",
+    "extract_environments",
+    "load_or_build_index",
+    "RAGIndex",
+    "RAGEntry",
+    "optimize_entries",
+    "optimize_index",
+]

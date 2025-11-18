@@ -15,6 +15,7 @@ def test_unicode_sanitizer_rewrites_common_symbols():
     assert r"^{\prime}" in sanitized
     assert sanitize_unicode_to_latex("∉") == r"\notin"
     assert "̸" not in sanitize_unicode_to_latex("A̸B")
+    assert "?" == sanitize_unicode_to_latex("�")
 
 
 def test_assembly_stage_applies_sanitizer(tmp_path):

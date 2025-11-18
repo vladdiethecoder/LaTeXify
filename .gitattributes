@@ -1,5 +1,21 @@
 * text=auto
 
+# Normalize common text formats
+*.py text eol=lf
+*.md text eol=lf
+*.rst text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.tex text eol=lf linguist-language=TeX
+*.cls text eol=lf linguist-language=TeX
+*.sty text eol=lf linguist-language=TeX
+*.bib text eol=lf linguist-language=TeX
+*.sh text eol=lf
+*.ps1 text eol=crlf
+Makefile text eol=lf
+
 # Treat archives/binaries as binary
 *.pdf binary
 *.png binary
@@ -12,6 +28,20 @@
 *.tgz binary
 *.bz2 binary
 *.7z binary
+*.tar.gz binary
+*.bin binary
+*.pt binary
+*.pth binary
+*.ckpt binary
+*.safetensors binary
+*.onnx binary
+*.tflite binary
+*.gguf binary
+*.ggml binary
+*.pb binary
+*.weights binary
 
-# Keep executable bit for scripts
+# Keep executable bit + LF endings for scripts
 release/scripts/*.py text eol=lf
+release/scripts/*.sh text eol=lf
+scripts/*.sh text eol=lf

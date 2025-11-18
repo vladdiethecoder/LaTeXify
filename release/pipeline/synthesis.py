@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -10,6 +11,7 @@ from ..core import common
 from ..utils.ensemble import EnsembleVoter
 from ..models.math_ocr import MathSyntaxValidator
 from .rag import RAGIndex
+from .prompt_guard import sanitize_chunk_text
 from .specialists import PreambleAgent, SpecialistResult, dispatch_specialist
 
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ DOMAIN_KEYWORDS = {
 }
 PROMPT_GUARD_MARKERS = ("style exemplars", "respond with:", "<<<source")
 SYNTAX_VALIDATOR = MathSyntaxValidator()
+MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 
 
 def _infer_domain(label: str | None) -> str | None:
@@ -50,6 +53,28 @@ def latex_heading(label: str, level: int) -> str:
     if level == 3:
         return f"\\subsubsection{{{label}}}"
     return f"\\paragraph{{{label}}}"
+
+
+def _extract_markdown_heading(text: str) -> tuple[str | None, int | None, str]:
+    lines = text.splitlines()
+    heading_cmd: str | None = None
+    heading_level: int | None = None
+    remainder_start = 0
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = MARKDOWN_HEADING_RE.match(stripped)
+        if match:
+            heading_level = len(match.group(1))
+            label = match.group(2).strip()
+            heading_cmd = latex_heading(label, heading_level)
+            remainder_start = idx + 1
+        break
+    remainder = "\n".join(lines[remainder_start:]).lstrip("\n")
+    if heading_cmd:
+        return heading_cmd, heading_level, remainder
+    return None, None, text
 
 
 def _looks_like_refiner_prompt(candidate: str | None) -> bool:
@@ -95,6 +120,7 @@ def render_block(
     rag_index: RAGIndex | None,
     section_context: Dict[str, str] | None,
     llm_refiner=None,
+    quality_profile: Dict[str, object] | None = None,
 ) -> SpecialistResult:
     metadata = chunk.metadata or {}
     region = metadata.get("region_type", "text")
@@ -103,31 +129,50 @@ def render_block(
     notes = {"region": region}
     if section_context:
         notes.update(section_context)
+    guarded_text = sanitize_chunk_text(chunk.text)
+    conservative_mode = (quality_profile or {}).get("processing_mode") == "conservative"
+    aggressive_mode = (quality_profile or {}).get("processing_mode") == "aggressive"
+    if conservative_mode:
+        markdown_heading, normalized_heading, normalized_text = None, None, guarded_text
+    else:
+        markdown_heading, _, normalized_text = _extract_markdown_heading(guarded_text)
+    chunk_payload = chunk
+    if normalized_text != chunk.text:
+        chunk_payload = common.Chunk(
+            chunk_id=chunk.chunk_id,
+            page=chunk.page,
+            text=normalized_text,
+            images=chunk.images,
+            metadata=chunk.metadata,
+        )
     if block.block_type == "section":
-        heading = latex_heading(block.label, header_level or 1)
-        body = chunk.text.strip()
-        return SpecialistResult(latex=f"{heading}\n{body}", notes=notes)
+        heading = markdown_heading or latex_heading(block.label, header_level or 1)
+        body = chunk_payload.text.strip()
+        combined = "\n".join([heading] + ([body] if body else []))
+        return SpecialistResult(latex=combined, notes=notes)
     prefix = ""
     if block.block_type != "section":
-        if section_context and section_context.get("section_title"):
+        if not conservative_mode and section_context and section_context.get("section_title"):
             prefix += f"% section: {section_context['section_title']}\n"
-        if parent_section:
+        if not conservative_mode and parent_section:
             prefix += f"% parent-section: {parent_section}\n"
+    heading_prefix = f"{markdown_heading}\n" if markdown_heading and block.block_type != "section" else ""
     snippet_type = RAG_TYPE_MAP.get(block.block_type, block.block_type)
     domain_hint = _infer_domain(parent_section)
     examples = (
-        rag_index.search(chunk.text, snippet_type, k=2, domain=domain_hint)
+        rag_index.search(chunk_payload.text, snippet_type, k=2, domain=domain_hint)
         if rag_index and snippet_type
         else []
     )
-    result = dispatch_specialist(block.block_type, chunk, preamble_agent, examples, context=section_context)
+    result = dispatch_specialist(block.block_type, chunk_payload, preamble_agent, examples, context=section_context)
     baseline = result.latex
     refined_candidate = None
-    if llm_refiner:
+    refiner = llm_refiner if not conservative_mode else None
+    if refiner:
         try:
-            refined = llm_refiner.refine(
+            refined = refiner.refine(
                 block.block_type,
-                chunk.text,
+                chunk_payload.text,
                 result.latex,
                 section_context,
                 examples,
@@ -141,7 +186,8 @@ def render_block(
                 )
         except Exception as exc:  # pragma: no cover - heavy dependency
             LOGGER.warning("LLM refinement failed for chunk %s (%s)", chunk.chunk_id, exc)
-    snippet_voter = EnsembleVoter(threshold=0.35)
+    threshold = 0.3 if aggressive_mode else 0.4 if conservative_mode else 0.35
+    snippet_voter = EnsembleVoter(threshold=threshold)
     snippet_voter.add("specialist", baseline, score=SYNTAX_VALIDATOR.score(baseline))
     if refined_candidate:
         snippet_voter.add(
@@ -155,7 +201,8 @@ def render_block(
     if best_candidate:
         result.notes["snippet_source"] = best_candidate.name
         result.notes["snippet_confidence"] = round(best_candidate.score, 3)
-    result.latex = prefix + chosen
+    snippet_body = heading_prefix + chosen if heading_prefix else chosen
+    result.latex = prefix + snippet_body
     if "region" not in result.notes:
         result.notes["region"] = region
     return result
@@ -170,6 +217,7 @@ def synthesize_blocks(
     rag_index: RAGIndex | None,
     section_context: Dict[str, Dict[str, str]],
     llm_refiner=None,
+    quality_profile: Dict[str, object] | None = None,
 ) -> List[common.Snippet]:
     snippets: List[common.Snippet] = []
     for block in plan:
@@ -189,6 +237,7 @@ def synthesize_blocks(
             rag_index,
             section_meta,
             llm_refiner,
+            quality_profile=quality_profile,
         )
         snippets.append(common.Snippet(chunk_id=chunk.chunk_id, latex=result.latex, notes=result.notes))
     return snippets
@@ -206,6 +255,8 @@ def run_synthesis(
     rag_index: RAGIndex | None = None,
     master_plan_path: Path | None = None,
     llm_refiner=None,
+    quality_profile: Dict[str, object] | None = None,
+    domain_profile: Dict[str, object] | None = None,
 ) -> Path:
     chunks = {chunk.chunk_id: chunk for chunk in common.load_chunks(chunks_path)}
     plan = common.load_plan(plan_path)
@@ -237,6 +288,7 @@ def run_synthesis(
         rag_index,
         section_context,
         llm_refiner,
+        quality_profile=quality_profile,
     )
     common.save_snippets(snippets, snippets_path)
     if preamble_path:
@@ -245,6 +297,10 @@ def run_synthesis(
             "class_options": class_options,
             "packages": preamble_agent.packages(),
         }
+        if quality_profile:
+            payload["quality_mode"] = quality_profile.get("processing_mode")
+        if domain_profile:
+            payload["domain_profile"] = domain_profile
         preamble_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         LOGGER.info("PreambleAgent registered %s packages", len(payload["packages"]))
     LOGGER.info("Synthesis complete with %s structurally-aware snippets", len(snippets))

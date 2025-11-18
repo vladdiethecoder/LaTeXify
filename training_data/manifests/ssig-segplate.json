@@ -1,0 +1,58 @@
+{
+  "name": "SSIG-SegPlate",
+  "slug": "ssig-segplate",
+  "tracks": [
+    "T2",
+    "T3"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/ssig-segplate",
+    "processed_root": "training_data/processed/ssig-segplate",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/ssig-segplate/images"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Use for evaluating character segmentation algorithms"
+  ],
+  "strengths": [
+    "Real-world character segmentation task"
+  ],
+  "limitations": [
+    "Very small size",
+    "License needs verification from canonical source",
+    "Specific to license plates"
+  ],
+  "modality": [
+    "page-image"
+  ],
+  "domain": [
+    "license-plates"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 101,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.45,
+  "justification": "Small dataset for License Plate Character Segmentation, provides a task for text detection and character segmentation (T2, T3) in a constrained domain."
+}

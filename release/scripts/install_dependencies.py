@@ -13,6 +13,10 @@ DEFAULT_REQUIREMENTS = REPO_ROOT / "release" / "requirements.txt"
 DEFAULT_EXTRAS = [
     "PyMuPDF>=1.24.0",
 ]
+CRITICAL_GPU_EXTRAS = [
+    "einops>=0.7.0",
+    "timm>=1.0.0",
+]
 
 
 def run(cmd: List[str]) -> None:
@@ -60,6 +64,8 @@ def main() -> int:
     extras: List[str] = [] if args.no_extras else list(DEFAULT_EXTRAS)
     extras.extend(args.extra)
     install_extras(extras)
+    # Always seed GPU-critical wheels so Florence2/InternVL can stay on CUDA.
+    install_extras(CRITICAL_GPU_EXTRAS)
     print("[install-deps] All dependencies installed.")
     return 0
 

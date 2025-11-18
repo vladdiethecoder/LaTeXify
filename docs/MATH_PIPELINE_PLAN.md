@@ -88,7 +88,7 @@ This document distills the 15-point improvement plan for upgrading LaTeXify into
 15. Finalize documentation + deployment scripts.
 
 ## Resource Requirements
-- **Compute:** ≥16 GB VRAM GPU for LLM inference, ≥32 GB RAM, ~500 GB disk for models/datasets.
+- **Compute:** Single RTX 5090 (32 GB VRAM) GPU, 32 GB RAM, ~500 GB disk for models/datasets.
 - **Models:** `codellama-math`, `pix2tex`, `LayoutLMv3`, YOLOv8 math detector.
 - **Dependencies:** `torch`, `transformers`, `ultralytics`, `pix2tex`, `sympy`, `latex2sympy`, `pdfplumber`, `PyMuPDF`, `llama-cpp-python`, `vllm`, `huggingface_hub`.
 

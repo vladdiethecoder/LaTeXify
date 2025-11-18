@@ -36,6 +36,10 @@ class IterativeRefiner:
     max_iterations: int = 2
     symbol_normalizer: SymbolNormalizer = field(default_factory=SymbolNormalizer)
     env_detector: MathEnvironmentDetector = field(default_factory=MathEnvironmentDetector)
+    _plan_cache: Dict[str, common.PlanBlock] = field(init=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self._plan_cache = {}
 
     def refine(self) -> IterativeRefinerResult:
         tex_path = None
@@ -68,18 +72,30 @@ class IterativeRefiner:
 
     def _strengthen_snippets(self, chunk_ids: Iterable[str]) -> None:
         snippets = {snippet.chunk_id: snippet for snippet in common.load_snippets(self.snippets_path)}
+        plan_map = self._load_plan_map()
         updated = False
         for chunk_id in chunk_ids:
             snippet = snippets.get(chunk_id)
-            if not snippet:
+            block = plan_map.get(chunk_id)
+            if not snippet or not block:
                 continue
             normalized = self.symbol_normalizer.normalize(snippet.latex)
-            wrapped = self.env_detector.wrap("equation", normalized)
+            metadata = block.metadata or {}
+            wrapped = self.env_detector.wrap(block.block_type or "text", normalized, metadata)
             if wrapped != snippet.latex:
                 snippet.latex = wrapped
                 updated = True
         if updated:
             common.save_snippets(snippets.values(), self.snippets_path)
+
+    def _load_plan_map(self) -> Dict[str, common.PlanBlock]:
+        if self._plan_cache:
+            return self._plan_cache
+        if self.plan_path.exists():
+            self._plan_cache = {block.chunk_id: block for block in common.load_plan(self.plan_path)}
+        else:
+            self._plan_cache = {}
+        return self._plan_cache
 
 
 __all__ = ["IterativeRefiner", "IterativeRefinerResult"]

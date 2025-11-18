@@ -1,0 +1,58 @@
+{
+  "name": "MNIST Database",
+  "slug": "mnist-database",
+  "tracks": [
+    "T3"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/mnist-database",
+    "processed_root": "training_data/processed/mnist-database",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/mnist-database/images"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Normalize pixel values to [0,1]",
+    "Center and resize images"
+  ],
+  "strengths": [
+    "Classic benchmark",
+    "Simple preprocessing"
+  ],
+  "limitations": [
+    "Only digits 0-9",
+    "License needs verification from canonical source"
+  ],
+  "modality": [
+    "page-image"
+  ],
+  "domain": [
+    "handwriting"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 70000,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.55,
+  "justification": "Classic digit recognition dataset, can be used for basic handwritten digit OCR (T3), but limited scope."
+}

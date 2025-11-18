@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Sequence
 
 from ..core import common
 
@@ -24,6 +26,35 @@ CURLY_RE = re.compile(r"[{}]")
 WHITESPACE_RE = re.compile(r"\s+")
 
 DEFAULT_WEIGHTS = {"syntax": 0.5, "semantic": 0.3, "aesthetic": 0.2}
+REWARD_PAGE_LIMIT = int(os.environ.get("LATEXIFY_MM_REWARD_PAGE_LIMIT", "4"))
+REWARD_RENDER_DPI = int(os.environ.get("LATEXIFY_MM_REWARD_DPI", "120"))
+
+
+def _select_reward_pages(chunks: Sequence[common.Chunk], limit: int) -> List[int]:
+    if limit <= 0:
+        return []
+    pages: List[int] = []
+    seen = set()
+    def _append(page: int) -> None:
+        if page <= 0 or page in seen or len(pages) >= limit:
+            return
+        pages.append(page)
+        seen.add(page)
+    _append(1)
+    math_counter: Counter[int] = Counter()
+    layout_counter: Counter[int] = Counter()
+    for chunk in chunks:
+        meta = chunk.metadata or {}
+        region = meta.get("region_type")
+        if meta.get("formula_detected") or region in {"formula", "equation"}:
+            math_counter[chunk.page] += 1
+        if region in {"table", "figure"}:
+            layout_counter[chunk.page] += 1
+    for page, _ in math_counter.most_common():
+        _append(page)
+    for page, _ in layout_counter.most_common():
+        _append(page)
+    return pages
 
 
 def latex_to_text(latex: str) -> str:
@@ -102,6 +133,7 @@ def evaluate_rewards(
         raise ValueError(f"Unsupported reward mode: {mode}")
     weights = weights or DEFAULT_WEIGHTS
     chunks = common.load_chunks(chunks_path) if chunks_path.exists() else []
+    pages_to_score = _select_reward_pages(chunks, REWARD_PAGE_LIMIT)
     source_text = "\n\n".join(chunk.text for chunk in chunks)
     latex = tex_path.read_text(encoding="utf-8") if tex_path.exists() else ""
     generated_text = latex_to_text(latex)
@@ -109,13 +141,18 @@ def evaluate_rewards(
     syntax = syntax_score(validation_data)
     semantic = semantic_score(source_text, generated_text)
     if mode == "mm":
-        from .reward_mm import aesthetic_mm_score
+        from .reward_mm import aesthetic_mm_score, release_reward_adapter
 
         try:
-            aesthetic = aesthetic_mm_score(tex_path)
+            try:
+                aesthetic = aesthetic_mm_score(tex_path, pages=pages_to_score, dpi=REWARD_RENDER_DPI)
+            except TypeError:
+                aesthetic = aesthetic_mm_score(tex_path)
         except Exception as exc:  # pragma: no cover - runtime safeguard
             LOGGER.warning("Multimodal reward failed (%s); falling back to heuristic.", exc)
             aesthetic = aesthetic_score(latex)
+        finally:
+            release_reward_adapter()
     else:
         aesthetic = aesthetic_score(latex)
     total = (

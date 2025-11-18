@@ -1,0 +1,59 @@
+{
+  "name": "MathBridge",
+  "slug": "mathbridge",
+  "tracks": [
+    "T3",
+    "T8"
+  ],
+  "url": "https://huggingface.co/datasets/Kyudan/MathBridge",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/mathbridge",
+    "processed_root": "training_data/processed/mathbridge",
+    "modalities": [
+      {
+        "modality": "latex-src",
+        "path": "training_data/raw/mathbridge/latex"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "huggingface-datasets",
+    "command": "hf download Kyudan/MathBridge --repo-type dataset --local-dir \"training_data/raw/mathbridge/source\"",
+    "needs_auth": true,
+    "notes": []
+  },
+  "preprocess": [
+    "Use for text-to-LaTeX translation model training",
+    "Pair generated LaTeX with rendering engine to create images"
+  ],
+  "strengths": [
+    "First large-scale text-to-LaTeX dataset for math",
+    "23M pairs for robust training",
+    "Sourced from arXiv and textbooks"
+  ],
+  "limitations": [
+    "License needs verification",
+    "Synthetic English vocalizations via GPT-3.5",
+    "No accompanying images"
+  ],
+  "modality": [
+    "latex-src"
+  ],
+  "domain": [
+    "scientific",
+    "textbooks"
+  ],
+  "is_synthetic": true,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": null,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": 23000000
+  },
+  "relevance": 0.85,
+  "justification": "Provides massive paired data for translating mathematical English to LaTeX, crucial for formula OCR (T3) and PDF/LaTeX infill (T8)."
+}

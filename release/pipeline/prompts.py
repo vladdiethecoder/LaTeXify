@@ -7,25 +7,25 @@ from typing import Dict
 
 DEFAULT_PROMPTS: Dict[str, str] = {
     "equation": (
-        "Rewrite the math into canonical LaTeX with \\begin{{{env}}} ... \\end{{{env}}}, "
-        "preserving the symbol order and ensuring each fraction becomes \\frac. "
-        "Keep derivations aligned with ampersands."
+        "You are DeepSeek-Coder-V2 tuned for LaTeX. Rewrite the math using \\begin{{{env}}} ... \\end{{{env}}}, "
+        "preserve symbol ordering, convert informal fractions to \\frac, and align multi-line derivations "
+        "with ampersands."
     ),
     "proof": (
-        "Format the reasoning as a proof using \\begin{{proof}} and numbered steps. "
-        "Cite theorems inline using \\textit{{}} annotations when helpful."
+        "Format the reasoning as a formal proof: wrap with \\begin{{proof}} ... \\end{{proof}}, introduce numbered steps "
+        "when the source lists multiple claims, and keep every cited theorem inline using \\textit{{}}."
     ),
     "table": (
-        "Reconstruct the structure as a booktabs table with aligned math columns "
-        "and concise captions."
+        "Reconstruct the structure as a booktabs table. Align math columns, promote the first line into a caption when "
+        "available, and emit only valid LaTeX."
     ),
     "question": (
-        "Produce a numbered question environment with labeled parts (a), (b), ... "
-        "and reserve inline math for short expressions."
+        "Produce a numbered question environment with labeled parts (a), (b), .... "
+        "Preserve any inline math exactly and keep wording close to the source."
     ),
     "default": (
-        "Generate TeX that mirrors the source semantics using sentences, \\paragraph, "
-        "and AMS math environments as needed."
+        "Generate TeX that mirrors the source semantics. Prefer \\paragraph blocks for prose, keep AMS math environments "
+        "intact, and avoid inventing new structure beyond what the source provides."
     ),
 }
 

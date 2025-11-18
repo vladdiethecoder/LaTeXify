@@ -33,6 +33,8 @@ def evaluate(
         retrieval_entries = json.loads(retrieval_path.read_text(encoding="utf-8"))
     chunks = common.load_chunks(chunks_path) if chunks_path.exists() else []
     validation_data = json.loads(validation_path.read_text(encoding="utf-8")) if validation_path.exists() else {}
+    refinement_path = tex_path.parent / "refinement_report.json"
+    refinement_data = json.loads(refinement_path.read_text(encoding="utf-8")) if refinement_path.exists() else {}
     sections = [b for b in plan if b.block_type == "section"]
     tables = [b for b in plan if b.block_type == "table"]
     lists = [b for b in plan if b.block_type == "list"]
@@ -78,6 +80,12 @@ def evaluate(
         metrics["retrieval_grounding"] = _ratio(grounded, len(retrieval_entries))
     metrics["compile_success"] = bool(validation_data.get("success"))
     metrics["compile_errors"] = validation_data.get("errors", [])
+    if refinement_data:
+        passes = refinement_data.get("passes", [])
+        metrics["compilation_passes"] = len(passes)
+        metrics["compilation_refinement_success"] = bool(refinement_data.get("success"))
+        metrics["compilation_actions"] = sum(len(entry.get("actions", [])) for entry in passes)
+        metrics["compilation_pass_details"] = passes
     output_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     return output_path
 

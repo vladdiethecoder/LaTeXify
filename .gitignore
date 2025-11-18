@@ -32,6 +32,38 @@ release/models/
 release/inputs/*.pdf
 release/cache/
 
+# Build + run artifacts
+build/
+build/runs/
+build/run-*/
+test-results/
+release/reports/
+release/docs/_build/
+release/docs/_static/
+release/docs/_images/
+release/docs/_doctrees/
+
+# Training + research outputs
+training_runs/
+training_data/raw/
+!training_data/raw/**/.gitkeep
+training_data/processed/
+!training_data/processed/**/.gitkeep
+
+# Frontend + local tooling
+node_modules/
+apps/ui/.streamlit/
+apps/ui/dist/
+apps/ui/.vite/
+
+# Environment + coverage artifacts
+.env
+.env.*
+release/.env
+.coverage
+coverage.xml
+*.coverage
+
 # Pipeline outputs + artifacts
 release/outputs/
 release/artifacts/

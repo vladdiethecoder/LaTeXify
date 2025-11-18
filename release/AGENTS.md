@@ -1,21 +1,27 @@
 # Repository Guidelines
 
 ## Mission
-Operate inside `release/`, keeping the streamlined Florence → InternVL → Nougat → pytesseract OCR stack, SCAN-style layout segmentation, multimodal retrieval, and iterative critique loop healthy. No feature flags—every agent run should exercise the full chain unless explicitly told otherwise.
+Operate inside `release/`, keeping the streamlined Florence → InternVL → Nougat → pytesseract OCR stack, SCAN-style layout segmentation, multimodal retrieval, progressive quality routing, domain-aware enrichment, and iterative critique loop healthy. No feature flags—every agent run should exercise the full chain (including input-quality scoring, domain detection, semantic enrichment, and the consolidated quality gate) unless explicitly told otherwise.
 
 ## Environment Setup
 - Always create a local virtualenv: `python -m venv .venv && source .venv/bin/activate`.
 - Install requirements via `pip install -r release/requirements.txt` (ships `torch`, `torchvision`, `transformers`, `pdf2image`, `sentencepiece`).
-- External tools: Poppler (`pdfimages`, `pdftoppm`), `tesseract`, `latexmk`/`tectonic`. Local weights (Florence-2, InternVL-3.5, Nougat) must live under `<repo>/models/ocr/`. Pipeline is validated on dual RTX 3090s (24 GB each, no NVLink) + 32 GB DDR5 but will fall back to CPU/Nougat automatically.
+- External tools: Poppler (`pdfimages`, `pdftoppm`), `tesseract`, `latexmk`/`tectonic`. Local weights (DeepSeek-Coder-V2-Lite, DeepSeek-V3/Qwen judges, Florence-2, InternVL-3.5, Nougat) must live under `<repo>/models/`. Pipeline is validated on dual RTX 3090s (24 GB each, no NVLink) + 32 GB DDR5 but will fall back to CPU/Nougat automatically.
 - Populate `release/reference_tex/` with curated, high-aesthetic `.tex` sources (textbooks, papers). The RAG builder scans this tree to supply exemplar LaTeX environments for SpecialistAgents; the release ships with seeded physics/mechanics examples so future agents can build on a baseline style.
 
 ## Development Workflow
 1. **Inputs** – place test PDFs in `release/inputs/` or use `release/samples/sample.pdf`.
-2. **Run** – `python run_release.py --pdf sample.pdf --skip-compile` to exercise the full Parsing→Planner→Layout→StructureGraph→Retrieval→LaTeXSynth→LLMRefiner→Assembly→Validation stack. Artifacts include `master_plan.json`, `plan.json`, `graph.json`, `retrieval.json`, `snippets.json`, `preamble.json`, `synthesis_gaps.json`, `metrics.json`, `validation.json`, `reward_trace.jsonl`, and `agent_metrics.json`. The exemplar cache now persists globally at `release/cache/rag_index.json`, and the LLM refiner stores downloaded weights under `models/llm/`.
-3. **Benchmark** – For READOC-style sweeps run `python run_release.py --benchmark-dir ../datasets/arxiv_subset --benchmark-limit 10 --skip-compile`; summaries land in `release/outputs/benchmark_summary.json`.
+2. **Run** – `python run_release.py --pdf sample.pdf --skip-compile` to exercise the full Parsing→Planner→Layout→StructureGraph→Retrieval→LaTeXSynth→LLMRefiner→SemanticEnricher→Assembly→Validation stack. Artifacts include `reports/input_quality.json`, `domain_profile.json`, `master_plan.json`, `plan.json`, `graph.json`, `retrieval.json`, `snippets.json`, `preamble.json`, `semantic_enrichment.json`, `synthesis_gaps.json`, `metrics.json`, `validation.json`, `quality_gate.json`, `reward_trace.jsonl`, and `agent_metrics.json`. The exemplar cache now persists globally at `release/cache/rag_index.json`, and the LLM refiner stores downloaded weights under `models/llm/`.
+3. **Benchmark** – For READOC-style sweeps run `python run_release.py --benchmark-dir ../datasets/arxiv_subset --benchmark-limit 10 --skip-compile`; summaries land in `build/runs/benchmark_summary.json`.
 3. **Tests** – run `PYTHONPATH=. pytest -q release/tests` (covers ingestion/layout/synthesis contracts). End-to-end smoke: `PYTHONPATH=. pytest -q release/tests/test_smoke_release.py`. Static checks: `ruff check release release/scripts` and `mypy release release/scripts`. Add fixtures under `release/tests/data/` if needed. For CI, pass `--llm-mode off` (or export `LATEXIFY_LLM_MODE=off`) to skip heavy model loads.
 4. **Docs & Metrics** – update `release/README.md` / `release/AGENTS.md` whenever you alter CLI flags, metadata schemas, or metric calculations.
-5. **Artifacts** – never commit generated PDFs. Persist intermediate data only in `release/outputs/` and extend `.gitignore` if you introduce new cache paths.
+5. **Artifacts** – never commit generated PDFs. Persist intermediate data only in `build/runs/` and extend `.gitignore` if you introduce new cache paths.
+
+## Documentation & Repo Hygiene
+- **Source of truth.** Keep `REPO_DOCUMENTATION.md`, `docs/INDEX.md`, `docs/PROJECT_OVERVIEW.md`, `docs/DATA_PATHWAY_SCHEMA.md`, `docs/TRAINING_DATA_ROUTE.md`, and `docs/FINE_TUNE_GUIDE.md` synchronized with actual behavior. When agent contracts or schema keys change, update this file plus the README and doc index in the same PR.
+- **Per-run lineage.** Every pipeline invocation drops `build/run-<run_id>/DATA_PATHWAY.{md,llm.jsonl}`. Reference those artifacts when reasoning about regressions or writing ADRs; do not paste raw terminal logs into docs.
+- **.gitignore stewardship.** Generated paths (`build/`, `build/run-*`, `release/outputs/`, `release/artifacts/`, `release/smoke_run/`, `release/cache/`, `test-results/`, `training_runs/`, `training_data/raw/`, `training_data/processed/`, `node_modules/`, UI build folders) must stay local. Extend `.gitignore` immediately if you create a new cache or dataset directory.
+- **.gitattributes.** Enforces LF endings for scripts/TeX/JSON and marks weight formats (`*.pt`, `*.safetensors`, `*.bin`, `*.onnx`, etc.) as binary so merges never corrupt checkpoints. Update it whenever you introduce another format or platform-specific script.
 
 ## Coding Expectations
 - Keep modules ~200–300 lines; add dedicated helpers for new responsibilities (retrieval, metrics, adapters, agents).
@@ -24,7 +30,7 @@ Operate inside `release/`, keeping the streamlined Florence → InternVL → Nou
 - Do not add ad-hoc CLI knobs; improvements should slot into the default cascade (Florence→InternVL→Nougat→pytesseract) and flow through the shared metadata contracts.
 
 ## Validation, Metrics & Resource Costing
-- Inspect `graph.json`, `retrieval.json`, `snippets.json`, `main.tex`, `validation.json`, and `metrics.json`. Confirm structural gaps are fixed; log remaining issues in PR descriptions.
+- Inspect `input_quality.json`, `domain_profile.json`, `graph.json`, `retrieval.json`, `snippets.json`, `semantic_enrichment.json`, `main.tex`, `validation.json`, `quality_gate.json`, and `metrics.json`. Confirm structural gaps are fixed; log remaining issues in PR descriptions.
 - Track section/table/list/equation fidelity, retrieval grounding, OCR-noise by region, compile success rate, and latency from `metrics.json` + `agent_metrics.json`.
 - When changing OCR or chunking, compare noise distributions and manifest `ocr_usage` stats to keep Florence/InternVL loads predictable.
 - Prefer deterministic smoke tests (use `release/samples/sample.pdf`) so future agents can reproduce results without external dependencies.
@@ -60,7 +66,7 @@ Once chunks exist, the PlannerAgent (implemented in `planner.py`) calls an LLM c
 This “master plan” becomes the shared state object the entire workflow reads from and writes to.
 
 ### SpecialistAgent Fleet
-Implemented under `specialists.py`, the orchestrator dispatches plan blocks to tightly scoped generators, then hands their output to the Qwen-based refiner for polishing (unless `--llm-mode off`):
+Implemented under `specialists.py`, the orchestrator dispatches plan blocks to tightly scoped generators, then hands their output to the DeepSeek-based refiner for polishing (unless `--llm-mode off`):
 - **TextAgent** normalizes paragraph chunks.
 - **EquationAgent** produces amsmath environments and registers `amsmath`.
 - **TableAgent** emits booktabs tables and requests `booktabs`.

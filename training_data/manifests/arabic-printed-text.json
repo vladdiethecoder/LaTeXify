@@ -1,0 +1,58 @@
+{
+  "name": "Arabic Printed Text",
+  "slug": "arabic-printed-text",
+  "tracks": [
+    "T2"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/arabic-printed-text",
+    "processed_root": "training_data/processed/arabic-printed-text",
+    "modalities": [
+      {
+        "modality": "text",
+        "path": "training_data/raw/arabic-printed-text/text"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Synthesize page images using provided fonts and lexicon",
+    "Train for Arabic script OCR"
+  ],
+  "strengths": [
+    "Uses 10 different Arabic fonts"
+  ],
+  "limitations": [
+    "Single language (Arabic)",
+    "License needs verification from canonical source",
+    "Word lexicon, may not be full page images"
+  ],
+  "modality": [
+    "text"
+  ],
+  "domain": [
+    "printed-text"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "ar"
+  ],
+  "size": {
+    "images": null,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": 113284
+  },
+  "relevance": 0.5,
+  "justification": "Lexicon of Arabic words in multiple fonts, useful for training specialized printed text OCR (T2) for Arabic documents."
+}

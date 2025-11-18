@@ -1,0 +1,59 @@
+{
+  "name": "TextOCR",
+  "slug": "textocr",
+  "tracks": [
+    "T2",
+    "T3"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/textocr",
+    "processed_root": "training_data/processed/textocr",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/textocr/images"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Use word-level bounding boxes for detection",
+    "Train robust OCR for arbitrary shapes"
+  ],
+  "strengths": [
+    "Text in natural images",
+    "Arbitrarily shaped scene text"
+  ],
+  "limitations": [
+    "License needs verification from canonical source",
+    "Domain may not match document OCR"
+  ],
+  "modality": [
+    "page-image"
+  ],
+  "domain": [
+    "natural-scenes"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 105941,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.65,
+  "justification": "Dataset for arbitrary shaped scene-text, useful for training robust printed text OCR (T2) and general text recognition (T3)."
+}

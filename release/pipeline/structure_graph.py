@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..core import common
+from .hierarchical_analyzer import analyze_plan
 
 
 @dataclass
@@ -16,21 +17,22 @@ class GraphNode:
     label: str
     metadata: Dict[str, object] = field(default_factory=dict)
     children: List[str] = field(default_factory=list)
+    parent: str | None = None
 
 
 def build_graph(plan_path: Path, chunks_path: Path, output_path: Path) -> Path:
     plan = common.load_plan(plan_path)
     chunks = {chunk.chunk_id: chunk for chunk in common.load_chunks(chunks_path)}
+    hierarchy = analyze_plan(plan, chunks)
     nodes: Dict[str, GraphNode] = {}
     edges: List[Dict[str, str]] = []
-    section_stack: List[GraphNode] = []
     root = GraphNode(node_id="root", type="document", label="Document", metadata={})
     nodes[root.node_id] = root
+    previous_block: GraphNode | None = None
 
     for block in plan:
         chunk = chunks.get(block.chunk_id)
         metadata = block.metadata or {}
-        header_level = metadata.get("header_level", 0)
         node_type = block.block_type
         node = GraphNode(
             node_id=block.block_id,
@@ -43,18 +45,23 @@ def build_graph(plan_path: Path, chunks_path: Path, output_path: Path) -> Path:
                 "images": block.images,
             },
         )
+        level = hierarchy.level_for(block.block_id)
+        if level:
+            node.metadata["hierarchy"] = {
+                "level": level.value,
+                "path": hierarchy.path_for(block.block_id),
+            }
+        parent_id = hierarchy.parent_for(block.block_id)
+        parent_node = nodes.get(parent_id) if parent_id else None
+        if not parent_node:
+            parent_node = root
+        node.parent = parent_node.node_id if parent_node.node_id != root.node_id else None
         nodes[node.node_id] = node
-        parent = root
-        if node_type == "section":
-            while section_stack and section_stack[-1].metadata.get("header_level", 1) >= header_level:
-                section_stack.pop()
-            parent = section_stack[-1] if section_stack else root
-            node.metadata["header_level"] = header_level or 1
-            section_stack.append(node)
-        else:
-            parent = section_stack[-1] if section_stack else root
-        parent.children.append(node.node_id)
-        edges.append({"source": parent.node_id, "target": node.node_id, "type": "order"})
+        parent_node.children.append(node.node_id)
+        edges.append({"source": parent_node.node_id, "target": node.node_id, "type": "hierarchy"})
+        if previous_block:
+            edges.append({"source": previous_block.node_id, "target": node.node_id, "type": "order"})
+        previous_block = node
         if chunk and chunk.metadata.get("image_refs"):
             for image in chunk.metadata["image_refs"]:
                 image_node_id = f"{node.node_id}_img_{Path(image).name}"

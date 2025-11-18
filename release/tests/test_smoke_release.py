@@ -28,11 +28,12 @@ def test_smoke_pipeline_produces_rewards(tmp_path):
         benchmark_dir=None,
         benchmark_limit=1,
         rag_cache=str(rag_cache),
+        rag_cache_budget_mb=0,
         rag_refresh=False,
         reward_mode="heuristic",
         llm_mode="off",
         llm_repo=None,
     )
     tex_path = run_release.run_pipeline(args)
-    rewards_path = tex_path.parent / "rewards.json"
+    rewards_path = tex_path.parent / "reports" / "rewards.json"
     assert rewards_path.exists()

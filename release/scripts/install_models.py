@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,7 +29,12 @@ except Exception as exc:  # pragma: no cover
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR = REPO_ROOT / "models"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from release.core.model_paths import resolve_models_root  # noqa: E402
+
+MODELS_DIR = resolve_models_root(REPO_ROOT / "models")
 
 
 @dataclass(frozen=True)
@@ -45,6 +52,20 @@ class ModelSpec:
         return MODELS_DIR / self.target
 
 
+def _sanitize_model_subdir(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).lower()
+
+
+def _repo_slug(repo_id: str) -> str:
+    return repo_id.replace("/", "__")
+
+
+INTERNVL_MODEL_ID = os.environ.get("LATEXIFY_INTERNVL_MODEL", "OpenGVLab/InternVL3_5-8B")
+INTERNVL_TARGET = Path("ocr") / _sanitize_model_subdir(INTERNVL_MODEL_ID)
+DEFAULT_LLM_REPO = os.environ.get("LATEXIFY_LLM_REPO", "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct")
+LLM_DEFAULT_TARGET = Path("llm") / _repo_slug(DEFAULT_LLM_REPO)
+
+
 MODEL_REGISTRY: Dict[str, ModelSpec] = {
     "layout/qwen2.5-vl-32b": ModelSpec(
         key="layout/qwen2.5-vl-32b",
@@ -58,11 +79,11 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         target=Path("judge/qwen2.5-72b-gguf"),
         notes="llama.cpp-compatible judge (Q4_K_M). Requires accepting the Qwen 2.5 license.",
     ),
-    "ocr/internvl-3.5-14b": ModelSpec(
-        key="ocr/internvl-3.5-14b",
-        repo_id="OpenGVLab/InternVL-Chat-V1-2",
-        target=Path("ocr/internvl-3.5-14b"),
-        notes="InternVL vision OCR (chat tuned).",
+    "ocr/internvl": ModelSpec(
+        key="ocr/internvl",
+        repo_id=INTERNVL_MODEL_ID,
+        target=INTERNVL_TARGET,
+        notes=f"InternVL vision OCR (set LATEXIFY_INTERNVL_MODEL to override, default {INTERNVL_MODEL_ID}).",
     ),
     "ocr/florence-2-large": ModelSpec(
         key="ocr/florence-2-large",
@@ -110,6 +131,12 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
             "Download a codellama-13b-math GGUF file (e.g., Q4_K_M) and place it in this directory. "
             "Point --llama-cpp-model at the .gguf path."
         ),
+    ),
+    "llm/deepseek-coder-v2-lite": ModelSpec(
+        key="llm/deepseek-coder-v2-lite",
+        repo_id=DEFAULT_LLM_REPO,
+        target=LLM_DEFAULT_TARGET,
+        notes="Default DeepSeek refiner (7B). Requires `huggingface-cli login` and ~15 GB disk.",
     ),
 }
 

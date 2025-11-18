@@ -1,0 +1,57 @@
+{
+  "name": "NIST Database",
+  "slug": "nist-database",
+  "tracks": [
+    "T3"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/nist-database",
+    "processed_root": "training_data/processed/nist-database",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/nist-database/images"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Segment individual characters",
+    "Use for character-level handwriting recognition"
+  ],
+  "strengths": [
+    "Extensive handwriting samples",
+    "Large number of character images"
+  ],
+  "limitations": [
+    "License needs verification from canonical source"
+  ],
+  "modality": [
+    "page-image"
+  ],
+  "domain": [
+    "handwriting"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 810000,
+    "pages": null,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.6,
+  "justification": "Large collection of handwriting samples with over 810k character images, suitable for handwritten OCR (T3)."
+}

@@ -41,16 +41,18 @@ class QualityAssessor:
             if not chunk or not snippet:
                 continue
             stats = self.validator.validate(chunk.text, snippet.latex)
-            math_scores.append(stats["symbol_overlap"])
-            if stats["symbol_overlap"] < 0.4:
-                weak_sections.append(block.chunk_id)
+            is_math = self._is_math_like(block, chunk)
+            if is_math:
+                math_scores.append(stats["symbol_overlap"])
+                if stats["symbol_overlap"] < 0.4:
+                    weak_sections.append(block.chunk_id)
             semantic_scores.append(self._semantic_similarity(chunk.text, snippet.latex))
             if block.block_type in {"equation", "question", "problem"}:
                 aesthetic_candidates += 1
                 env = self.env_detector.detect(block.block_type, snippet.latex, chunk.metadata)
                 if env in {"align", "align*", "cases", "bmatrix"}:
                     aesthetics_hits += 1
-        math_preservation = mean(math_scores) if math_scores else 0.0
+        math_preservation = mean(math_scores) if math_scores else 1.0
         structure_score = self._structure_score(tex, plan)
         syntax_score = self._syntax_score(tex)
         semantic_accuracy = mean(semantic_scores) if semantic_scores else 0.0
@@ -95,6 +97,17 @@ class QualityAssessor:
         if ratio > 1.5 or ratio < 0.5:
             return 0.2
         return min(1.0, 1.0 - abs(1 - ratio))
+
+    def _is_math_like(self, block: common.PlanBlock, chunk: common.Chunk) -> bool:
+        if block.block_type in {"equation", "formula", "math"}:
+            return True
+        metadata = chunk.metadata or {}
+        region = metadata.get("region_type")
+        if region in {"formula", "equation"}:
+            return True
+        if metadata.get("formula_detected"):
+            return True
+        return False
 
 
 __all__ = ["QualityAssessor"]

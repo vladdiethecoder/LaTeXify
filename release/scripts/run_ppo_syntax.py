@@ -55,7 +55,7 @@ def run_pipeline(pdf_path: Path, run_dir: Path, script_path: Path) -> dict:
         str(run_dir),
     ]
     subprocess.run(cmd, check=True)
-    rewards_path = run_dir / "rewards.json"
+    rewards_path = run_dir / "reports" / "rewards.json"
     if rewards_path.exists():
         return json.loads(rewards_path.read_text(encoding="utf-8"))
     return {"components": {"syntax": -1.0}}

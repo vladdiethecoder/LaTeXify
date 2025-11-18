@@ -1,0 +1,71 @@
+{
+  "name": "PubLayNet",
+  "slug": "publaynet",
+  "tracks": [
+    "T1",
+    "T4"
+  ],
+  "url": "https://github.com/ibm-aur-nlp/PubLayNet",
+  "homepage_url": "https://github.com/ibm-aur-nlp/PubLayNet",
+  "download_urls": [
+    "https://dax-cdn.cdn.appdomain.cloud/dax-publaynet/1.0.0/publaynet.tar.gz"
+  ],
+  "alt_download": [
+    "https://huggingface.co/datasets/jordanparker6/publaynet"
+  ],
+  "hf_dataset": "jordanparker6/publaynet",
+  "expected_size_gb": 96,
+  "enabled": true,
+  "license": "PubMed Central Open Access (per-article)",
+  "storage": {
+    "raw_root": "training_data/raw/publaynet",
+    "processed_root": "training_data/processed/publaynet",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/publaynet/images"
+      },
+      {
+        "modality": "json",
+        "path": "training_data/raw/publaynet/annotations"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "huggingface-datasets",
+    "command": "hf download jordanparker6/publaynet --repo-type dataset --local-dir \"training_data/raw/publaynet/source\" --local-dir-use-symlinks False",
+    "needs_auth": false,
+    "notes": []
+  },
+  "preprocess": [
+    "Download tar.gz from IBM CDN",
+    "Extract COCO annotations for LayoutLM fine-tuning"
+  ],
+  "strengths": [
+    "Large-scale (360K pages)",
+    "Consistent annotations for text/list/figure/table/title"
+  ],
+  "limitations": [
+    "Auto-generated annotations from PMC XML",
+    "No inline text transcripts"
+  ],
+  "modality": [
+    "page-image",
+    "json"
+  ],
+  "domain": [
+    "scientific"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 364232,
+    "pages": 364232,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.93,
+  "justification": "Provides massive article-layout coverage for high-level structure models."
+}

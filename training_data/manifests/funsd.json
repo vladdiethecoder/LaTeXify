@@ -1,0 +1,63 @@
+{
+  "name": "FUNSD",
+  "slug": "funsd",
+  "tracks": [
+    "T1",
+    "T6"
+  ],
+  "url": "https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/",
+  "license": "Unknown",
+  "storage": {
+    "raw_root": "training_data/raw/funsd",
+    "processed_root": "training_data/processed/funsd",
+    "modalities": [
+      {
+        "modality": "page-image",
+        "path": "training_data/raw/funsd/images"
+      },
+      {
+        "modality": "json",
+        "path": "training_data/raw/funsd/annotations"
+      }
+    ]
+  },
+  "ingest": {
+    "strategy": "manual",
+    "command": null,
+    "needs_auth": true,
+    "notes": [
+      "Manual download required",
+      "Visit https://www.shaip.com/blog/15-best-opensource-handwriting-dataset/ and follow the provider instructions."
+    ]
+  },
+  "preprocess": [
+    "Utilize provided annotations for entity linking and layout analysis"
+  ],
+  "strengths": [
+    "Real-world noisy scanned forms",
+    "Annotations for form understanding"
+  ],
+  "limitations": [
+    "Very small dataset size",
+    "License needs verification from canonical source"
+  ],
+  "modality": [
+    "page-image",
+    "json"
+  ],
+  "domain": [
+    "forms"
+  ],
+  "is_synthetic": false,
+  "languages": [
+    "en"
+  ],
+  "size": {
+    "images": 199,
+    "pages": 199,
+    "pdfs": null,
+    "qa_pairs": null
+  },
+  "relevance": 0.75,
+  "justification": "Dataset for Form Understanding in Noisy Scanned Documents, supporting layout segmentation (T1) and form-based key-info extraction (T6)."
+}

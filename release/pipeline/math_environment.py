@@ -23,6 +23,8 @@ class MathEnvironmentDetector:
         stripped = text.strip()
         if not stripped:
             return None
+        if stripped.startswith("\\[") and stripped.endswith("\\]"):
+            return "displaymath"
         existing = DISPLAY_ENV_RE.search(stripped)
         if existing:
             return existing.group("env")
@@ -44,10 +46,14 @@ class MathEnvironmentDetector:
         return None
 
     def wrap(self, block_type: str, text: str, metadata: Dict[str, object] | None = None) -> str:
+        stripped = text.strip()
+        if stripped.startswith("\\[") and stripped.endswith("\\]"):
+            return text
+        if stripped.startswith("$$") and stripped.endswith("$$"):
+            return text
         env = self.detect(block_type, text, metadata)
         if not env:
             return text
-        stripped = text.strip()
         if stripped.startswith("\\begin"):
             return text
         body = stripped
