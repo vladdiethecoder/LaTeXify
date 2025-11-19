@@ -3,7 +3,7 @@
 from .creative_agent import CreativeAgent
 from .compile_and_repair_agent import CompileAndRepairAgent
 from .evaluator_agent import EvaluatorAgent
-from .graph_state import ContentChunk, GraphState
+from .graph_state import ContentChunk, GraphState, AGENT_PIPELINE_STAGE_MAP
 from .research_agent import ResearchAgent, ResearchSnippet
 
 
@@ -18,6 +18,7 @@ __all__ = [
     "CompileAndRepairAgent",
     "EvaluatorAgent",
     "GraphState",
+    "AGENT_PIPELINE_STAGE_MAP",
     "ResearchAgent",
     "ResearchSnippet",
     "run_layout_graph",

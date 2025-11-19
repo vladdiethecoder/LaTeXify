@@ -143,7 +143,7 @@ class FigureTableAgent:
         if subfigures:
             self._request_package("subcaption")
         label_hint = references.label_for_block(block.block_id) if references else None
-        return FigureRenderPlan(
+        plan = FigureRenderPlan(
             caption=caption,
             float_spec=float_spec,
             width=width,
@@ -154,6 +154,7 @@ class FigureTableAgent:
             quality_breakdown=breakdown,
             label_hint=label_hint,
         )
+        return plan
 
     def caption_from_chunk(self, chunk: common.Chunk) -> Tuple[str, float]:
         """Generate a caption/score pair for specialist usage."""
@@ -428,8 +429,14 @@ class FigureTableAgent:
         return (left, bottom, right, top)
 
     def _assess_table_block(self, block: common.PlanBlock) -> TableAssessment:
-        rows = block.metadata.get("table_signature", {}).get("rows", 1)
-        cols = block.metadata.get("table_signature", {}).get("columns", 1)
+        metadata = block.metadata or {}
+        if isinstance(metadata, dict):
+            raw_signature = metadata.get("table_signature")
+            signature = raw_signature if isinstance(raw_signature, dict) else {}
+        else:
+            signature = {}
+        rows = signature.get("rows", 1)
+        cols = signature.get("columns", 1)
         complexity = rows * cols
         width = max(0.65, min(0.95, 0.6 + cols * 0.05))
         return TableAssessment(

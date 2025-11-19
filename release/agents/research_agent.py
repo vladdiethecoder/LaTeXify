@@ -89,6 +89,8 @@ class ResearchAgent:
             if snippet.url:
                 rendered += f" (source: {snippet.url})"
             state.research_snippets.append(rendered)
+        state.mark_stage("research", notes=str(len(snippets)))
+        state.record_metrics(research_snippets=len(snippets))
         state.log(f"research: added {len(snippets)} snippet(s)")
         return state
 

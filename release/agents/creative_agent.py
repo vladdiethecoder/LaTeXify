@@ -28,6 +28,7 @@ class CreativeAgent:
             snippet_lines.append(f"% research hint:\\n% {research}")
         state.candidate_latex = "\n".join(snippet_lines)
         state.log("creative: drafted snippet")
+        state.mark_stage("creative")
         return state
 
 

@@ -1,3 +1,4 @@
+import json
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
@@ -24,7 +25,11 @@ class StubOCR:
                     ("florence2", "Diagram overview.\n\nShared paragraph."),
                     ("internvl", "Shared paragraph.\n\nEquation block."),
                 ]
-            )
+            ),
+            {
+                "florence2": {"confidence": 0.9},
+                "internvl": {"confidence": 0.8},
+            },
         )
 
 
@@ -77,3 +82,21 @@ def test_auto_download_missing_models(monkeypatch, tmp_path):
     assert target.exists()
     fallback._ensure_backend_weights("nougat")  # second call should be no-op
     assert len(calls) == 1
+
+
+def test_export_master_ocr_items(tmp_path):
+    region = ingestion.LayoutRegion(
+        text="example",
+        tag="text",
+        bbox=(0.0, 0.0, 10.0, 5.0),
+        column=1,
+        order=0,
+        font_size=12.0,
+        extras={},
+    )
+    target = tmp_path / "items.json"
+    path = ingestion._export_master_ocr_items({0: [region]}, target)
+    assert path == target
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data[0]["region_type"] == "text"
+    assert data[0]["polygon"], "polygon should default to bbox rectangle"

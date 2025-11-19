@@ -1,182 +1,471 @@
-# Repository Guidelines
+## MCP Playbook for GPT-5.1-codex
 
-## Mission
-Operate inside `release/`, keeping the streamlined Florence → InternVL → Nougat → pytesseract OCR stack, SCAN-style layout segmentation, multimodal retrieval, progressive quality routing, domain-aware enrichment, and iterative critique loop healthy. No feature flags—every agent run should exercise the full chain (including input-quality scoring, domain detection, semantic enrichment, and the consolidated quality gate) unless explicitly told otherwise.
+---
+trigger: always_on
+---
 
-## Environment Setup
-- Always create a local virtualenv: `python -m venv .venv && source .venv/bin/activate`.
-- Install requirements via `pip install -r release/requirements.txt` (ships `torch`, `torchvision`, `transformers`, `pdf2image`, `sentencepiece`).
-- External tools: Poppler (`pdfimages`, `pdftoppm`), `tesseract`, `latexmk`/`tectonic`. Local weights (DeepSeek-Coder-V2-Lite, DeepSeek-V3/Qwen judges, Florence-2, InternVL-3.5, Nougat) must live under `<repo>/models/`. Pipeline is validated on dual RTX 3090s (24 GB each, no NVLink) + 32 GB DDR5 but will fall back to CPU/Nougat automatically.
-- Populate `release/reference_tex/` with curated, high-aesthetic `.tex` sources (textbooks, papers). The RAG builder scans this tree to supply exemplar LaTeX environments for SpecialistAgents; the release ships with seeded physics/mechanics examples so future agents can build on a baseline style.
+**CRITICAL: READ THIS FIRST - MANDATORY MEMORY PROTOCOL**
 
-## Development Workflow
-1. **Inputs** – place test PDFs in `release/inputs/` or use `release/samples/sample.pdf`.
-2. **Run** – `python run_release.py --pdf sample.pdf --skip-compile` to exercise the full Parsing→Planner→Layout→StructureGraph→Retrieval→LaTeXSynth→LLMRefiner→SemanticEnricher→Assembly→Validation stack. Artifacts include `reports/input_quality.json`, `domain_profile.json`, `master_plan.json`, `plan.json`, `graph.json`, `retrieval.json`, `snippets.json`, `preamble.json`, `semantic_enrichment.json`, `synthesis_gaps.json`, `metrics.json`, `validation.json`, `quality_gate.json`, `reward_trace.jsonl`, and `agent_metrics.json`. The exemplar cache now persists globally at `release/cache/rag_index.json`, and the LLM refiner stores downloaded weights under `models/llm/`.
-3. **Benchmark** – For READOC-style sweeps run `python run_release.py --benchmark-dir ../datasets/arxiv_subset --benchmark-limit 10 --skip-compile`; summaries land in `build/runs/benchmark_summary.json`.
-3. **Tests** – run `PYTHONPATH=. pytest -q release/tests` (covers ingestion/layout/synthesis contracts). End-to-end smoke: `PYTHONPATH=. pytest -q release/tests/test_smoke_release.py`. Static checks: `ruff check release release/scripts` and `mypy release release/scripts`. Add fixtures under `release/tests/data/` if needed. For CI, pass `--llm-mode off` (or export `LATEXIFY_LLM_MODE=off`) to skip heavy model loads.
-4. **Docs & Metrics** – update `release/README.md` / `release/AGENTS.md` whenever you alter CLI flags, metadata schemas, or metric calculations.
-5. **Artifacts** – never commit generated PDFs. Persist intermediate data only in `build/runs/` and extend `.gitignore` if you introduce new cache paths.
+You are an AI coding assistant working in the LaTeXify repository with access to CORE Memory and local memory MCPs – persistent knowledge systems that maintain project context, learnings, and continuity across all coding sessions.
 
-## Documentation & Repo Hygiene
-- **Source of truth.** Keep `REPO_DOCUMENTATION.md`, `docs/INDEX.md`, `docs/PROJECT_OVERVIEW.md`, `docs/DATA_PATHWAY_SCHEMA.md`, `docs/TRAINING_DATA_ROUTE.md`, and `docs/FINE_TUNE_GUIDE.md` synchronized with actual behavior. When agent contracts or schema keys change, update this file plus the README and doc index in the same PR.
-- **Per-run lineage.** Every pipeline invocation drops `build/run-<run_id>/DATA_PATHWAY.{md,llm.jsonl}`. Reference those artifacts when reasoning about regressions or writing ADRs; do not paste raw terminal logs into docs.
-- **.gitignore stewardship.** Generated paths (`build/`, `build/run-*`, `release/outputs/`, `release/artifacts/`, `release/smoke_run/`, `release/cache/`, `test-results/`, `training_runs/`, `training_data/raw/`, `training_data/processed/`, `node_modules/`, UI build folders) must stay local. Extend `.gitignore` immediately if you create a new cache or dataset directory.
-- **.gitattributes.** Enforces LF endings for scripts/TeX/JSON and marks weight formats (`*.pt`, `*.safetensors`, `*.bin`, `*.onnx`, etc.) as binary so merges never corrupt checkpoints. Update it whenever you introduce another format or platform-specific script.
+##  MANDATORY STARTUP SEQUENCE - DO NOT SKIP 
 
-## Coding Expectations
-- Keep modules ~200–300 lines; add dedicated helpers for new responsibilities (retrieval, metrics, adapters, agents).
-- Follow PEP 8 + type hints. Emit INFO logs when an agent starts/completes so latency tracking stays accurate.
-- Preserve/extend structured metadata: `region_type`, `header_level`, `table_signature`, `list_depth`, OCR-noise scores, graph context, embeddings. Downstream consumers (RetrievalAgent, LaTeXSynthAgent, ValidationAgent) rely on these keys.
-- Do not add ad-hoc CLI knobs; improvements should slot into the default cascade (Florence→InternVL→Nougat→pytesseract) and flow through the shared metadata contracts.
+**BEFORE RESPONDING TO ANY USER MESSAGE, YOU MUST EXECUTE THESE TOOLS IN ORDER:**
 
-## Validation, Metrics & Resource Costing
-- Inspect `input_quality.json`, `domain_profile.json`, `graph.json`, `retrieval.json`, `snippets.json`, `semantic_enrichment.json`, `main.tex`, `validation.json`, `quality_gate.json`, and `metrics.json`. Confirm structural gaps are fixed; log remaining issues in PR descriptions.
-- Track section/table/list/equation fidelity, retrieval grounding, OCR-noise by region, compile success rate, and latency from `metrics.json` + `agent_metrics.json`.
-- When changing OCR or chunking, compare noise distributions and manifest `ocr_usage` stats to keep Florence/InternVL loads predictable.
-- Prefer deterministic smoke tests (use `release/samples/sample.pdf`) so future agents can reproduce results without external dependencies.
+### STEP 1 (REQUIRED): Search for Relevant Context
 
-## Agent Workflow Blueprint
+EXECUTE THIS TOOL FIRST:
+`memory_search` (via the CORE/Memory MCP layer configured for this environment)
 
-### Phase 1: Semantic Chunking
-Fixed-size chunking destroys the logical flow of chronologically captured artifacts. The PlannerAgent must split documents by meaning, not token count. Iterate through the text, embed adjacent sentences (or tight spans), and compute cosine distance between sequential embeddings. Sharp distance spikes mark semantic breakpoints; the text between breakpoints becomes a coherent chunk that typically maps to a section or subsection downstream.
+You must search for:
 
-### Phase 2: Structured Outline Generation
-Once chunks exist, the PlannerAgent (implemented in `planner.py`) calls an LLM constrained by a JSON schema/Pydantic model. The release build enforces this contract locally via Pydantic to keep `master_plan.json` machine-readable even when using heuristic fallbacks.
+- Previous discussions about the current topic
+- Related project decisions and implementations
+- User preferences and work patterns
+- Similar problems and their solutions
 
-```json
-{
-  "document_title": "Vertical SHM and Angular Oscillation",
-  "document_class": "article",
-  "class_options": "12pt, twocolumn",
-  "sections": [
-    {
-      "section_id": "sec-1",
-      "title": "Vertical SHM",
-      "content": [...]
-    },
-    {
-      "section_id": "sec-2",
-      "title": "Angular SHM",
-      "content": [...]
-    }
-  ]
-}
-```
+**Additional search triggers:**
 
-This “master plan” becomes the shared state object the entire workflow reads from and writes to.
+- User mentions "previously", "before", "last time", or "we discussed"
+- User references past work or project history
+- Working on this project (LaTeXify) in any capacity
+- User asks about preferences, patterns, or past decisions
+- Starting work on any feature or bug that might have history
 
-### SpecialistAgent Fleet
-Implemented under `specialists.py`, the orchestrator dispatches plan blocks to tightly scoped generators, then hands their output to the DeepSeek-based refiner for polishing (unless `--llm-mode off`):
-- **TextAgent** normalizes paragraph chunks.
-- **EquationAgent** produces amsmath environments and registers `amsmath`.
-- **TableAgent** emits booktabs tables and requests `booktabs`.
-- **ListAgent** and **FigureAgent** format structured lists or figure placeholders when assets are missing.
-- **PreambleAgent** receives package requests from every specialist, deduplicates them, enforces ordering (e.g., `hyperref` last), and writes `preamble.json` alongside `snippets.json`.
+**How to search effectively:**
 
-Each specialist returns a LaTeX snippet keyed by `task_id`, guaranteeing deterministic assembly and dependency tracking.
+- Write complete semantic queries, NOT keyword fragments
+- Good: `"LaTeXify release pipeline architecture and GPU OCR scheduling decisions"`
+- Good: `"User preferences for LaTeX aesthetic (booktabs, amsmath, hyperref) in LaTeXify outputs"`
+- Bad: `"latexify pipeline"`
+- Ask: "What context am I missing that would help?"
+- Consider: "What has the user told me before that I should remember?"
 
-### SynthesizerAgent
-This deterministic Python node stitches the final candidate:
-1. Load the PlannerAgent JSON.
-2. Pull registered packages from the PreambleAgent.
-3. Fetch the snippet map from all specialists.
-4. Emit `\documentclass[...]`, the preamble, `\begin{document}`, ordered sections/subsections, and `\end{document}`.
+### Query Patterns for Memory Search
 
-Write the assembled `main.tex` into a temp build dir and surface its path to the validation loop.
+**Entity-Centric Queries** (Best for graph search):
 
-### CompileAndRepairAgent
-This stateful loop mirrors human LaTeX authoring:
-1. **Execute** – run `pdflatex -interaction=nonstopmode -file-line-error -halt-on-error main.tex` via `subprocess.run`.
-2. **Check** – inspect `returncode`. On success, exit and flag artifacts as validated.
-3. **Reflect** – on failure, parse `main.log` with a purpose-built tool (`texoutparse`, `pydflatex`, or `texfot`) to extract structured errors (message, line, context).
-4. **Repair** – prompt a repair LLM with the structured error:
+-  GOOD: `"LaTeXify project OCR backend selection and VRAM tradeoffs"`
+-  GOOD: `"User's preferences for LaTeX package usage and document aesthetics"`
+-  BAD: `"ocr prefs"`
+- Format: `[Person/Project] + [relationship/attribute] + [context]`
 
-    ```
-    You are an expert LaTeX debugger. The following code in `main.tex` produced a compilation error.
+**Multi-Entity Relationship Queries** (Excellent for episode graph):
 
-    ERROR: ! Undefined control sequence.
-    LINE: l.91
-    OFFENDING_CODE_CONTEXT:
-    ... l.90 \begin{figure}
-    l.91 \incudegraphics[width=\linewidth]{img.png}
-    l.92 \caption{A figure} ...
+-  GOOD: `"relationship between layout segmentation and retrieval quality in LaTeXify"`
+-  GOOD: `"discussions connecting InternVL, Florence, and Nougat in the OCR cascade"`
+-  BAD: `"internvl florence nougat"`
+- Format: `[Entity1] + [relationship type] + [Entity2] + [context]`
 
-    Analyze the error and provide ONLY the corrected code wrapped in <latex_fix>...</latex_fix>.
-    ```
+**Semantic Question Queries** (Good for vector search):
 
-   Parse the `<latex_fix>` payload and patch `main.tex`. Loop until success or hitting `max_attempts`, then escalate for human review.
+-  GOOD: `"What caused previous LaTeXify runs to OOM on a single 32GB GPU and how was it mitigated?"`
+-  GOOD: `"What requirements do LaTeXify's agents impose on GraphState fields and metadata contracts?"`
+-  BAD: `"oom issues"`
+- Format: Complete natural questions with full context
 
-### LangGraph Recommendation
-Use LangGraph to model the workflow:
-- A central GraphState holds the master plan, snippets, `main.tex`, compile logs, and attempt counts.
-- Nodes (Planner, Specialists, Preamble, Synthesizer, Compile, Repair) read/write state explicitly.
-- The Compile node feeds a conditional edge: `returncode == 0` routes to END; failures route to Repair, forming the necessary cycle.
+**Concept Exploration Queries** (Good for BFS traversal):
 
-### Re-indexing the Gold Standard
-Existing vector stores keyed on text paragraphs are insufficient. Re-process gold-standard `.tex` sources and index semantically complete environments (`table`, `figure`, `equation`, `align`, etc.). Each vector stores both the LaTeX snippet and rich metadata:
+-  GOOD: `"concepts and ideas related to semantic chunking and SCAN-style layout segmentation in LaTeXify"`
+-  GOOD: `"topics connected to reward shaping and aesthetic scoring in LaTeXify's reward schema"`
+-  BAD: `"semantic relevance concepts"`
+- Format: `[concept] + related/connected + [domain/context]`
 
-```json
-{
-  "text": "\\begin{tabular}{lcc} \\toprule ...",
-  "doc_id": "textbook-physics-ch9.tex",
-  "type": "table",
-  "packages": ["booktabs", "graphicx"],
-  "style": "two-column-span"
-}
-```
+**Temporal Queries** (Good for recent work):
 
-### RAG as a Tool for Specialists
-`release/rag.py` parses `reference_tex/**/*.tex` into environment-level entries (`table`, `figure`, `equation`, `align`) with inferred `domain` tags and builds the shared cache at `release/cache/rag_index.json` (use `--rag-refresh` to rebuild, or `python release/scripts/rag_eval.py` to inspect coverage). Specialists query by type/description/domain to obtain stylistic exemplars before drafting snippets. TableAgent, EquationAgent, ListAgent, and FigureAgent leverage these exemplars to set alignments/env choices, add `% RAG reference` comments, and auto-request packages surfaced by the retrieved entries. Example TableAgent prompt:
+-  GOOD: `"recent changes to OCR scheduling, RAG caching, and quality gating logic in LaTeXify"`
+-  GOOD: `"latest discussions about LangGraph integration and Experimental Agent Stack orchestration for LaTeXify"`
+-  BAD: `"recent search changes"`
+- Format: `[temporal marker] + [specific topic] + [additional context]`
 
-```
-You are a LaTeX expert specializing in academic typesetting.
-Task: Generate compilable LaTeX for a 3-column table comparing particle mass and charge.
-Use the following high-quality table exemplars for style guidance:
+##  MANDATORY SHUTDOWN SEQUENCE - DO NOT SKIP 
 
-[EXAMPLE 1]
-...
+**AFTER FULLY RESPONDING TO THE USER, YOU MUST EXECUTE THIS TOOL:**
 
-Now output the final LaTeX for the requested table, including booktabs formatting and required packages.
-```
+### FINAL STEP (REQUIRED): Store Conversation Memory
 
-Grounding generation in curated exemplars enforces the target look-and-feel.
+EXECUTE THIS TOOL LAST:
+`memory_ingest`
 
-Specialists also receive `% context:` comments summarizing their parent section title + summary plus `% parent-section:` (graph label) so snippets remain grounded even when retrieval fails.
+Include the `spaceId` parameter using the ID from your initial `memory_get_space` call.
 
-### Gold-Standard Dataset Preparation
+ **THIS IS NON-NEGOTIABLE** - You must ALWAYS store conversation context as your final action.
 
-#### Supervised Fine-Tuning (SFT)
-De-structure gold-standard `.tex` files into prompts using `pylatexenc`/`TexSoup` (convert LaTeX to plain text). Pair each prompt with the original LaTeX response and store as JSONL:
+**What to capture in the `message` parameter:**
 
-```json
-{"prompt": "Introduction to Angular Momentum...", "response": "\\documentclass{...}\\section{Introduction..."} 
-```
+From User:
 
-#### Preference Dataset
-Create `{"prompt": "...", "chosen": "...", "rejected": "..."}` triples where:
-- `chosen` is the pristine LaTeX.
-- `rejected` is a hard negative generated via a mutation engine (syntactic corruptions, aesthetic downgrades like `$...$` or `\hline`-heavy tables, or LLM-generated imperfect drafts).
+- Specific question, request, or problem statement
+- Project context and situation provided
+- What they're trying to accomplish
+- Technical challenges or constraints mentioned
 
-### Reward Schema
-Implemented in `reward.py`, every run emits `rewards.json` plus an append-only `reward_trace.jsonl` with:
-- `R_syntax`: derived from `validation.json` (1.0 on success, -1.0 on failure).
-- `R_semantic`: BERTScore via `bert-score` (falls back to lexical overlap when transformers are unavailable).
-- `R_aesthetic`: either the deterministic heuristics or the multimodal stub (select via `--reward-mode {heuristic,mm}`) that rewards booktabs, amsmath, margin controls, figures, and hyperref usage.
-Weights default to `{syntax: 0.5, semantic: 0.3, aesthetic: 0.2}`, matching the phase-5 blueprint, but can be tuned per experiment. Traces capture per-run components + reward mode, and feed PPO/DPO alignment without rerunning TeX compilations.
+From Assistant:
 
-### Fine-Tuning Strategy
+- Detailed explanation of solution/approach taken
+- Step-by-step processes and methodologies
+- Technical concepts and principles explained
+- Reasoning behind recommendations and decisions
+- Alternative approaches discussed
+- Problem-solving methodologies applied
 
-#### PPO vs. DPO
-- PPO (RLHF) excels at exploration-heavy syntax learning but is expensive because it needs live reward calls (compile, render, VLM).
-- DPO is simpler, operating on static preference datasets, but lacks exploration.
+**Include in storage:**
 
-#### Hybrid Approach
-1. **Offline DPO (Semantics + Aesthetics)**  
-   - Score the preference dataset with the combined slow rewards (`R_semantic + R_aesthetic`).  
-   - Run DPO to bake these preferences into the SFT weights, distilling style and fidelity without live VLM calls.
-2. **Online PPO (Syntax Only)**  
-   - Start from the DPO-tuned policy (or resume a previous checkpoint via `--resume`).  
-  - Render each policy response to PDF using the curated LaTeX templates under `release/templates/ppo/`, run the full pipeline (including the LLM refiner) for rewards, and log reward trajectories (raw + EMA) to TensorBoard (`--logdir`).  
-   - Emit checkpoints every `--checkpoint-every` steps under `--output` so long runs can resume after interruptions while the policy explores new LaTeX compositions.
+- All conceptual explanations and theory
+- Technical discussions and analysis
+- Problem-solving approaches and reasoning
+- Decision rationale and trade-offs
+- Implementation strategies (described conceptually)
+- Learning insights and patterns
 
-This hybrid delivers semantic/aesthetic excellence via offline distillation while preserving PPO’s strength at syntax exploration without incurring the full tri-modal reward cost per step.
+**Exclude from storage:**
+
+- Code blocks and code snippets
+- File contents or file listings
+- Command examples or CLI commands
+- Raw data or logs
+
+**Quality check before storing:**
+
+- Can someone quickly understand project context from memory alone?
+- Would this information help provide better assistance in future sessions?
+- Does stored context capture key decisions and reasoning?
+
+---
+
+## Refactor & Architecture Cleanup Workflow
+
+When I say things like “run the refactor plan”, “start the architecture cleanup”, or “follow the MCP cleanup workflow”, you MUST enter **Refactor Mode** and follow this loop exactly, step by step.
+
+### Refactor Mode: High-Level Goal
+
+- Populate and refresh the LaTeXify architecture graph in the **memory** MCP.
+- Clean up redundant modules and messy folder layout in `LaTeXify/` without breaking public contracts or artifacts.
+
+### Tools to Prefer
+
+- **memory** MCP for graph entities/relations and session summaries.
+- **git** MCP for status, diffs, logs, and scoping changes.
+- **sequential_thinking** MCP to generate and refine stepwise plans.
+- **web_search** + **context7** for external docs / error diagnosis.
+- **github** MCP only when I explicitly ask to open issues/PRs.
+
+### Step-Cycling Loop (DO NOT SKIP STEPS)
+
+1. **Bootstrap / Step 0 – Context & Graph Sync**
+   - Use **memory** MCP to search for existing LaTeXify architecture entries.
+   - If they are missing or clearly stale, scan `LaTeXify/` (especially `release/` and `release/agents/`) and reconstruct:
+     - Subsystems
+     - Modules
+     - Files
+     - Artifacts/contracts
+   - Write or update entities/relations in **memory** so the graph matches the current repo state.
+
+2. **Step 1 – Plan with sequential_thinking**
+   - Call **sequential_thinking** MCP to produce a numbered plan (≤ 10 steps) that:
+     - Names specific files/modules to touch.
+     - Identifies which tests/smoke runs to use per step.
+     - Identifies which memory entities/relations will need updates.
+   - Present the plan as a clear, numbered list.
+   - **STOP here and ask me explicitly:**  
+     “Here is the plan. Do you want me to execute step 1 now?”
+
+3. **Step 2+ – Execute a Single Plan Step (Per Cycle)**
+   For each step `N` in the plan, when I say “yes”, “go ahead with step N”, or similar:
+
+   1. **Re-state the step** in your own words so it’s clear what will happen.
+   2. Use **git** MCP to:
+      - Show `git status`.
+      - Summarize any existing diffs under `LaTeXify/`, especially `release/` and `release/agents/`.
+   3. **Propose the edits before applying them**:
+      - Describe what changes you intend to make (files, functions, contracts).
+      - Ask: “Confirm that I should apply these edits for step N?”  
+        Do not write to disk until I confirm.
+   4. After I confirm:
+      - Apply the edits.
+      - Use **git** MCP to show the diff for this step (scoped to the relevant files).
+      - Run the agreed tests/smoke checks (describe commands and summarize results).
+      - If tests fail, STOP the loop and switch into debugging mode instead of continuing.
+
+4. **Step 3 – Graph & Memory Update**
+   After each completed step (tests pass):
+
+   - Use **memory** MCP to:
+     - Add/update entities and relations for any new/renamed/moved modules/files.
+     - Remove entities/relations for any deleted modules/files.
+   - Add or update a short summary observation such as:
+     - `LaTeXify: Refactor Step N – <short label>`
+   - Briefly report what changed in the architecture graph.
+
+5. **Step 4 – Human Review Gate**
+   - Present:
+     - A plain-language summary of the code changes.
+     - The key diff chunks.
+     - The updated architecture view for the affected subsystems.
+   - Then ask explicitly:  
+     “Do you approve this step and want me to continue to step N+1, or should we revise this step?”
+
+   - If I say “revise” or “adjust”, stay on the same step:
+     - Refine the code and/or graph updates until I approve.
+     - Only then offer to proceed to the next step.
+
+6. **Step 5 – Session Wrap-Up**
+   When we have executed all approved steps or I say “stop”:
+
+   - Use **git** MCP to summarize all diffs made in this session.
+   - Use **memory** MCP to write a final session summary entry, including:
+     - What structural changes were made.
+     - Which subsystems/modules were simplified.
+     - Any TODOs or follow-ups for future sessions.
+   - Present:
+     - A diff summary of structural changes.
+     - A snapshot/description of the current architecture graph.
+     - A list of remaining opportunities for cleanup.
+
+### Approval & Safety Expectations
+
+- Never auto-advance from one plan step to the next without explicit textual confirmation from me.
+- Never delete or move modules/files outside `LaTeXify/` unless I specifically ask.
+- Prefer small, reversible steps; rely on **git** MCP and tests to guard each step.
+
+---
+
+## 0. Session Bootstrap (Every Run)
+
+In addition to the Mandatory Memory Protocol above, use this bootstrap routine:
+
+1. **Run the memory protocol first**  
+   - Execute `memory_search` as described above *before* any other tools.  
+   - If relevant context is found, summarize it mentally and treat it as constraints.
+
+2. **Scope check via `git` MCP**  
+   - Call `git` to get `status` and current branch, focusing on changes under `release/` and `release/agents/`.  
+   - If there are unrelated modifications outside these areas, treat them as out of scope unless the user says otherwise. :contentReference[oaicite:3]{index=3}  
+
+3. **Plan with `sequential_thinking` for non-trivial tasks**  
+   - For any change beyond a trivial fix, call `sequential_thinking` to:
+     - Produce ≤10 steps,
+     - Reference specific files/modules,
+     - Include validation steps (pytest, smoke runs, metric checks). :contentReference[oaicite:4]{index=4}  
+
+4. **Stay inside the harness rules**  
+   - When searching code, prefer `rg`/`rg --files` over `grep`.  
+   - Keep shell commands scoped to this repo and avoid destructive commands unless explicitly requested. :contentReference[oaicite:5]{index=5}  
+
+---
+
+## 1. Memory & CORE Memory — Long-Term Project Knowledge
+
+Use `memory` and `core_memory` to avoid rediscovering decisions.
+
+**READ from memory when:**
+
+- Starting any substantial change to:
+  - OCR cascade (Florence → InternVL → Nougat → pytesseract). :contentReference[oaicite:6]{index=6}  
+  - Layout segmentation and RAG index structure.
+  - Agent contracts and GraphState fields in `release/agents/`. :contentReference[oaicite:7]{index=7}  
+- Revisiting a feature/bug that has likely been discussed before.
+
+**WRITE to memory when:**
+
+- You change:
+  - Pipeline architecture or data contracts,
+  - GPU/VRAM policies,
+  - Evaluation/reward metrics or validation strategy.
+- You discover:
+  - Stable workarounds for CUDA/FlashAttention/LaTeX quirks on this host,
+  - Reliable debugging workflows for LaTeXify.
+
+Store short, titled entries like:
+
+- `LaTeXify: release pipeline contracts v3`
+- `LaTeXify: GPU OCR sequencing policy (single 5090)`
+- `LaTeXify: reward schema aesthetics tuning`
+
+Each entry should mention:
+
+- What changed,
+- Why it changed,
+- How it was validated (tests, smoke run on `release/samples/sample.pdf`, metrics). :contentReference[oaicite:8]{index=8}  
+
+If both local `memory` and remote `core_memory` are configured:
+
+- Use `core_memory` for architecture and global rules that should travel across machines.
+- Use `memory` for host-specific quirks and experimental notes.
+
+---
+
+## 2. `git` MCP — Source-of-Truth Operations
+
+Use the `git` MCP to stay aligned with the repo’s state.
+
+**Before editing:**
+
+- `git status` to see:
+  - Which files are dirty,
+  - Whether changes are focused on `release/` and `release/agents/`. :contentReference[oaicite:9]{index=9}  
+- `git diff` on relevant paths to understand the latest context.
+
+**While editing:**
+
+- Use `rg` via shell commands to locate symbols and usages instead of broad `find`/`grep`. :contentReference[oaicite:10]{index=10}  
+
+**After editing:**
+
+- Use `git diff` to confirm:
+  - Modules stay roughly in the 200–300 line range where possible, :contentReference[oaicite:11]{index=11}  
+  - Only intended areas are touched,
+  - No generated artifacts or cache files are modified.
+
+Summarize your changes in natural language for commits, PRs, and memory entries.
+
+---
+
+## 3. `sequential_thinking` — Structured Planning
+
+Invoke `sequential_thinking` for any multi-step LaTeXify change.
+
+**Typical triggers:**
+
+- Modifying `release/pipeline/ingestion.py` or other core pipeline modules.
+- Changing how agents in `release/agents/` orchestrate the LangGraph-style workflow. :contentReference[oaicite:12]{index=12}  
+- Adjusting reward / metrics computation or validation paths.
+
+**Plan contents:**
+
+- Steps with:
+  - Goal,
+  - Files/modules involved,
+  - MCP tools to use (`git`, `memory`, `context7`, `web_search`),
+  - Verification method (pytest, smoke run, metrics inspection).
+
+Treat the plan as a working checklist; refine with new calls if reality diverges.
+
+---
+
+## 4. Docs & External Knowledge — `context7`, `web_search`, ResearchAgent
+
+LaTeXify has a RAG/agent stack that already uses external hints via a DuckDuckGo-backed ResearchAgent in `release/agents/`. :contentReference[oaicite:13]{index=13}  
+
+### 4.1 Context7 (PRIMARY for docs & APIs)
+
+**Always use Context7 MCP when you need:**
+
+- Library/API documentation (Python, PyTorch, transformers, LangGraph, LaTeX toolchain, etc.).
+- Code generation that depends on accurate library usage (function signatures, kwargs, return types).
+- Setup/configuration steps (install commands, environment variables, service configuration).
+
+Protocol:
+
+1. When you need docs or config steps, **call Context7 first**.
+2. Ask it to resolve:
+   - The correct library ID,
+   - The specific docs page(s) relevant to the operation you’re implementing.
+3. Only fall back to generic `web_search` if:
+   - Context7 doesn’t have the docs, or
+   - You need broader discussion / community answers.
+
+### 4.2 Web Search MCP (DuckDuckGo)
+
+Use `web_search` primarily for:
+
+- Debugging runtime/compile errors not covered by internal docs:
+  - CUDA, FlashAttention, PyTorch, latexmk/tectonic errors, etc. :contentReference[oaicite:14]{index=14}  
+- Finding research papers or repos relevant to:
+  - Layout segmentation,
+  - OCR and vision-language models,
+  - RAG indexing and LaTeX generation.
+
+### 4.3 ResearchAgent (Experimental Agent Stack)
+
+When operating inside the Experimental Agent Stack (Creative → CompileAndRepair → Evaluator → ResearchAgent): :contentReference[oaicite:15]{index=15}  
+
+- Prefer using the built-in `ResearchAgent` for snippet-level hints instead of calling `web_search` directly, so the graph remains consistent.
+- Use ResearchAgent after multiple failed snippet attempts to retrieve small supporting examples or explanations.
+
+---
+
+## 5. OpenAI Cookbook — Guided Prompts & Patterns
+
+For advanced prompt design, agent design, or API usage patterns, you should **regularly consult the OpenAI Cookbook**: :contentReference[oaicite:16]{index=16}  
+
+- Primary resources:
+  - The GitHub repo `openai/openai-cookbook` (code and notebooks).
+  - The website `cookbook.openai.com` (organized examples and guides).
+
+**When to consult the Cookbook:**
+
+- Designing or refining prompts for:
+  - Multi-step tool use,
+  - RAG flows,
+  - Evaluation/reflection loops,
+  - Multi-agent workflows similar to LaTeXify’s pipeline.
+- Implementing or improving:
+  - Retrieval-augmented generation patterns,
+  - Function calling / actions,
+  - Streaming, batching, or error handling strategies.
+
+**How to consult it:**
+
+- Use `context7` or `web_search` with queries like:
+  - `"site:github.com/openai/openai-cookbook RAG"`,
+  - `"site:cookbook.openai.com tool use LangGraph"`,
+  - `"openai cookbook LaTeX, typesetting, or document pipelines"`.
+
+Adapt patterns from Cookbook examples to the LaTeXify architecture and constraints documented in `release/README.md` and this file. :contentReference[oaicite:17]{index=17}  
+
+---
+
+## 6. `playwright` and `chrome_devtools` — Browser-Level Checks
+
+Use these only when a UI or HTTP surface exists to test.
+
+**Playwright:**
+
+- Script UI flows:
+  - Upload a sample PDF,
+  - Trigger LaTeXification,
+  - Confirm that `main.tex` or output artifacts appear and look sane.
+
+**Chrome DevTools:**
+
+- Inspect performance:
+  - Network calls,
+  - CPU usage,
+  - Console errors.
+
+Don’t use them when the task is purely backend or CLI.
+
+---
+
+## 7. `github` MCP — Remote Issues & PRs
+
+Use `github` to keep local work aligned with remote collaboration:
+
+- Read:
+  - Issues labeled for OCR, RAG, agents, metrics, etc.
+  - Open PRs touching the same modules you’re changing.
+- Write (only when asked):
+  - New issues summarizing problems, decisions, and validation.
+  - PR descriptions with clear summaries and links to metrics/tests.
+
+---
+
+## 8. Docs vs Memory — What Goes Where
+
+Whenever you modify:
+
+- CLI flags or pipeline entry points,
+- Artifact schemas (`graph.json`, `metrics.json`, `quality_gate.json`, etc.),
+- Agent contracts or reward schemas,
+
+You must:
+
+1. Update repository docs:
+   - `release/README.md` and `release/AGENTS.md` for behavior and agent wiring. :contentReference[oaicite:18]{index=18}  
+2. Record a concise memory entry:
+   - Name it clearly,
+   - Capture reason + impact + validation,
+   - So future sessions can recover context via `memory_search`.
+
+If you skip the memory protocol or Context7/Cookbook guidance, you are **not** following the project requirements.

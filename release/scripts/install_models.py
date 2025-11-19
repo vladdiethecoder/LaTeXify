@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -29,10 +30,28 @@ except Exception as exc:  # pragma: no cover
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
-from release.core.model_paths import resolve_models_root  # noqa: E402
+
+def _load_model_paths_module():
+    """Load core.model_paths without importing the full release package.
+
+    This avoids triggering heavy side effects (vLLM, OCR adapters, etc.) during model
+    installation while still reusing the canonical resolve_models_root helper.
+    """
+
+    path = REPO_ROOT / "release" / "core" / "model_paths.py"
+    module_name = "release_core_model_paths_for_install"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load model_paths module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_model_paths = _load_model_paths_module()
+resolve_models_root = _model_paths.resolve_models_root  # type: ignore[attr-defined]
 
 MODELS_DIR = resolve_models_root(REPO_ROOT / "models")
 
@@ -47,6 +66,7 @@ class ModelSpec:
     manual_url: Optional[str] = None
     git_url: Optional[str] = None
     notes: Optional[str] = None
+    requires_auth: bool = False
 
     def destination(self) -> Path:
         return MODELS_DIR / self.target
@@ -64,6 +84,35 @@ INTERNVL_MODEL_ID = os.environ.get("LATEXIFY_INTERNVL_MODEL", "OpenGVLab/InternV
 INTERNVL_TARGET = Path("ocr") / _sanitize_model_subdir(INTERNVL_MODEL_ID)
 DEFAULT_LLM_REPO = os.environ.get("LATEXIFY_LLM_REPO", "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct")
 LLM_DEFAULT_TARGET = Path("llm") / _repo_slug(DEFAULT_LLM_REPO)
+KIMI_K2_REPO = os.environ.get("LATEXIFY_KIMI_K2_REPO", "unsloth/Kimi-K2-Instruct-0905-GGUF")
+KIMI_K2_TARGET = Path("llm/kimi-k2-instruct-gguf")
+ALLOWED_KIMI_VARIANTS = {"Q4_K_M", "Q3_K_M", "Q5_K_M"}
+DEFAULT_KIMI_VARIANT = "Q4_K_M"
+
+
+def _resolve_kimi_variant() -> str:
+    candidate = os.environ.get("LATEXIFY_KIMI_K2_VARIANT", DEFAULT_KIMI_VARIANT).strip().upper()
+    if candidate not in ALLOWED_KIMI_VARIANTS:
+        print(
+            f"[install_models] Unknown LATEXIFY_KIMI_K2_VARIANT '{candidate}'. "
+            f"Falling back to {DEFAULT_KIMI_VARIANT}.",
+            file=sys.stderr,
+        )
+        return DEFAULT_KIMI_VARIANT
+    return candidate
+
+
+KIMI_K2_VARIANT = _resolve_kimi_variant()
+
+
+def _kimi_allow_patterns() -> tuple[str, ...]:
+    override = os.environ.get("LATEXIFY_KIMI_K2_ALLOW_PATTERN")
+    if override:
+        return (override,)
+    return (f"**/Kimi-K2-Instruct-0905-{KIMI_K2_VARIANT}-*.gguf",)
+
+
+KIMI_K2_ALLOW = _kimi_allow_patterns()
 
 
 MODEL_REGISTRY: Dict[str, ModelSpec] = {
@@ -73,23 +122,19 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         target=Path("layout/qwen2.5-vl-32b"),
         notes="Vision-language layout model for PDF/page understanding.",
     ),
-    "judge/qwen2.5-72b-gguf": ModelSpec(
-        key="judge/qwen2.5-72b-gguf",
-        repo_id="Qwen/Qwen2.5-72B-Instruct-GGUF",
-        target=Path("judge/qwen2.5-72b-gguf"),
-        notes="llama.cpp-compatible judge (Q4_K_M). Requires accepting the Qwen 2.5 license.",
-    ),
     "ocr/internvl": ModelSpec(
         key="ocr/internvl",
         repo_id=INTERNVL_MODEL_ID,
         target=INTERNVL_TARGET,
         notes=f"InternVL vision OCR (set LATEXIFY_INTERNVL_MODEL to override, default {INTERNVL_MODEL_ID}).",
+        requires_auth=True,
     ),
     "ocr/florence-2-large": ModelSpec(
         key="ocr/florence-2-large",
         repo_id="microsoft/Florence-2-large-ft",
         target=Path("ocr/florence-2-large"),
         notes="Florence-2 Large fine-tuned for OCR/regional text (requires einops + timm).",
+        requires_auth=True,
     ),
     "ocr/nougat-small": ModelSpec(
         key="ocr/nougat-small",
@@ -122,21 +167,49 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         target=Path("layout/layoutlmv3-base"),
         notes="LayoutLMv3-base checkpoint for DocumentStructureAnalyzer.",
     ),
-    "llm/codellama-13b-math-gguf": ModelSpec(
-        key="llm/codellama-13b-math-gguf",
-        repo_id=None,
-        target=Path("llm/codellama-13b-math-gguf"),
-        manual_url="https://huggingface.co/TheBloke/CodeLlama-13B-Instruct-GGUF",
-        notes=(
-            "Download a codellama-13b-math GGUF file (e.g., Q4_K_M) and place it in this directory. "
-            "Point --llama-cpp-model at the .gguf path."
-        ),
+    "vision/flux-fill": ModelSpec(
+        key="vision/flux-fill",
+        repo_id="black-forest-labs/Flux.1-Fill-dev",
+        target=Path("vision/flux-fill"),
+        notes="Flux.1 Fill diffusion checkpoint for render-aware reconstruction (optional).",
+    ),
+    "layout/surya": ModelSpec(
+        key="layout/surya",
+        repo_id="SuryaResearch/surya_layout",
+        target=Path("layout/surya"),
+        notes="Surya layout detector weights for render-aware ingestion.",
     ),
     "llm/deepseek-coder-v2-lite": ModelSpec(
         key="llm/deepseek-coder-v2-lite",
         repo_id=DEFAULT_LLM_REPO,
         target=LLM_DEFAULT_TARGET,
         notes="Default DeepSeek refiner (7B). Requires `huggingface-cli login` and ~15 GB disk.",
+        requires_auth=True,
+    ),
+    "llm/kimi-k2-instruct-gguf": ModelSpec(
+        key="llm/kimi-k2-instruct-gguf",
+        repo_id=KIMI_K2_REPO,
+        target=KIMI_K2_TARGET,
+        allow=KIMI_K2_ALLOW,
+        notes=(
+            "Kimi-K2 Instruct (GGUF). Requires llama-cpp-python with CUDA support. "
+            "Use LATEXIFY_KIMI_K2_REPO, LATEXIFY_KIMI_K2_VARIANT, or LATEXIFY_KIMI_K2_ALLOW_PATTERN to override."
+        ),
+        requires_auth=True,
+    ),
+    "llm/mixtral-8x7b-instruct": ModelSpec(
+        key="llm/mixtral-8x7b-instruct",
+        repo_id="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        target=Path("llm/mixtral-8x7b-instruct"),
+        notes="Mixtral 8x7B Instruct checkpoint (Transformers-compatible).",
+        requires_auth=True,
+    ),
+    "llm/deepseek-v3": ModelSpec(
+        key="llm/deepseek-v3",
+        repo_id="deepseek-ai/DeepSeek-V3",
+        target=Path("llm/deepseek-ai__DeepSeek-V3"),
+        notes="DeepSeek V3 checkpoint for vLLM (large; ensure >60 GB free disk).",
+        requires_auth=True,
     ),
 }
 
@@ -155,6 +228,8 @@ def list_models() -> None:
         print(f"  target: {spec.destination()}")
         if spec.notes:
             print(f"  notes:  {spec.notes}")
+        if spec.requires_auth:
+            print("  auth:   huggingface-cli login required")
         if spec.manual_url:
             print(f"  manual: {spec.manual_url}")
         print()
@@ -231,6 +306,20 @@ def install_model(spec: ModelSpec, *, dry_run: bool = False, force: bool = False
         raise
     if not any(dest.iterdir()):
         raise RuntimeError("Download completed but directory is empty. Check your HF login and repo access.")
+    if spec.key == "llm/kimi-k2-instruct-gguf":
+        # Kimi-K2 repo stores quantizations under subdirectories like Q4_K_M/.
+        # Flatten one .gguf file into the target directory so bootstrap_env can discover it.
+        gguf_files = sorted(dest.rglob("*.gguf"))
+        if not gguf_files:
+            raise RuntimeError(
+                "Kimi-K2 GGUF download did not contain any .gguf files. "
+                "Check LATEXIFY_KIMI_K2_REPO / LATEXIFY_KIMI_K2_ALLOW_PATTERN and your HF access."
+            )
+        primary = next((p for p in gguf_files if KIMI_K2_VARIANT in p.name), gguf_files[0])
+        if primary.parent != dest:
+            target = dest / primary.name
+            if not target.exists():
+                primary.rename(target)
     (dest / "MODEL.json").write_text(
         json.dumps({"key": spec.key, "repo_id": spec.repo_id, "notes": spec.notes}, indent=2),
         encoding="utf-8",

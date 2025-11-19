@@ -84,6 +84,35 @@ def _looks_like_refiner_prompt(candidate: str | None) -> bool:
     return sum(marker in lowered for marker in PROMPT_GUARD_MARKERS) >= 2
 
 
+def _branch_mode(profile: Dict[str, object] | None) -> str:
+    if not profile:
+        return "ocr-only"
+    return str(profile.get("branch_strategy") or "ocr-only")
+
+
+def _fuse_branch_text(
+    text: str,
+    branch_info: Dict[str, object] | None,
+    strategy: str,
+) -> str:
+    if not branch_info or strategy == "ocr-only":
+        return text
+    hints: List[str] = []
+    region = branch_info.get("region_type")
+    if region:
+        hints.append(f"region={region}")
+    bbox = branch_info.get("bbox")
+    if bbox:
+        hints.append("bbox=" + ",".join(str(value) for value in bbox))
+    if branch_info.get("page_image"):
+        hints.append(f"page_image={branch_info['page_image']}")
+    branch_id = branch_info.get("branch_id")
+    if branch_id:
+        hints.append(f"id={branch_id}")
+    prefix = "% vision-branch " + " | ".join(hints)
+    return prefix + "\n" + text
+
+
 def _build_section_context(master_plan_path: Path | None) -> Dict[str, Dict[str, str]]:
     if not master_plan_path or not master_plan_path.exists():
         return {}
@@ -123,13 +152,19 @@ def render_block(
     quality_profile: Dict[str, object] | None = None,
 ) -> SpecialistResult:
     metadata = chunk.metadata or {}
+    branch_provenance = metadata.get("branch_provenance") or {}
+    vision_branch = branch_provenance.get("vision") if isinstance(branch_provenance, dict) else None
+    branch_strategy = _branch_mode(quality_profile)
     region = metadata.get("region_type", "text")
+    if vision_branch and branch_strategy != "ocr-only":
+        region = vision_branch.get("region_type", region)
     header_level = metadata.get("header_level", 0)
     parent_section = graph_context.get("parent_label")
     notes = {"region": region}
     if section_context:
         notes.update(section_context)
     guarded_text = sanitize_chunk_text(chunk.text)
+    guarded_text = _fuse_branch_text(guarded_text, vision_branch, branch_strategy)
     conservative_mode = (quality_profile or {}).get("processing_mode") == "conservative"
     aggressive_mode = (quality_profile or {}).get("processing_mode") == "aggressive"
     if conservative_mode:
@@ -205,6 +240,9 @@ def render_block(
     result.latex = prefix + snippet_body
     if "region" not in result.notes:
         result.notes["region"] = region
+    if vision_branch:
+        result.notes["branch"] = vision_branch
+        result.notes["branch_strategy"] = branch_strategy
     return result
 
 
@@ -239,7 +277,14 @@ def synthesize_blocks(
             llm_refiner,
             quality_profile=quality_profile,
         )
-        snippets.append(common.Snippet(chunk_id=chunk.chunk_id, latex=result.latex, notes=result.notes))
+        snippets.append(
+            common.Snippet(
+                chunk_id=chunk.chunk_id,
+                latex=result.latex,
+                notes=result.notes,
+                branch=result.notes.get("branch"),
+            )
+        )
     return snippets
 
 
@@ -257,6 +302,7 @@ def run_synthesis(
     llm_refiner=None,
     quality_profile: Dict[str, object] | None = None,
     domain_profile: Dict[str, object] | None = None,
+    refinement_passes: int | None = None,
 ) -> Path:
     chunks = {chunk.chunk_id: chunk for chunk in common.load_chunks(chunks_path)}
     plan = common.load_plan(plan_path)

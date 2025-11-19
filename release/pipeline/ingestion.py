@@ -10,8 +10,9 @@ import re
 import subprocess
 import contextlib
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, OrderedDict, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple, Set
 
@@ -72,28 +73,75 @@ from ..core import common
 from ..core.model_paths import resolve_models_root
 from ..core.config import BackendToggleConfig
 from ..utils.ensemble import EnsembleVoter
+from ..models.monkey_ocr_adapter import MonkeyOCRAdapter, MonkeyOCRPageResult
+from ..models.vlm_adapters import get_vlm_adapter
 from .semantic_chunking import SemanticChunker
 from .sectioning import LLMSectioner, build_sectioner
 from .ambiguity_resolver import AmbiguityResolver
-from .sectioning import LLMSectioner, build_sectioner
-from .math_classifier import MathContentClassifier
+from .math_support import MathContentClassifier
+from .surya_adapter import SuryaLayoutDetector
 from .quality_assessor import InputQualityAssessor, QualityProfile
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CHUNK_CHARS = 1200
 MODELS_ROOT = resolve_models_root(Path(__file__).resolve().parents[1] / "models")
-OCR_MODES = {"auto", "pytesseract", "nougat", "florence2", "internvl", "mathvision", "mathocr", "none"}
+SURYA_MODEL_SUBDIR = Path("layout") / "surya"
+OCR_MODES = {
+    "auto",
+    "pytesseract",
+    "nougat",
+    "florence2",
+    "internvl",
+    "qwenvl",
+    "mathvision",
+    "mathocr",
+    "monkeyocr",
+    "none",
+}
+
+
+def _layout_conf_threshold() -> float:
+    try:
+        return float(os.environ.get("LATEXIFY_LAYOUT_CONFIDENCE_THRESHOLD", "0.0"))
+    except ValueError:
+        return 0.0
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "off", ""}
 def _sanitize_model_subdir(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).lower()
 
 
+def _bbox_to_polygon(bbox: Tuple[float, float, float, float]) -> List[Tuple[float, float]]:
+    x0, y0, x1, y1 = bbox
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
 INTERNVL_MODEL_ID = os.environ.get("LATEXIFY_INTERNVL_MODEL", "OpenGVLab/InternVL3_5-8B")
 INTERNVL_MODEL_SUBPATH = Path("ocr") / _sanitize_model_subdir(INTERNVL_MODEL_ID)
+QWEN_VL_MODEL_ID = os.environ.get("LATEXIFY_QWEN_VL_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct")
+QWEN_VL_MODEL_SUBPATH = Path("ocr") / _sanitize_model_subdir(QWEN_VL_MODEL_ID)
+QWEN_VL_PROMPT = os.environ.get(
+    "LATEXIFY_QWEN_VL_PROMPT",
+    "Transcribe this entire PDF page into high-fidelity LaTeX, preserving math, tables, and structure.",
+)
+QWEN_VL_MAX_NEW_TOKENS = int(os.environ.get("LATEXIFY_QWEN_VL_MAX_NEW_TOKENS", "768"))
+QWEN_VL_TEMPERATURE = float(os.environ.get("LATEXIFY_QWEN_VL_TEMPERATURE", "0.0"))
+QWEN_VL_TOP_P = float(os.environ.get("LATEXIFY_QWEN_VL_TOP_P", "0.9"))
+QWEN_VL_DEVICE_ENV = os.environ.get("LATEXIFY_QWEN_VL_DEVICE", "auto").strip().lower()
+QWEN_VL_LOAD_IN_8BIT = _env_flag("LATEXIFY_QWEN_VL_LOAD_IN_8BIT")
+QWEN_VL_LOAD_IN_4BIT = _env_flag("LATEXIFY_QWEN_VL_LOAD_IN_4BIT")
+QWEN_VL_MAX_GPU_RETRIES = int(os.environ.get("LATEXIFY_QWEN_VL_MAX_GPU_RETRIES", "2"))
 
 OCR_MODEL_SPECS = {
     "nougat": {"repo_id": "facebook/nougat-small", "subpath": Path("ocr") / "nougat-small"},
     "florence2": {"repo_id": "microsoft/Florence-2-large-ft", "subpath": Path("ocr") / "florence-2-large"},
     "internvl": {"repo_id": INTERNVL_MODEL_ID, "subpath": INTERNVL_MODEL_SUBPATH},
+    "qwenvl": {"repo_id": QWEN_VL_MODEL_ID, "subpath": QWEN_VL_MODEL_SUBPATH},
     "mathvision": {"repo_id": "microsoft/trocr-base-handwritten", "subpath": Path("ocr") / "trocr-math"},
     "mathocr": {"repo_id": "lupantech/pix2tex-base", "subpath": Path("ocr") / "pix2tex-base"},
 }
@@ -137,23 +185,38 @@ def _parse_force_gpu_backends(value: str | None) -> Set[str]:
 
 
 def _parse_vram_headroom_bytes() -> int:
-    raw = os.environ.get("LATEXIFY_OCR_VRAM_HEADROOM_GB", "3")
+    raw = os.environ.get("LATEXIFY_OCR_VRAM_HEADROOM_GB")
     try:
-        value = float(raw)
+        value = float(raw) if raw is not None else None
     except (TypeError, ValueError):
         LOGGER.warning(
-            "Invalid LATEXIFY_OCR_VRAM_HEADROOM_GB value %s; defaulting to 3 GiB safety margin.",
+            "Invalid LATEXIFY_OCR_VRAM_HEADROOM_GB value %s; using automatic safety margin.",
             raw,
         )
-        value = 3.0
+        value = None
+    if value is None:
+        total_gb = None
+        if torch is not None and torch.cuda.is_available():
+            with contextlib.suppress(Exception):
+                total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        value = 1.0 if total_gb and total_gb <= 32 else 2.5
     value = max(0.0, value)
     return int(value * 1024**3)
 
 
 OCR_VRAM_HEADROOM_BYTES = _parse_vram_headroom_bytes()
 FORCE_GPU_OCR_DEVICE = _parse_force_gpu_device(os.environ.get("LATEXIFY_FORCE_GPU_OCR"))
-FORCE_GPU_OCR_BACKENDS = {"florence2", "internvl", "mathvision", "mathocr"}
+FORCE_GPU_OCR_BACKENDS = {"florence2", "internvl", "qwenvl", "mathvision", "mathocr"}
 FORCE_GPU_BACKEND_OVERRIDES = _parse_force_gpu_backends(os.environ.get("LATEXIFY_OCR_FORCE_GPU"))
+
+
+def _resolve_qwenvl_device() -> str:
+    pref = QWEN_VL_DEVICE_ENV
+    if pref == "auto" or not pref:
+        return "cuda:0" if not LIMITED_GPU else "cpu"
+    if pref == "cuda":
+        return "cuda:0"
+    return pref
 
 
 def _detect_limited_gpu() -> bool:
@@ -178,6 +241,14 @@ def _detect_limited_gpu() -> bool:
 
 LIMITED_GPU = _detect_limited_gpu()
 
+if LIMITED_GPU:
+    if LAYOUTLM_DEVICE_ENV == "auto":
+        LAYOUTLM_DEVICE_ENV = "cpu"
+    if CLIP_DEVICE_ENV == "auto":
+        CLIP_DEVICE_ENV = "cpu"
+
+PREFER_QWEN_VL = _env_flag("LATEXIFY_PREFER_QWEN_VL", default=LIMITED_GPU)
+
 
 def _resolve_release_mode(value: str | None, limited: bool) -> str:
     """Determine how aggressively we should unload heavy OCR backends."""
@@ -197,6 +268,7 @@ RELEASE_HEAVY_MODE = _resolve_release_mode(os.environ.get("LATEXIFY_OCR_RELEASE_
 BACKEND_PYTHON_DEPS = {
     "florence2": ("einops", "timm"),
     "internvl": ("einops",),
+    "qwenvl": ("torch", "transformers"),
     "mathocr": ("pix2tex", "ultralytics"),
 }
 FORMULA_RE = re.compile(r"(\\begin\{equation\}|\\frac|\\sum|\\int|=|\\[a-z]+)")
@@ -220,6 +292,65 @@ class IngestionResult:
     tree_path: Path | None = None
     manifest_path: Path | None = None
     quality_profile: Dict[str, object] | None = None
+    vision_branch_summary: Dict[str, object] | None = None
+    master_ocr_items_path: Path | None = None
+
+
+@dataclass
+class MasterOCRItem:
+    item_id: str
+    page: int
+    region_type: str
+    polygon: List[Tuple[float, float]]
+    bbox: Tuple[float, float, float, float]
+    content: str | None = None
+    page_width: float | None = None
+    page_height: float | None = None
+
+    def to_payload(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "id": self.item_id,
+            "page": self.page,
+            "region_type": self.region_type,
+            "polygon": [[float(x), float(y)] for x, y in self.polygon],
+            "bbox": [float(v) for v in self.bbox],
+        }
+        if self.content:
+            payload["content"] = self.content
+        if self.page_width:
+            payload["page_width_pt"] = float(self.page_width)
+        if self.page_height:
+            payload["page_height_pt"] = float(self.page_height)
+        return payload
+
+
+def _export_master_ocr_items(layout_segments: Dict[int, List[LayoutRegion]], target: Path) -> Path | None:
+    if not layout_segments:
+        return None
+    items: List[Dict[str, object]] = []
+    for page_idx, regions in layout_segments.items():
+        for order, region in enumerate(regions):
+            polygon = region.extras.get("polygon") if region.extras else None
+            if not polygon:
+                polygon = _bbox_to_polygon(region.bbox)
+            extras = region.extras or {}
+            page_width = extras.get("page_width_pt") or extras.get("page_width")
+            page_height = extras.get("page_height_pt") or extras.get("page_height")
+            payload = MasterOCRItem(
+                item_id=f"page{page_idx + 1:04d}_region{order:03d}",
+                page=page_idx + 1,
+                region_type=region.tag,
+                polygon=[tuple(point) for point in polygon],
+                bbox=region.bbox,
+                content=(region.text or extras.get("text")),
+                page_width=float(page_width) if page_width else None,
+                page_height=float(page_height) if page_height else None,
+            ).to_payload()
+            items.append(payload)
+    if not items:
+        return None
+    target.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    return target
 
 
 class PageImageStore:
@@ -362,7 +493,9 @@ class LayoutAnalyzer:
                 "page_index": page_index + 1,
                 "page_width_pt": width,
                 "page_height_pt": page.rect.height or 1.0,
+                "layout_confidence": self._confidence_from_font(font_size),
             })
+            extras["branch_id"] = f"vision_page{page_index + 1:03d}_region{order:03d}"
             regions.append(LayoutRegion(text=text, tag=tag, bbox=bbox, column=column, order=order, font_size=font_size, extras=extras))
             order += 1
         return regions
@@ -375,6 +508,11 @@ class LayoutAnalyzer:
         if normalized > 0.65:
             return 2
         return 1
+
+    @staticmethod
+    def _confidence_from_font(font_size: float) -> float:
+        normalized = min(1.0, max(0.0, font_size / 24.0))
+        return round(0.4 + 0.6 * normalized, 3)
 
     def _classify_text(self, text: str, font_size: float) -> Tuple[str, Dict[str, object]]:
         lowered = text.lower().strip()
@@ -403,6 +541,32 @@ class LayoutAnalyzer:
 DEFAULT_LAYOUTLM_MODEL = "microsoft/layoutlmv3-base"
 
 
+@dataclass
+class VisionSynthesisBranch:
+    """Branch metadata describing regions targeted for vision synthesis."""
+
+    branch_id: str
+    page_index: int
+    region_type: str
+    bbox: Tuple[float, float, float, float] | None
+    extras: Dict[str, object] = field(default_factory=dict)
+    page_image: str | None = None
+
+    def to_metadata(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "branch_id": self.branch_id,
+            "page": self.page_index,
+            "region_type": self.region_type,
+        }
+        if self.bbox:
+            payload["bbox"] = [float(value) for value in self.bbox]
+        if self.page_image:
+            payload["page_image"] = self.page_image
+        if self.extras:
+            payload["extras"] = self.extras
+        return payload
+
+
 class DocumentStructureAnalyzer:
     """Higher-level structural analyzer that emits per-page document trees."""
 
@@ -412,8 +576,24 @@ class DocumentStructureAnalyzer:
         enable_layoutlm: bool = True,
         model_name: str | None = None,
         label_map: Dict[int, str] | None = None,
+        enable_vision_branch: bool = False,
+        monkey_adapter: MonkeyOCRAdapter | None = None,
+        layout_backend: str | None = None,
+        page_image_store: PageImageStore | None = None,
     ) -> None:
-        self._layout = LayoutAnalyzer(pdf_path, enabled=True)
+        backend_env = (os.environ.get("LATEXIFY_LAYOUT_BACKEND", "pymupdf") or "pymupdf").lower()
+        if layout_backend and layout_backend.strip():
+            backend_env = layout_backend.strip().lower()
+        self._layout_backend = backend_env
+        self._surya_math_detector = os.environ.get("LATEXIFY_SURYA_MATH_DETECTOR", "1") not in {"0", "false"}
+        self._surya_detector: SuryaLayoutDetector | None = None
+        self._page_image_store = page_image_store
+        if self._layout_backend == "surya" and self._page_image_store is None:
+            cache_dir = pdf_path.parent / ".surya_cache"
+            self._page_image_store = PageImageStore(pdf_path, cache_dir, enabled=True)
+        self._pdf_path = pdf_path
+        self._page_sizes = self._resolve_page_sizes(pdf_path)
+        self._layout = LayoutAnalyzer(pdf_path, enabled=self._layout_backend != "surya")
         self._label_map = label_map or {}
         self._tree_cache: Dict[int, List[Dict[str, object]]] | None = None
         self._use_layoutlm = (
@@ -425,9 +605,12 @@ class DocumentStructureAnalyzer:
         self._model = None
         self._processor = None
         self._device = None
+        self._vision_branch_enabled = enable_vision_branch
+        self._vision_branch_cache: Dict[str, VisionSynthesisBranch] = {}
+        self._monkey_adapter = monkey_adapter
         resolved_model_name = model_name or LAYOUTLM_MODEL_OVERRIDE or DEFAULT_LAYOUTLM_MODEL
         self._resolved_model_name = resolved_model_name
-        if self._use_layoutlm:
+        if self._use_layoutlm and self._layout_backend != "surya":
             try:  # pragma: no cover - heavy dependency
                 device = self._resolve_device()
                 LOGGER.info("Loading LayoutLMv3 weights from %s on %s", resolved_model_name, device)
@@ -463,7 +646,12 @@ class DocumentStructureAnalyzer:
     def analyze_document(
         self, page_count: int
     ) -> Tuple[Dict[int, List[LayoutRegion]], Dict[int, List[Dict[str, object]]]]:
-        layout_regions = self._layout.analyze_document(page_count)
+        if self._layout_backend == "surya":
+            layout_regions = self._surya_layout(page_count)
+        elif self._monkey_adapter and self._monkey_adapter.available():
+            layout_regions = self._monkey_layout(page_count)
+        else:
+            layout_regions = self._layout.analyze_document(page_count)
         tree: Dict[int, List[Dict[str, object]]] = {}
         for page_idx, regions in layout_regions.items():
             nodes: List[Dict[str, object]] = []
@@ -483,6 +671,143 @@ class DocumentStructureAnalyzer:
             tree[page_idx] = nodes
         self._tree_cache = tree
         return layout_regions, tree
+
+    def _monkey_layout(self, page_count: int) -> Dict[int, List[LayoutRegion]]:
+        assert self._monkey_adapter is not None
+        regions_map: Dict[int, List[LayoutRegion]] = {}
+        raw_regions = self._monkey_adapter.layout_regions_for_document(page_count)
+        for page_idx, regions in raw_regions.items():
+            converted: List[LayoutRegion] = []
+            for region in regions:
+                extras = dict(region.metadata)
+                extras.setdefault("layout_confidence", region.confidence)
+                extras.setdefault("monkey_backend", "monkeyocr")
+                converted.append(
+                    LayoutRegion(
+                        text=region.text,
+                        tag=region.region_type,
+                        bbox=region.bbox,
+                        column=region.column,
+                        order=region.order,
+                        font_size=region.font_size,
+                        extras=extras,
+                    )
+                )
+            regions_map[page_idx] = converted
+        return regions_map
+
+    def _resolve_page_sizes(self, pdf_path: Path) -> Dict[int, Tuple[float, float]]:
+        sizes: Dict[int, Tuple[float, float]] = {}
+        if fitz is not None:
+            try:
+                doc = fitz.open(str(pdf_path))
+                for idx in range(doc.page_count):
+                    rect = doc.load_page(idx).rect
+                    sizes[idx] = (float(rect.width or 612.0), float(rect.height or 792.0))
+                doc.close()
+            except Exception:
+                sizes = {}
+        if not sizes:
+            try:
+                reader = PdfReader(str(pdf_path))
+                for idx, page in enumerate(reader.pages):
+                    width = float(page.mediabox.width or 612)
+                    height = float(page.mediabox.height or 792)
+                    sizes[idx] = (width, height)
+            except Exception:
+                pass
+        return sizes
+
+    def _surya_layout(self, page_count: int) -> Dict[int, List[LayoutRegion]]:
+        detector = self._ensure_surya_detector()
+        if self._page_image_store is None:
+            raise RuntimeError("Surya layout backend requires a PageImageStore with rasterized pages.")
+        regions_map: Dict[int, List[LayoutRegion]] = {}
+        for page_idx in range(page_count):
+            image_path = self._page_image_store.get_page_image(page_idx)
+            if image_path is None:
+                LOGGER.warning("Surya backend missing page raster for index %s", page_idx + 1)
+                continue
+            page_width, page_height = self._page_sizes.get(page_idx, (612.0, 792.0))
+            try:
+                detected = detector.detect(image_path)
+            except Exception as exc:  # pragma: no cover - heavy dependency
+                LOGGER.warning("Surya detection failed on page %s: %s", page_idx + 1, exc)
+                continue
+            converted: List[LayoutRegion] = []
+            for order, region in enumerate(detected):
+                polygon = list(region.polygon) if region.polygon else _bbox_to_polygon(region.bbox)
+                extras = {
+                    "layout_confidence": region.confidence,
+                    "source": "surya",
+                    "polygon": polygon,
+                    "page_index": page_idx + 1,
+                    "page_width_pt": page_width,
+                    "page_height_pt": page_height,
+                }
+                converted.append(
+                    LayoutRegion(
+                        text="",
+                        tag=region.label.lower(),
+                        bbox=region.bbox,
+                        column=1,
+                        order=order,
+                        font_size=0.0,
+                        extras=extras,
+                    )
+                )
+            regions_map[page_idx] = converted
+        return regions_map
+
+    def _ensure_surya_detector(self) -> SuryaLayoutDetector:
+        if self._surya_detector is None:
+            checkpoint_dir = MODELS_ROOT / SURYA_MODEL_SUBDIR
+            self._surya_detector = SuryaLayoutDetector(
+                checkpoint_dir=checkpoint_dir,
+                enable_math_detector=self._surya_math_detector,
+            )
+        if not self._surya_detector.available():
+            raise RuntimeError(
+                "Surya backend requested but surya-ocr is not installed. Run `pip install surya-ocr` to continue."
+            )
+        return self._surya_detector
+
+    def build_vision_branches(
+        self,
+        layout_segments: Dict[int, List[LayoutRegion]],
+        page_store: PageImageStore | None = None,
+    ) -> Dict[str, VisionSynthesisBranch]:
+        if not self._vision_branch_enabled or not layout_segments:
+            self._vision_branch_cache = {}
+            return {}
+        branches: Dict[str, VisionSynthesisBranch] = {}
+        page_image_cache: Dict[int, str | None] = {}
+        for page_idx, regions in layout_segments.items():
+            page_image = None
+            if page_store and page_store.enabled:
+                if page_idx not in page_image_cache:
+                    image_path = page_store.get_page_image(page_idx)
+                    page_image_cache[page_idx] = str(image_path) if image_path else None
+                page_image = page_image_cache[page_idx]
+            for region in regions:
+                extras = dict(region.extras or {})
+                branch_id = extras.pop("branch_id", None)
+                if not branch_id:
+                    continue
+                branch = VisionSynthesisBranch(
+                    branch_id=branch_id,
+                    page_index=page_idx + 1,
+                    region_type=region.tag,
+                    bbox=region.bbox,
+                    extras=extras,
+                    page_image=page_image,
+                )
+                branches[branch_id] = branch
+        self._vision_branch_cache = branches
+        return branches
+
+    def vision_branches(self) -> Dict[str, VisionSynthesisBranch]:
+        return dict(self._vision_branch_cache)
 
     def _predict_label(self, region: LayoutRegion) -> str:
         voter = EnsembleVoter(threshold=0.35)
@@ -653,6 +978,7 @@ class ClipCaptionVerifier:
 @dataclass
 class OCRResult:
     sources: OrderedDict[str, str]
+    metadata: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
     @property
     def backends(self) -> List[str]:
@@ -684,6 +1010,7 @@ class OCRFallback:
         telemetry: TelemetryCallback | None = None,
         math_page_hints: Sequence[bool] | None = None,
         quality_profile: QualityProfile | Dict[str, object] | None = None,
+        monkey_adapter: MonkeyOCRAdapter | None = None,
     ) -> None:
         self.mode = mode
         self.cache_dir = cache_dir
@@ -694,21 +1021,29 @@ class OCRFallback:
         self._nougat = None
         self._florence = None
         self._internvl = None
+        self._qwenvl = None
+        self._qwenvl_device_hint = _resolve_qwenvl_device()
+        self._qwenvl_gpu_failures = 0
         self._mathvision = None
         self._mathocr_engine = None
+        self._monkey_adapter = monkey_adapter
+        self._monkey_cache: Dict[int, MonkeyOCRPageResult] = {}
         self._device_overrides: Dict[str, str] = {}
         self._availability = {
             "nougat": True,
             "florence2": True,
             "internvl": True,
+            "qwenvl": True,
             "mathvision": True,
             "mathocr": MathOCREngine is not None,
             "pytesseract": pytesseract is not None,
+            "monkeyocr": monkey_adapter is not None and monkey_adapter.available(),
         }
         self._download_attempted: Dict[str, bool] = {key: False for key in OCR_MODEL_SPECS}
         self._memory_requirements = {
             "florence2": 10 * 1024**3,  # ~10 GB
             "internvl": 22 * 1024**3,  # ~22 GB
+            "qwenvl": 14 * 1024**3,  # ~14 GB
             "mathvision": 4 * 1024**3,
         }
         self._gpu_reservations: Dict[int, int] = defaultdict(int)
@@ -1045,13 +1380,26 @@ class OCRFallback:
         current = self._gpu_reservations.get(idx, 0)
         self._gpu_reservations[idx] = max(0, current - requirement)
 
+    def _teardown_adapter(self, adapter: object | None, backend: str) -> None:
+        if adapter is None:
+            return
+        close = getattr(adapter, "close", None)
+        if callable(close):
+            try:
+                LOGGER.info("Releasing %s backend and clearing CUDA cache.", backend)
+                close()
+            except Exception:
+                LOGGER.debug("Failed to close backend %s cleanly.", backend, exc_info=True)
+
     def _release_backend(self, backend: str) -> None:
         released = False
         device = self._device_overrides.pop(backend, None)
         if backend == "florence2" and self._florence is not None:
+            self._teardown_adapter(self._florence, "florence2")
             self._florence = None
             released = True
         if backend == "internvl" and self._internvl is not None:
+            self._teardown_adapter(self._internvl, "internvl")
             self._internvl = None
             released = True
             if _release_shared_adapter is not None:
@@ -1059,6 +1407,15 @@ class OCRFallback:
                     _release_shared_adapter("internvl")
                 except Exception:
                     LOGGER.debug("Failed to release shared InternVL adapter.", exc_info=True)
+        if backend == "qwenvl" and self._qwenvl is not None:
+            try:
+                close = getattr(self._qwenvl, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                LOGGER.debug("Failed to close Qwen-VL adapter cleanly.", exc_info=True)
+            self._qwenvl = None
+            released = True
         if backend == "mathvision" and self._mathvision is not None:
             self._mathvision = None
             released = True
@@ -1100,12 +1457,18 @@ class OCRFallback:
                 heavy_allowed = False
             elif mode_hint == "aggressive":
                 heavy_allowed = True
-            if heavy_allowed and self._availability.get("florence2", True):
-                order.append("florence2")
-            if heavy_allowed and self._availability.get("internvl", True):
-                order.append("internvl")
-            if heavy_allowed and self._availability.get("florence2", True):
-                LOGGER.debug("Prioritizing Florence2 before other OCR backends.")
+            if self._availability.get("monkeyocr", False):
+                order.append("monkeyocr")
+            if heavy_allowed:
+                if self._availability.get("florence2", True):
+                    order.append("florence2")
+                if PREFER_QWEN_VL and self._availability.get("qwenvl", True):
+                    order.append("qwenvl")
+                elif self._availability.get("internvl", True):
+                    order.append("internvl")
+                elif self._availability.get("qwenvl", True):
+                    order.append("qwenvl")
+                LOGGER.debug("Prioritizing Florence2 before other heavy OCR backends.")
             if not heavy_allowed:
                 available = _available_system_memory_gb()
                 if available is not None:
@@ -1130,30 +1493,55 @@ class OCRFallback:
             "mathocr": ["mathocr"],
             "florence2": ["florence2"],
             "internvl": ["internvl"],
+            "qwenvl": ["qwenvl"],
             "pytesseract": ["pytesseract"],
+            "monkeyocr": ["monkeyocr"],
         }
         return mapping.get(self.mode, [])
 
     def _should_run_backend(self, backend: str, page_index: int) -> bool:
+        if backend == "monkeyocr":
+            return self._availability.get("monkeyocr", False)
         if backend in {"mathvision", "mathocr"}:
             return self._math_priority and self._math_backends_allowed() and self._page_requires_math(page_index)
-        if backend in {"florence2", "internvl"} and not FORCE_HEAVY_OCR and self._system_memory_low():
+        if backend in {"florence2", "internvl", "qwenvl"} and not FORCE_HEAVY_OCR and self._system_memory_low():
             return False
         return True
 
-    def _invoke_backend(self, backend: str, page_index: int) -> str | None:
+    def _invoke_backend(self, backend: str, page_index: int) -> tuple[str, Dict[str, object] | None] | None:
         handlers = {
             "nougat": self._run_nougat,
             "mathvision": self._run_mathvision,
             "mathocr": self._run_mathocr,
             "florence2": self._run_florence,
             "internvl": self._run_internvl,
+             "qwenvl": self._run_qwenvl,
             "pytesseract": self._run_tesseract,
+            "monkeyocr": self._run_monkey,
         }
         handler = handlers.get(backend)
         if handler is None:
             return None
-        return handler(page_index)
+        result = handler(page_index)
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            return result
+        return result, None
+
+    def _run_monkey(self, page_index: int) -> str | None:
+        if not self._monkey_adapter:
+            return None
+        if page_index in self._monkey_cache:
+            return self._monkey_cache[page_index].text
+        try:
+            result = self._monkey_adapter.analyze_page(page_index)
+        except Exception as exc:
+            LOGGER.warning("MonkeyOCR failed on page %s: %s", page_index + 1, exc)
+            self._availability["monkeyocr"] = False
+            return None
+        self._monkey_cache[page_index] = result
+        return result.text
 
     def prepare_document(self, total_pages: int) -> None:
         if not self._sequential_mode or total_pages <= 0 or self._sequential_cache:
@@ -1161,6 +1549,7 @@ class OCRFallback:
         LOGGER.info("Sequential OCR mode active; processing %s page(s) per backend.", total_pages)
         order = self._attempt_order()
         page_sources: List[OrderedDict[str, str]] = [OrderedDict() for _ in range(total_pages)]
+        page_metadata: List[Dict[str, Dict[str, object]]] = [{} for _ in range(total_pages)]
         for backend in order:
             self._active_pass_backend = backend
             LOGGER.info("[ocr] Backend %s pass started.", backend)
@@ -1174,10 +1563,15 @@ class OCRFallback:
             for page_index in range(total_pages):
                 if not self._should_run_backend(backend, page_index):
                     continue
-                text = self._invoke_backend(backend, page_index)
+                result = self._invoke_backend(backend, page_index)
+                if not result:
+                    continue
+                text, meta = result
                 if text:
                     page_sources[page_index][backend] = text
-            if backend in {"florence2", "internvl", "mathvision", "mathocr"}:
+                    if meta:
+                        page_metadata[page_index][backend] = meta
+            if backend in {"florence2", "internvl", "qwenvl", "mathvision", "mathocr"}:
                 self._release_backend(backend)
                 if torch is not None and torch.cuda.is_available():  # pragma: no cover
                     try:
@@ -1201,7 +1595,8 @@ class OCRFallback:
             )
         self._active_pass_backend = None
         for page_index, sources in enumerate(page_sources):
-            self._sequential_cache[page_index] = OCRResult(sources)
+            md = page_metadata[page_index] if page_metadata else {}
+            self._sequential_cache[page_index] = OCRResult(sources, md)
 
     def _lazy_nougat(self):
         if self._nougat is not None:
@@ -1214,7 +1609,7 @@ class OCRFallback:
                 self._availability["nougat"] = False
             return None
         try:
-            from ..models.model_adapters import NougatAdapter, NougatConfig
+            from ..models.nougat_adapter import NougatAdapter, NougatAdapterConfig
         except Exception as exc:  # pragma: no cover - optional import
             LOGGER.warning("Failed to import Nougat adapter: %s", exc)
             if self._availability.get("nougat", True):
@@ -1222,7 +1617,13 @@ class OCRFallback:
                 self._availability["nougat"] = False
             return None
         try:
-            self._nougat = NougatAdapter(NougatConfig(model_dir=model_dir))
+            pix2tex_dir = self.models_dir / "ocr" / "pix2tex-base"
+            self._nougat = NougatAdapter(
+                NougatAdapterConfig(
+                    model_dir=model_dir,
+                    fallback_pix2tex_dir=pix2tex_dir if pix2tex_dir.exists() else None,
+                )
+            )
         except Exception as exc:  # pragma: no cover - heavy deps
             LOGGER.warning("Failed to initialize Nougat: %s", exc)
             self._nougat = None
@@ -1401,6 +1802,103 @@ class OCRFallback:
                 )
                 return None
 
+    def _lazy_qwenvl(self):
+        if self._qwenvl is not None:
+            return self._qwenvl
+        if not self._availability.get("qwenvl", True):
+            return None
+        if not self._ensure_python_packages("qwenvl"):
+            return None
+        self._release_backend("florence2")
+        self._release_backend("internvl")
+        device_hint = getattr(self, "_qwenvl_device_hint", _resolve_qwenvl_device())
+        prefer_gpu = device_hint.startswith("cuda")
+        if prefer_gpu and torch is not None and torch.cuda.is_available():  # pragma: no cover
+            with contextlib.suppress(Exception):
+                torch.cuda.empty_cache()
+            self._wait_for_vram_budget("qwenvl")
+        model_dir = self._ensure_backend_weights("qwenvl")
+        if not model_dir.exists() or not any(model_dir.iterdir()):
+            if self._availability.get("qwenvl", True):
+                LOGGER.warning("Qwen-VL model directory missing: %s", model_dir)
+                self._availability["qwenvl"] = False
+            return None
+        exclude: set[int] = set()
+        while True:
+            device = device_hint
+            device_idx = None
+            if device == "auto":
+                resolved, device_idx = self._select_backend_device("qwenvl", exclude)
+                device = resolved or "cpu"
+            elif device.startswith("cuda"):
+                try:
+                    device_idx = int(device.split(":")[1])
+                except (IndexError, ValueError):
+                    device_idx = 0 if torch and torch.cuda.is_available() else None
+            self._emit_telemetry(
+                "ocr_load/qwenvl",
+                "started",
+                backend="qwenvl",
+                device=device,
+                device_index=device_idx,
+                notes=f"Loading Qwen-VL on {device}",
+            )
+            try:
+                adapter = get_vlm_adapter(
+                    "qwen-vl",
+                    prompt=QWEN_VL_PROMPT,
+                    max_new_tokens=QWEN_VL_MAX_NEW_TOKENS,
+                    temperature=QWEN_VL_TEMPERATURE,
+                    top_p=QWEN_VL_TOP_P,
+                    device=device,
+                    model_id=str(model_dir),
+                    load_in_8bit=QWEN_VL_LOAD_IN_8BIT,
+                    load_in_4bit=QWEN_VL_LOAD_IN_4BIT,
+                )
+                self._qwenvl = adapter
+                self._qwenvl_device_hint = device
+                self._device_overrides["qwenvl"] = device
+                self._reserve_gpu(device_idx, "qwenvl")
+                LOGGER.info("qwenvl backend assigned to %s", device)
+                self._emit_telemetry(
+                    "ocr_load/qwenvl",
+                    "completed",
+                    backend="qwenvl",
+                    device=device,
+                    device_index=device_idx,
+                )
+                return self._qwenvl
+            except RuntimeError as exc:
+                message = str(exc)
+                self._emit_telemetry(
+                    "ocr_load/qwenvl",
+                    "retry" if "CUDA out of memory" in message else "failed",
+                    backend="qwenvl",
+                    device=device,
+                    device_index=device_idx,
+                    notes=message,
+                )
+                if "CUDA out of memory" in message and device.startswith("cuda"):
+                    LOGGER.warning(
+                        "Qwen-VL OOM on %s; retrying with a different device or CPU fallback.",
+                        device,
+                    )
+                    self._qwenvl_gpu_failures += 1
+                    if self._qwenvl_gpu_failures >= QWEN_VL_MAX_GPU_RETRIES:
+                        LOGGER.warning(
+                            "Exceeded %s Qwen-VL GPU retries; forcing CPU/offload execution.",
+                            QWEN_VL_MAX_GPU_RETRIES,
+                        )
+                        self._qwenvl_device_hint = "cpu"
+                        device_hint = "cpu"
+                    else:
+                        exclude.add(device_idx if device_idx is not None else 0)
+                    continue
+                LOGGER.warning("Failed to initialize Qwen-VL adapter: %s", exc)
+                self._availability["qwenvl"] = False
+                self._device_overrides.pop("qwenvl", None)
+                return None
+
     def _lazy_mathvision(self):
         if self._mathvision is not None:
             return self._mathvision
@@ -1436,7 +1934,7 @@ class OCRFallback:
             return None
         return self.page_store.get_page_image(page_index)
 
-    def _run_nougat(self, page_index: int) -> str | None:
+    def _run_nougat(self, page_index: int) -> tuple[str, Dict[str, object]] | None:
         nougat = self._lazy_nougat()
         if nougat is None:
             return None
@@ -1444,7 +1942,8 @@ class OCRFallback:
         if not image:
             return None
         try:
-            return nougat.predict(image)
+            text, confidence = nougat.predict_with_confidence(image)
+            return text, {"confidence": confidence}
         except Exception as exc:  # pragma: no cover - model runtime
             LOGGER.warning("Nougat inference failed on page %s: %s", page_index + 1, exc)
             return None
@@ -1480,6 +1979,22 @@ class OCRFallback:
         finally:
             if RELEASE_HEAVY_MODE == "page" and not self._should_defer_release("internvl"):
                 self._release_backend("internvl")
+
+    def _run_qwenvl(self, page_index: int) -> str | None:
+        adapter = self._lazy_qwenvl()
+        if adapter is None:
+            return None
+        image = self._page_image(page_index)
+        if not image:
+            return None
+        try:
+            return adapter.describe(Path(image), prompt=QWEN_VL_PROMPT)
+        except Exception as exc:
+            LOGGER.warning("Qwen-VL inference failed on page %s: %s", page_index + 1, exc)
+            return None
+        finally:
+            if RELEASE_HEAVY_MODE == "page" and not self._should_defer_release("qwenvl"):
+                self._release_backend("qwenvl")
 
     def _run_tesseract(self, page_index: int) -> str | None:
         if pytesseract is None:
@@ -1553,15 +2068,21 @@ class OCRFallback:
                 return cached
         attempt_order = self._attempt_order()
         sources: OrderedDict[str, str] = OrderedDict()
+        metadata: Dict[str, Dict[str, object]] = {}
         try:
             for backend in attempt_order:
                 if not self._should_run_backend(backend, page_index):
                     continue
-                text = self._invoke_backend(backend, page_index)
+                result = self._invoke_backend(backend, page_index)
+                if not result:
+                    continue
+                text, meta = result
                 if text:
                     cleaned = text.strip()
                     if cleaned:
                         sources[backend] = cleaned
+                        if meta:
+                            metadata[backend] = meta
         finally:
             if RELEASE_HEAVY_MODE == "page" and not self._persistent_backends:
                 if not self._should_defer_release("florence2"):
@@ -1572,7 +2093,7 @@ class OCRFallback:
                     self._release_backend("mathvision")
                 if not self._should_defer_release("mathocr"):
                     self._release_backend("mathocr")
-        return OCRResult(sources)
+        return OCRResult(sources, metadata)
 
 
 def read_pdf_text(pdf_path: Path) -> List[str]:
@@ -1764,6 +2285,7 @@ def chunk_text(
     caption_verifier: ClipCaptionVerifier | None = None,
     math_classifier: MathContentClassifier | None = None,
     quality_mode: str = "balanced",
+    layout_confidence_threshold: float | None = None,
 ) -> Tuple[List[common.Chunk], Dict[str, int], Dict[str, Dict[str, float]]]:
     chunks: List[common.Chunk] = []
     ocr_usage: Counter[str] = Counter()
@@ -1782,6 +2304,12 @@ def chunk_text(
             return
         chunk.metadata["math_role"] = result.label
         chunk.metadata["math_role_score"] = round(result.score, 3)
+    layout_threshold = (
+        layout_confidence_threshold
+        if layout_confidence_threshold is not None
+        else _layout_conf_threshold()
+    )
+
     for page_idx, raw_text in enumerate(pages):
         text_sources: OrderedDict[str, str] = OrderedDict()
         base_text = raw_text.strip()
@@ -1816,6 +2344,9 @@ def chunk_text(
         structured_records: List[Tuple[str, str | None, Dict[str, object]]] = []
         seen_normalized: Set[str] = set()
         for region in sorted(segments_map.get(page_idx, []), key=lambda seg: seg.order):
+            region_conf = float((region.extras or {}).get("layout_confidence", 1.0) or 1.0)
+            if region_conf < layout_threshold:
+                continue
             normalized = " ".join(region.text.split())
             if not normalized:
                 continue
@@ -1999,8 +2530,21 @@ def _build_chunk(
             if key == "text":
                 continue
             metadata.setdefault(key, value)
+    if "layout_confidence" in metadata and metadata["layout_confidence"] is not None:
+        try:
+            metadata["layout_confidence"] = round(float(metadata["layout_confidence"]), 3)
+        except (TypeError, ValueError):
+            pass
     metadata["image_refs"] = page_assets if region_type == "figure" else []
     metadata.update(noise_metrics(text))
+    branch_id = None
+    if layout_metadata:
+        branch_id = layout_metadata.get("branch_id")
+    branch_provenance: Dict[str, object] = {"primary": "ocr"}
+    if branch_id:
+        branch_provenance["vision"] = {"branch_id": branch_id}
+        metadata["vision_branch_id"] = branch_id
+    metadata["branch_provenance"] = branch_provenance
     return common.Chunk(
         chunk_id=f"page{page_idx + 1:03d}_{chunk_idx:02d}",
         page=page_idx + 1,
@@ -2008,6 +2552,35 @@ def _build_chunk(
         images=page_assets if region_type == "figure" else [],
         metadata=metadata,
     )
+
+
+def _enrich_chunks_with_vision_branches(
+    chunks: Sequence[common.Chunk],
+    branches: Dict[str, VisionSynthesisBranch],
+) -> float:
+    if not branches:
+        return 0.0
+    resolved = 0
+    total = len(chunks)
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        provenance = dict(metadata.get("branch_provenance") or {})
+        branch_id = None
+        vision_meta = provenance.get("vision")
+        if isinstance(vision_meta, dict):
+            branch_id = vision_meta.get("branch_id")
+        if not branch_id:
+            branch_id = metadata.get("vision_branch_id")
+        if not branch_id:
+            continue
+        branch = branches.get(branch_id)
+        if not branch:
+            continue
+        provenance["vision"] = branch.to_metadata()
+        provenance.setdefault("primary", "ocr")
+        metadata["branch_provenance"] = provenance
+        resolved += 1
+    return resolved / max(1, total)
 
 
 def run_ingestion(
@@ -2020,6 +2593,9 @@ def run_ingestion(
     semantic_chunker: SemanticChunker | None = None,
     telemetry: TelemetryCallback | None = None,
     backend_config: BackendToggleConfig | None = None,
+    vision_branch_enabled: bool | None = None,
+    layout_confidence_threshold: float | None = None,
+    enable_monkey_ocr: bool | None = None,
 ) -> IngestionResult:
     resolved_mode = (
         backend_config.resolve_ingestion_mode() if backend_config else ocr_mode
@@ -2043,10 +2619,42 @@ def run_ingestion(
     preview_quality = quality_analyzer.preview_from_pages(pages, images)
     mapping = assign_images_to_pages(images, len(pages))
     render_modes = {"auto", "nougat", "pytesseract", "florence2", "internvl", "mathvision", "mathocr"}
-    need_renders = capture_page_images or mode in render_modes
+    layout_backend = (
+        (backend_config.layout_backend if backend_config else None)
+        or os.environ.get("LATEXIFY_LAYOUT_BACKEND")
+        or "pymupdf"
+    ).lower()
+    need_renders = capture_page_images or mode in render_modes or layout_backend == "surya"
     page_store = PageImageStore(pdf_path, page_cache_dir, enabled=need_renders)
-    structure_analyzer = DocumentStructureAnalyzer(pdf_path, enable_layoutlm=True)
+    threshold = (
+        layout_confidence_threshold if layout_confidence_threshold is not None else _layout_conf_threshold()
+    )
+    monkey_adapter = None
+    use_monkey_ocr = (
+        enable_monkey_ocr
+        if enable_monkey_ocr is not None
+        else os.environ.get("LATEXIFY_ENABLE_MONKEY_OCR", "1").lower() not in {"0", "false", "off"}
+    )
+    if use_monkey_ocr:
+        try:
+            monkey_adapter = MonkeyOCRAdapter(pdf_path)
+            if not monkey_adapter.available():
+                monkey_adapter = None
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("MonkeyOCR initialization failed: %s", exc)
+            monkey_adapter = None
+    if vision_branch_enabled is None:
+        vision_branch_enabled = os.environ.get("LATEXIFY_ENABLE_VISION_SYNTHESIS", "1") != "0"
+    structure_analyzer = DocumentStructureAnalyzer(
+        pdf_path,
+        enable_layoutlm=True,
+        enable_vision_branch=vision_branch_enabled,
+        monkey_adapter=monkey_adapter,
+        layout_backend=layout_backend,
+        page_image_store=page_store,
+    )
     layout_segments, document_tree = structure_analyzer.analyze_document(len(pages))
+    master_ocr_items_path = _export_master_ocr_items(layout_segments, workspace / "master_ocr_items.json")
     clip_verifier = ClipCaptionVerifier()
     ocr_helper = (
         None
@@ -2059,6 +2667,7 @@ def run_ingestion(
             telemetry=telemetry,
             math_page_hints=math_page_hints,
             quality_profile=preview_quality,
+            monkey_adapter=monkey_adapter,
         )
     )
     chunker = semantic_chunker or SemanticChunker()
@@ -2078,20 +2687,38 @@ def run_ingestion(
             ocr_helper.prepare_document(len(pages))
         except Exception as exc:
             LOGGER.warning("Sequential OCR preparation failed: %s", exc)
+    branch_future = None
+    chunks: List[common.Chunk] = []
+    ocr_usage: Dict[str, int] = {}
+    region_stats: Dict[str, Dict[str, float]] = {}
+    vision_branch_map: Dict[str, VisionSynthesisBranch] = {}
+    worker_count = 2 if vision_branch_enabled else 1
     try:
-        chunks, ocr_usage, region_stats = chunk_text(
-            pages,
-            mapping,
-            chunk_chars,
-            ocr_helper,
-            page_store if need_renders else None,
-            chunker,
-            llm_sectioner=llm_sectioner,
-            ambiguity_resolver=ambiguity_resolver,
-            layout_segments=layout_segments,
-            caption_verifier=clip_verifier if clip_verifier.available() else None,
-            quality_mode=quality_mode,
-        )
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            chunk_future = executor.submit(
+                chunk_text,
+                pages=pages,
+                page_images=mapping,
+                chunk_chars=chunk_chars,
+                ocr_helper=ocr_helper,
+                page_store=page_store if need_renders else None,
+                semantic_chunker=chunker,
+                llm_sectioner=llm_sectioner,
+                ambiguity_resolver=ambiguity_resolver,
+                layout_segments=layout_segments,
+                caption_verifier=clip_verifier if clip_verifier.available() else None,
+                quality_mode=quality_mode,
+                layout_confidence_threshold=threshold,
+            )
+            if vision_branch_enabled:
+                branch_future = executor.submit(
+                    structure_analyzer.build_vision_branches,
+                    layout_segments,
+                    page_store if need_renders else None,
+                )
+            chunks, ocr_usage, region_stats = chunk_future.result()
+            if branch_future:
+                vision_branch_map = branch_future.result()
     finally:
         if ambiguity_resolver:
             try:
@@ -2101,6 +2728,7 @@ def run_ingestion(
     math_role_counts = Counter(
         chunk.metadata.get("math_role", "unknown") for chunk in chunks
     )
+    vision_branch_ratio = _enrich_chunks_with_vision_branches(chunks, vision_branch_map)
     _dedupe_repetitive_lines(chunks, len(pages))
     quality_profile = quality_analyzer.summarize_chunks(
         chunks,
@@ -2110,6 +2738,8 @@ def run_ingestion(
     structure_analyzer.close()
     if ocr_helper:
         ocr_helper.shutdown()
+    if monkey_adapter:
+        monkey_adapter.close()
     chunks_path = workspace / "chunks.json"
     common.save_chunks(chunks, chunks_path)
     document = _build_document_representation(
@@ -2156,6 +2786,7 @@ def run_ingestion(
             "internvl": (models_path / INTERNVL_MODEL_SUBPATH).exists(),
             "mathvision": (models_path / "ocr" / "trocr-math").exists(),
             "mathocr": (models_path / "ocr" / "pix2tex-base").exists(),
+            "monkeyocr": bool(monkey_adapter and monkey_adapter.available()),
         },
         "page_images_available": bool(page_store.enabled),
         "ocr_usage": ocr_usage,
@@ -2169,6 +2800,15 @@ def run_ingestion(
             "path": str(tree_path.relative_to(workspace)),
             "pages": len(document_tree),
             "nodes": sum(len(nodes) for nodes in (document_tree or {}).values()),
+        },
+        "master_ocr_items": {
+            "path": str(master_ocr_items_path.relative_to(workspace)) if master_ocr_items_path else None,
+            "regions": sum(len(regions) for regions in layout_segments.values()) if layout_segments else 0,
+        },
+        "vision_branch": {
+            "enabled": vision_branch_enabled,
+            "branches": len(vision_branch_map),
+            "chunk_coverage": round(vision_branch_ratio, 3),
         },
         "document_representation": {
             "path": document_rel_path,
@@ -2195,6 +2835,8 @@ def run_ingestion(
         tree_path=tree_path,
         manifest_path=manifest,
         quality_profile=quality_profile.to_dict(),
+        vision_branch_summary=manifest_payload.get("vision_branch"),
+        master_ocr_items_path=master_ocr_items_path,
     )
 
 

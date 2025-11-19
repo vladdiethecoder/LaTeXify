@@ -17,6 +17,17 @@ class StatusBus:
             yield event
 
 
+class StageForwarder:
+    """Bridges synchronous stage events into the async status bus."""
+
+    def __init__(self, bus: StatusBus) -> None:
+        self._bus = bus
+
+    async def emit(self, stage: str, state: str, **metadata: Any) -> None:
+        payload = {"stage": stage, "state": state, **metadata}
+        await self._bus.publish({"type": "status", "status": payload})
+
+
 status_bus = StatusBus()
 
-__all__ = ["status_bus", "StatusBus"]
+__all__ = ["status_bus", "StatusBus", "StageForwarder"]

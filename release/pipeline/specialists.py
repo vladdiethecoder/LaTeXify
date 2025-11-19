@@ -12,7 +12,13 @@ from typing import Dict, List, Sequence
 from PIL import Image
 
 from ..core import common
-from ..models.model_adapters import FlorenceAdapter, FlorenceConfig, InternVLAdapter, InternVLConfig
+from ..models.model_adapters import FlorenceAdapter, FlorenceConfig
+from ..models.vlm_adapters import (
+    BaseVLMAdapter,
+    available_vlm_backends,
+    get_vlm_adapter,
+    resolve_vlm_backend,
+)
 from ..agents.figure_table_agent import FigureTableAgent
 from .equation_normalizer import equation_normalizer
 from .code_block_detector import wrap_code_blocks
@@ -43,10 +49,6 @@ SEE_REF_RE = re.compile(r"(?i)\b(see|refer to)\s+(question|problem)\s+([0-9]+[A-
 QUESTION_TOKEN_RE = re.compile(r"(?i)\b(question|problem)\s+([0-9]+[A-Za-z]?)")
 
 
-def _sanitize_model_subdir(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).lower()
-
-
 def _question_slug(value: str | None) -> str:
     if not value:
         return ""
@@ -72,11 +74,6 @@ def _resolve_cross_references(text: str) -> str:
         return f"{noun}~\\ref{{q:{label}}}"
 
     return QUESTION_TOKEN_RE.sub(_noun_replace, updated)
-
-
-def _internvl_model_dir() -> Path:
-    repo = os.environ.get("LATEXIFY_INTERNVL_MODEL", "OpenGVLab/InternVL3_5-8B")
-    return MODELS_ROOT / "ocr" / _sanitize_model_subdir(repo)
 
 
 def _florence_model_dir() -> Path:
@@ -128,36 +125,52 @@ def _escape_plain_text(text: str) -> str:
 
 
 class VisionLanguageGenerator:
-    """Caches a Florence/InternVL adapter for reusable prompts."""
+    """Caches Florence or pluggable VLM adapters for reusable prompts."""
 
     def __init__(self, prompt: str, backend: str, max_new_tokens: int = 512) -> None:
         self.prompt = prompt
         self.backend = backend or "internvl"
         self.max_new_tokens = max_new_tokens
-        self._adapter = None
+        self._adapter: FlorenceAdapter | BaseVLMAdapter | None = None
 
     def _ensure_adapter(self):
         if self._adapter is not None:
             return self._adapter
+        requested_backend = (self.backend or "internvl").lower()
+        if requested_backend == "florence2":
+            resolved_backend = "florence2"
+        else:
+            resolved_backend = resolve_vlm_backend(requested_backend)
         try:
-            if self.backend == "florence2":
+            if resolved_backend == "florence2":
                 config = FlorenceConfig(
                     model_dir=_florence_model_dir(),
                     task_prompt=self.prompt,
                     max_new_tokens=self.max_new_tokens,
                 )
                 self._adapter = FlorenceAdapter(config)
-            else:
-                config = InternVLConfig(
-                    model_dir=_internvl_model_dir(),
+            elif resolved_backend in available_vlm_backends():
+                self._adapter = get_vlm_adapter(
+                    resolved_backend,
                     prompt=self.prompt,
                     max_new_tokens=self.max_new_tokens,
                     temperature=0.0,
                     top_p=0.1,
                 )
-                self._adapter = InternVLAdapter(config)
+            else:
+                fallback = get_vlm_adapter(
+                    "internvl",
+                    prompt=self.prompt,
+                    max_new_tokens=self.max_new_tokens,
+                    temperature=0.0,
+                    top_p=0.1,
+                )
+                LOGGER.warning(
+                    "Unknown VLM backend '%s'; defaulting to %s.", resolved_backend, fallback.backend_name
+                )
+                self._adapter = fallback
         except Exception as exc:
-            LOGGER.warning("VLM backend '%s' unavailable (%s); falling back to heuristics.", self.backend, exc)
+            LOGGER.warning("VLM backend '%s' unavailable (%s); falling back to heuristics.", resolved_backend, exc)
             self._adapter = None
         return self._adapter
 
@@ -166,6 +179,8 @@ class VisionLanguageGenerator:
         if adapter is None:
             return None
         try:
+            if isinstance(adapter, BaseVLMAdapter):
+                return adapter.describe(image_path, prompt=self.prompt)
             if hasattr(adapter, "prompt"):
                 adapter.prompt = self.prompt
             return adapter.predict(image_path).strip()

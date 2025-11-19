@@ -23,6 +23,8 @@ class EvaluatorAgent:
         else:
             state.evaluation = "PASS"
             state.score_notes = "meets heuristic constraints"
+        state.mark_stage("evaluator", notes=state.evaluation or "")
+        state.record_metrics(evaluator_length=len(latex))
         state.log(f"evaluator: {state.evaluation} ({state.score_notes})")
         return state
 

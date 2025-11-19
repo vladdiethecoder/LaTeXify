@@ -1,8 +1,9 @@
 import asyncio
-from typing import AsyncIterator, Dict, Any, List
+from typing import AsyncIterator, Dict, Any
 
 from .planner import plan_event
-from .status_bus import status_bus
+from .status_bus import status_bus, StageForwarder
+from .release_bridge import build_demo_plan, plan_jobs, PIPELINE_STAGES
 
 
 async def _tokenize(text: str, delay: float = 0.02):
@@ -12,32 +13,18 @@ async def _tokenize(text: str, delay: float = 0.02):
 
 
 async def stream_build() -> AsyncIterator[Dict[str, Any]]:
-    yield plan_event()
+    demo_plan = build_demo_plan()
+    stage_forwarder = StageForwarder(status_bus)
+    yield plan_event(demo_plan)
 
-    agents: List[Dict[str, Any]] = [
-        {
-            "agent": "TextAgent",
-            "id": "c1_text_1",
-            "content": "This is a streamed paragraph for column 1.",
-        },
-        {
-            "agent": "CodeAgent",
-            "id": "c1_code_1",
-            "content": "\\begin{mdframed}\\textbf{Example}\\end{mdframed}",
-        },
-        {
-            "agent": "EquationAgent",
-            "id": "c2_math_1",
-            "content": "\\sigma_n = \\begin{pmatrix} \\cos\\theta & -\\sin\\theta \\\\ \\sin\\theta & \\cos\\theta \\end{pmatrix}",
-        },
-        {
-            "agent": "TextAgent",
-            "id": "c2_text_2",
-            "content": "Additional notes rendered live on the right.",
-        },
-    ]
+    for stage_key, description in PIPELINE_STAGES:
+        await stage_forwarder.emit(stage_key, "WORKING", notes=description)
+        yield {"type": "status", "status": {"stage": stage_key, "state": "WORKING", "notes": description}}
+        await asyncio.sleep(0)
+        await stage_forwarder.emit(stage_key, "DONE", notes=description)
+        yield {"type": "status", "status": {"stage": stage_key, "state": "DONE", "notes": description}}
 
-    for job in agents:
+    for job in plan_jobs(demo_plan):
         status_payload = {"agent": job["agent"], "task": f"Generating {job['id']}", "state": "WORKING"}
         status_event = {"type": "status", "status": status_payload}
         await status_bus.publish(status_event)

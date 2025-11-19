@@ -48,6 +48,9 @@ class RefinementAgent:
                     actions=actions,
                 )
             )
+            stage_note = "success" if success else "retry"
+            self.state.mark_stage("refinement", notes=f"{stage_note}:{attempt}")
+            self.state.record_metrics(refinement_attempts=attempt)
             self.state.log(f"attempt {attempt}: success={success} issues={passes[-1].issues}")
             if success:
                 break
@@ -67,6 +70,8 @@ class RefinementAgent:
             ],
         }
         summary["history"] = list(self.state.history)
+        summary["stage_history"] = list(self.state.stage_history)
+        summary["metrics"] = dict(self.state.metrics)
         return summary
 
     def _compile(self, tex_path: Path) -> Path | None:

@@ -9,10 +9,11 @@ from textwrap import shorten
 from typing import Dict, List
 
 from ..core import common
-from ..models.vllm_client import get_vllm_client
+from ..models.kimi_k2_adapter import get_kimi_adapter
 
 LOGGER = logging.getLogger(__name__)
-HALLUCINATION_MODEL = os.environ.get("LATEXIFY_HALLUCINATION_MODEL", "deepseek-ai/DeepSeek-V3")
+HALLUCINATION_TEMPERATURE = float(os.environ.get("LATEXIFY_HALLUCINATION_TEMPERATURE", "0.0"))
+HALLUCINATION_MAX_TOKENS = int(os.environ.get("LATEXIFY_HALLUCINATION_MAX_TOKENS", "96"))
 PROMPT = """Determine if the proposed section heading is supported by the source text.
 
 Source:
@@ -25,19 +26,31 @@ Respond with YES if the heading clearly appears or is implied by the source, oth
 """
 
 
-def _llm_supports(source: str, heading: str) -> bool | None:
-    client = get_vllm_client(model=HALLUCINATION_MODEL)
-    if client is None:
+def _kimi_classify(prompt: str) -> str | None:
+    adapter = get_kimi_adapter()
+    if adapter is None:
         return None
+    try:  # pragma: no cover - depends on llama.cpp runtime
+        return adapter.generate(
+            prompt,
+            max_tokens=HALLUCINATION_MAX_TOKENS,
+            temperature=HALLUCINATION_TEMPERATURE,
+            stop=["\n"],
+        ).strip()
+    except Exception as exc:
+        LOGGER.debug("Kimi-K2 hallucination check failed: %s", exc)
+        return None
+
+
+def _llm_supports(source: str, heading: str) -> bool | None:
     prompt = PROMPT.format(
         source=shorten(source.replace("\n", " "), width=800, placeholder=" ..."),
         heading=heading,
     )
-    try:  # pragma: no cover - depends on local LLM
-        response = client.generate(prompt, stop=[], max_tokens=64).strip().lower()
-    except Exception as exc:
-        LOGGER.debug("Hallucination LLM check failed: %s", exc)
+    response = _kimi_classify(prompt)
+    if response is None:
         return None
+    response = response.lower()
     if response.startswith("yes"):
         return True
     if response.startswith("no"):
@@ -46,19 +59,16 @@ def _llm_supports(source: str, heading: str) -> bool | None:
 
 
 def _llm_claim_supported(source: str, latex: str) -> bool | None:
-    client = get_vllm_client(model=HALLUCINATION_MODEL)
-    if client is None:
-        return None
     prompt = (
         "Compare the source text with the generated LaTeX. Respond with SUPPORTED if the LaTeX statements are grounded "
         "in the source, otherwise respond UNSUPPORTED.\n\n"
         f"Source:\n{shorten(source.replace(os.linesep, ' '), width=900, placeholder=' ...')}\n\n"
         f"LaTeX:\n{shorten(latex.replace(os.linesep, ' '), width=900, placeholder=' ...')}\n"
     )
-    try:  # pragma: no cover - model runtime
-        response = client.generate(prompt, max_tokens=96).strip().lower()
-    except Exception:
+    response = _kimi_classify(prompt)
+    if response is None:
         return None
+    response = response.lower()
     if response.startswith("supported"):
         return True
     if response.startswith("unsupported") or response.startswith("no"):

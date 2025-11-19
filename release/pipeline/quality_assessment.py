@@ -7,8 +7,8 @@ from statistics import mean
 from typing import Dict, List
 
 from ..core import common
-from .consistency import MathConsistencyValidator
-from .math_environment import MathEnvironmentDetector
+from .consistency_utils import MathConsistencyValidator
+from .math_support import MathEnvironmentDetector
 
 
 @dataclass

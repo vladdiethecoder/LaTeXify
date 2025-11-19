@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from ..core import common
+from .enhanced_structure_graph import generate_enhanced_graph
 
 LOGGER = logging.getLogger(__name__)
 ContentType = Literal["paragraph", "equation", "table", "list", "figure", "metadata"]
@@ -154,6 +155,17 @@ def run_planner(
     plan = build_master_plan(chunks, document_title or "Generated Document", document_class, class_options)
     save_master_plan(plan, master_plan_path)
     LOGGER.info("PlannerAgent generated %s sections", len(plan.sections))
+    try:
+        output_dir = master_plan_path.parent
+        generate_enhanced_graph(
+            chunks_path,
+            master_plan_path,
+            output_dir / "enhanced_structure_graph.json",
+            output_dir / "semantic_relationships.json",
+            output_dir / "cross_reference_map.json",
+        )
+    except Exception as exc:  # pragma: no cover - graph is auxiliary
+        LOGGER.warning("Enhanced structure graph generation skipped: %s", exc)
     return master_plan_path
 
 

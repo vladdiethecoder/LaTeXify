@@ -25,7 +25,10 @@ class QualityProfile:
     aggregate: float
     tier: str
     processing_mode: str
-    notes: Dict[str, float]
+    vision_signal: float
+    branch_consistency: float
+    branch_strategy: str
+    notes: Dict[str, object]
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -33,7 +36,25 @@ class QualityProfile:
         payload["image_quality"] = round(self.image_quality, 3)
         payload["structure_clarity"] = round(self.structure_clarity, 3)
         payload["aggregate"] = round(self.aggregate, 3)
+        payload["vision_signal"] = round(self.vision_signal, 3)
+        payload["branch_consistency"] = round(self.branch_consistency, 3)
         return payload
+
+    def attach_branch_metrics(self, metrics: Dict[str, float] | None) -> None:
+        if not metrics:
+            return
+        branch_metrics = {
+            key: round(float(value), 3)
+            for key, value in metrics.items()
+            if isinstance(value, (int, float))
+        }
+        if not branch_metrics:
+            return
+        existing = self.notes.get("branch_metrics")
+        if isinstance(existing, dict):
+            existing.update(branch_metrics)
+        else:
+            self.notes["branch_metrics"] = branch_metrics
 
 
 class InputQualityAssessor:
@@ -65,6 +86,9 @@ class InputQualityAssessor:
             aggregate=aggregate,
             tier=tier,
             processing_mode=mode,
+            vision_signal=0.0,
+            branch_consistency=1.0,
+            branch_strategy="ocr-only",
             notes=notes,
         )
 
@@ -78,6 +102,8 @@ class InputQualityAssessor:
         ocr_scores = []
         noise_scores = []
         consensus_scores = []
+        branch_links = 0
+        branch_mismatches = 0
         for chunk in chunks:
             metadata = chunk.metadata or {}
             backend = metadata.get("ocr_backend", "")
@@ -90,16 +116,30 @@ class InputQualityAssessor:
                 ocr_scores.append(0.6)
             consensus_scores.append(_clamp(float(consensus)))
             noise_scores.append(_clamp(1.0 - float(metadata.get("noise_score", 0.0))))
+            branch_info = (metadata.get("branch_provenance") or {}).get("vision")
+            region_type = (metadata.get("region_type") or "").lower()
+            if isinstance(branch_info, dict):
+                branch_links += 1
+                branch_region = str(branch_info.get("region_type", "")).lower()
+                if branch_region and region_type and branch_region != region_type:
+                    branch_mismatches += 1
+            elif region_type in {"figure", "equation", "table"}:
+                branch_mismatches += 1
         ocr_confidence = mean(ocr_scores) if ocr_scores else (preview.ocr_confidence if preview else 0.5)
         consensus_avg = mean(consensus_scores) if consensus_scores else 1.0
         ocr_confidence = _clamp(0.7 * ocr_confidence + 0.3 * consensus_avg)
         structure_clarity = mean(noise_scores) if noise_scores else (preview.structure_clarity if preview else 0.5)
         image_quality = self._image_score(page_images_dir)
-        aggregate = mean([ocr_confidence, image_quality, structure_clarity])
+        vision_signal = _clamp(branch_links / max(1, len(chunks)))
+        branch_consistency = 1.0 if branch_links == 0 else _clamp(1.0 - branch_mismatches / max(1, len(chunks)))
+        branch_strategy = self._branch_strategy(vision_signal, branch_consistency)
+        aggregate = mean([ocr_confidence, image_quality, structure_clarity, vision_signal])
         tier, mode = self._categorize(aggregate)
         notes = {
             "consensus": round(consensus_avg, 3),
             "chunks": len(chunks),
+            "vision_branch_ratio": round(vision_signal, 3),
+            "branch_consistency": round(branch_consistency, 3),
         }
         if preview:
             notes["preview_mode"] = preview.processing_mode
@@ -110,6 +150,9 @@ class InputQualityAssessor:
             aggregate=aggregate,
             tier=tier,
             processing_mode=mode,
+            vision_signal=vision_signal,
+            branch_consistency=branch_consistency,
+            branch_strategy=branch_strategy,
             notes=notes,
         )
 
@@ -150,6 +193,15 @@ class InputQualityAssessor:
         if not sizes:
             return 0.5
         return _clamp(mean(sizes))
+
+    def _branch_strategy(self, vision_signal: float, branch_consistency: float) -> str:
+        if vision_signal < 0.2:
+            return "ocr-only"
+        if branch_consistency < 0.5:
+            return "vision-scout"
+        if vision_signal >= 0.6 and branch_consistency >= 0.6:
+            return "vision-hybrid"
+        return "vision-scout"
 
 
 __all__ = ["InputQualityAssessor", "QualityProfile"]

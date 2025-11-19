@@ -2,24 +2,27 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
-import os
 from pathlib import Path
 from typing import Dict, List
 
-from ..models.vllm_client import get_vllm_client
+from ..models.kimi_k2_adapter import LATEX_VALIDATION_GRAMMAR, get_kimi_adapter
+from .latex_repair_agent import KimiK2LatexRepair
 
 ERROR_RE = re.compile(r"! LaTeX Error: (?P<message>.+)")
 UNDEF_RE = re.compile(r"Undefined control sequence")
 CITATION_WARNING_RE = re.compile(r"LaTeX Warning: Citation")
 UNDEFINED_REFERENCE_RE = re.compile(r"There were undefined references")
 
-DEFAULT_VALIDATION_MODEL = os.environ.get("LATEXIFY_VALIDATION_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+VALIDATION_TEMPERATURE = float(os.environ.get("LATEXIFY_VALIDATION_TEMPERATURE", "0.1"))
+VALIDATION_MAX_TOKENS = int(os.environ.get("LATEXIFY_VALIDATION_MAX_TOKENS", "240"))
 
 
 def run_validation(tex_path: Path, output_path: Path | None = None) -> Dict[str, object]:
+    repair_agent = KimiK2LatexRepair()
     log_path = tex_path.with_suffix(".log")
     pdf_path = tex_path.with_suffix(".pdf")
     compile_engine = shutil.which("tectonic") or shutil.which("latexmk")
@@ -57,6 +60,18 @@ def run_validation(tex_path: Path, output_path: Path | None = None) -> Dict[str,
             errors.append("citations-corrupt")
     if errors and log_text:
         analysis = _summarize_compile_errors(errors, log_text)
+        diagnostics = repair_agent.diagnose_log(log_text)
+        if diagnostics:
+            result["diagnostics"] = [
+                {"code": entry.code, "detail": entry.detail} for entry in diagnostics
+            ]
+        semantic = repair_agent.semantic_validate(tex_path)
+        if semantic.get("issues"):
+            result["semantic_issues"] = semantic["issues"]
+        if os.environ.get("LATEXIFY_AUTOREPAIR", "1") != "0":
+            repair_summary = repair_agent.repair_from_log(tex_path, log_path)
+            if repair_summary.get("actions"):
+                result["repair_actions"] = repair_summary["actions"]
     result = {"success": success, "errors": errors, "log_path": str(log_path)}
     if analysis:
         result["analysis"] = analysis
@@ -69,8 +84,8 @@ __all__ = ["run_validation"]
 
 
 def _summarize_compile_errors(errors: List[str], log_text: str) -> str | None:
-    client = get_vllm_client(model=DEFAULT_VALIDATION_MODEL)
-    if client is None:
+    adapter = get_kimi_adapter()
+    if adapter is None:
         return None
     truncated = "\n".join(log_text.splitlines()[-80:])
     prompt = (
@@ -81,8 +96,13 @@ def _summarize_compile_errors(errors: List[str], log_text: str) -> str | None:
         f"{truncated}\n\n"
         "Respond with one paragraph describing the likely fix."
     )
-    try:  # pragma: no cover - depends on local model
-        summary = client.generate(prompt, max_tokens=240)
+    try:  # pragma: no cover - depends on llama.cpp runtime
+        summary = adapter.generate(
+            prompt,
+            max_tokens=VALIDATION_MAX_TOKENS,
+            temperature=VALIDATION_TEMPERATURE,
+            grammar=LATEX_VALIDATION_GRAMMAR,
+        )
     except Exception:
         return None
     return summary.strip() or None

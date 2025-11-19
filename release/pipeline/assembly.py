@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,13 +16,15 @@ from ..core.hierarchical_schema import ReferenceIndex
 from ..core.sanitizer import sanitize_unicode_to_latex
 from ..agents.figure_table_agent import FigureRenderPlan, FigureTableAgent
 from ..agents.refinement_agent import RefinementAgent
-from .bibliography_generator import BibliographyGenerator, BibliographyResult
+from .bibliography_utils import BibliographyGenerator, BibliographyResult
 from .citation_detector import CitationDetector, CitationReport
-from .consistency import MathConsistencyValidator
+from .consistency_utils import MathConsistencyValidator
 from .cross_reference_resolver import resolve_references
 from .error_repair import LaTeXErrorRepair
 from .hierarchical_analyzer import analyze_plan
-from .math_environment import MathEnvironmentDetector
+from .math_support import MathEnvironmentDetector
+from .latex_repair_agent import KimiK2LatexRepair
+from .robust_compilation import run_robust_compilation
 from .symbol_normalizer import SymbolNormalizer
 from .template_engine import LaTeXTemplatingEngine
 from .style_detector import DocumentStyle, StyleDetector
@@ -44,6 +46,8 @@ LATEX_ESCAPES = {
     "~": r"\textasciitilde{}",
     "^": r"\textasciicircum{}",
 }
+
+_LAST_COMPILATION_METRICS: Dict[str, object] | None = None
 
 
 def escape(text: str) -> str:
@@ -767,8 +771,43 @@ class ProgressiveAssembler:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def compile_tex(tex_path: Path) -> Path | None:
+def compile_tex(tex_path: Path, *, repair_agent: KimiK2LatexRepair | None = None) -> Path | None:
+    global _LAST_COMPILATION_METRICS
+    repair_agent = repair_agent or KimiK2LatexRepair()
+    enable_robust = os.environ.get("LATEXIFY_ENABLE_ROBUST_COMPILATION", "1").lower() not in {"0", "false", "off"}
+    retry_count = max(1, int(os.environ.get("LATEXIFY_COMPILATION_RETRY_COUNT", "3")))
+    if enable_robust:
+        repair_agent.preflight_check(tex_path)
+        result = run_robust_compilation(
+            tex_path,
+            cache_dir=tex_path.parent / ".latexify_cache",
+            repair_agent=repair_agent,
+            max_retries=retry_count,
+        )
+        _LAST_COMPILATION_METRICS = {
+            "robust_enabled": True,
+            "compilation_attempts": len(result.attempt_history),
+            "attempt_history": result.attempt_history,
+            "section_reports": result.section_reports,
+            "error_summary": result.error_summary,
+            "recovery_success": result.recovery_success,
+        }
+        return result.pdf_path if result.success else None
+    pdf_path, attempts = _traditional_compile(tex_path)
+    _LAST_COMPILATION_METRICS = {
+        "robust_enabled": False,
+        "compilation_attempts": len(attempts),
+        "attempt_history": attempts,
+        "section_reports": [],
+        "error_summary": [],
+        "recovery_success": False,
+    }
+    return pdf_path
+
+
+def _traditional_compile(tex_path: Path) -> tuple[Path | None, List[Dict[str, object]]]:
     pdf_path = tex_path.with_suffix(".pdf")
+    attempts: List[Dict[str, object]] = []
     engines = ["tectonic", "latexmk"]
     for engine in engines:
         binary = shutil.which(engine)
@@ -781,12 +820,20 @@ def compile_tex(tex_path: Path) -> Path | None:
         try:
             subprocess.run(cmd, check=True, cwd=str(tex_path.parent))
             if pdf_path.exists():
-                LOGGER.info("PDF generated via %s", engine)
-                return pdf_path
+                attempts.append({"engine": engine, "success": True})
+                return pdf_path, attempts
         except subprocess.CalledProcessError as exc:  # pragma: no cover - depends on host
             LOGGER.warning("TeX compilation failed with %s: %s", engine, exc)
+            attempts.append({"engine": engine, "success": False})
     LOGGER.warning("No TeX compiler available; skipping PDF generation")
-    return None
+    return None, attempts
+
+
+def consume_compilation_metrics() -> Dict[str, object] | None:
+    global _LAST_COMPILATION_METRICS
+    metrics = _LAST_COMPILATION_METRICS
+    _LAST_COMPILATION_METRICS = None
+    return metrics
 
 
 def run_assembly(
@@ -813,9 +860,12 @@ def run_assembly(
         domain_profile=domain_profile,
     )
     tex_path = assembler.build(sanitize_unicode=use_unicode_sanitizer)
+    repair_agent = KimiK2LatexRepair()
+    compile_wrapper = lambda target: compile_tex(target, repair_agent=repair_agent)
     refinement_report: Dict[str, object] | None = None
-    refinement_agent = RefinementAgent(compile_callable=compile_tex)
+    refinement_agent = RefinementAgent(compile_callable=compile_wrapper)
     if not skip_compile:
+        repair_agent.preflight_check(tex_path)
         refinement_report = refinement_agent.refine(tex_path, max_passes=refinement_passes)
         refinement_report.setdefault("history", [])
         if not refinement_report.get("success"):
@@ -830,4 +880,4 @@ def run_assembly(
     return tex_path
 
 
-__all__ = ["run_assembly", "ProgressiveAssembler"]
+__all__ = ["run_assembly", "ProgressiveAssembler", "compile_tex", "consume_compilation_metrics"]

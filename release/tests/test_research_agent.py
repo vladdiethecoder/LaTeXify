@@ -14,6 +14,7 @@ def test_research_agent_custom_backend():
     updated = agent.augment(state)
     assert updated.research_snippets
     assert "example.com" in updated.research_snippets[0]
+    assert updated.stage_history
 
 
 def test_research_agent_offline_env(monkeypatch):

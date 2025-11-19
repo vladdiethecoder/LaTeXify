@@ -7,10 +7,11 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import asdict
 from datetime import datetime, timezone
 from time import perf_counter
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Sequence, Tuple
 
 try:  # pragma: no cover - optional dependency
     import torch  # type: ignore
@@ -24,6 +25,7 @@ INPUT_DIR = RELEASE_DIR / "inputs"
 HF_CACHE_DIR = RELEASE_DIR / "models" / "hf_cache"
 OUTPUT_DIR = BUILD_ROOT / "runs"
 from release.core.model_paths import resolve_models_root  # noqa: E402
+from release.tools import AttemptTracker, ensure_release_dependencies  # noqa: E402
 
 MODELS_DIR = resolve_models_root(ROOT / "models")
 _HF_CACHE_READY = False
@@ -85,9 +87,12 @@ def ensure_local_cache_dirs() -> Path:
 # Configure Hugging Face cache paths before importing heavy deps that read env vars.
 ensure_local_cache_dirs()
 
+DEPENDENCY_CHECKS = ensure_release_dependencies()
+
 HALLUCINATION_MODEL_NAME = os.environ.get("LATEXIFY_HALLUCINATION_MODEL", "deepseek-ai/DeepSeek-V3")
 VALIDATION_MODEL_NAME = os.environ.get("LATEXIFY_VALIDATION_MODEL", "Qwen/Qwen2.5-7B-Instruct")
 VISUAL_MODEL_NAME = os.environ.get("LATEXIFY_VISUAL_JUDGE_MODEL", "Qwen/Qwen2.5-VL-32B-Instruct")
+VISION_AGENT_VLM_NAME = os.environ.get("LATEXIFY_VISION_AGENT_VLM", "internvl")
 
 
 try:  # Optional dependency for memory checkpoints
@@ -97,36 +102,63 @@ except Exception:  # pragma: no cover - psutil always available in release env
 
 
 from release.pipeline import (  # noqa: E402  (import after cache bootstrap)
+    adaptive_quality_gate,
     active_learning,
     assembly,
+    branch_outputs,
+    branch_evaluator,
+    consistency_utils,
     critique,
+    hallucination,
     ingestion,
+    latex_image_generator,
     layout,
     metrics,
+    parallel_branches,
     planner,
     rag,
-    reward,
     retrieval,
+    reward_suite,
+    snippet_fusion,
     structure_graph,
     synthesis,
     synthesis_coverage,
     validation,
-    hallucination,
     visual_regression,
+    symbolic_render,
+    constraint_map_builder,
+    flux_inpainting,
 )
+from release.pipeline.branch_orchestrator import BranchRunResult  # noqa: E402
 from release.pipeline.domain_detector import DomainDetector  # noqa: E402
 from release.pipeline.semantic_chunking import SemanticChunker  # noqa: E402
 from release.pipeline.quality_assessment import QualityAssessor  # noqa: E402
 from release.pipeline.semantic_enricher import SemanticEnricher  # noqa: E402
 from release.pipeline.iterative_refiner import IterativeRefiner  # noqa: E402
 from release.pipeline.preamble_optimizer import optimize_preamble  # noqa: E402
-from release.pipeline.bibliography import generate_bibliography  # noqa: E402
+from release.pipeline.bibliography_utils import generate_bibliography  # noqa: E402
 from release.pipeline.variable_consistency import normalize_variables  # noqa: E402
 from release.pipeline.comment_generator import add_section_comments  # noqa: E402
-from release.pipeline import reward_mm  # noqa: E402
+from release.pipeline.vision import (
+    MultiViewRenderer,
+    VisionAgentSuite,
+    VisionSynthesisConfig,
+)  # noqa: E402
 from release.models import llm_refiner  # noqa: E402
 from release.utils import quality  # noqa: E402
-from release.core.config import BackendToggleConfig  # noqa: E402
+from release.core import common  # noqa: E402
+from release.core.config import (  # noqa: E402
+    BackendToggleConfig,
+    VISION_PRESETS,
+    VisionRuntimeConfig,
+    BranchRuntimeConfig,
+    build_compilation_runtime_config,
+    build_kimi_runtime_config,
+    build_vision_runtime_config,
+    build_branch_runtime_config,
+    build_backend_toggle_config,
+)
+from release.pipeline import kimi_metrics  # noqa: E402
 from release.core.data_pathway_logger import init_logger  # noqa: E402
 
 
@@ -349,13 +381,182 @@ def resolve_pdf(path_str: str) -> Path:
     raise FileNotFoundError(f"PDF not found: {path_str}")
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    return normalized not in {"0", "false", "off", "no"}
+
+
 def parse_args() -> argparse.Namespace:
+    fusion_choices = [choice.value for choice in snippet_fusion.FusionStrategy]
+    fusion_aliases = sorted(_FUSION_STRATEGY_ALIASES)
+    default_fusion_env = os.environ.get(
+        "LATEXIFY_SNIPPET_FUSION_STRATEGY",
+        snippet_fusion.FusionStrategy.SELECT_BEST.value,
+    )
+    try:
+        default_fusion_strategy = _resolve_fusion_strategy(default_fusion_env)
+    except argparse.ArgumentTypeError:
+        logging.warning(
+            "Unsupported LATEXIFY_SNIPPET_FUSION_STRATEGY=%s; defaulting to %s",
+            default_fusion_env,
+            snippet_fusion.FusionStrategy.SELECT_BEST.value,
+        )
+        default_fusion_strategy = snippet_fusion.FusionStrategy.SELECT_BEST
+    default_vision_enabled = _env_flag("LATEXIFY_VISION_SYNTHESIS_ENABLED", True)
+    default_vision_preset = os.environ.get("LATEXIFY_VISION_SYNTHESIS_PRESET", "balanced").lower()
+    if default_vision_preset not in VISION_PRESETS:
+        default_vision_preset = "balanced"
+    def _env_float(name: str, default: float) -> float:
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except ValueError:
+            return default
+
+    def _env_int(name: str, default: int) -> int:
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except ValueError:
+            return default
+
+    default_kimi_temp = _env_float("LATEXIFY_KIMI_K2_TEMPERATURE", 0.05)
+    default_kimi_context = _env_int("LATEXIFY_KIMI_K2_CONTEXT", 32768)
+    default_layout_threshold = _env_float("LATEXIFY_LAYOUT_CONFIDENCE_THRESHOLD", 0.0)
+    default_retry_count = _env_int("LATEXIFY_COMPILATION_RETRY_COUNT", 3)
+    default_robust = _env_flag("LATEXIFY_ENABLE_ROBUST_COMPILATION", True)
+    default_monkey = _env_flag("LATEXIFY_ENABLE_MONKEY_OCR", True)
+
     parser = argparse.ArgumentParser(description="Run the simplified LaTeXify release pipeline.")
     parser.add_argument("--pdf", required=True, help="Path to the draft PDF (absolute or relative to release/inputs)")
     parser.add_argument("--title", default=None, help="Title for the generated LaTeX document")
     parser.add_argument("--author", default="LaTeXify Release", help="Author name for the document")
     parser.add_argument("--run-dir", default=None, help="Optional output directory for artifacts")
     parser.add_argument("--chunk-chars", type=int, default=ingestion.DEFAULT_CHUNK_CHARS, help="Maximum characters per chunk")
+    parser.add_argument(
+        "--enable-vision-synthesis",
+        dest="enable_vision_synthesis",
+        action="store_true",
+        default=default_vision_enabled,
+        help="Force-enable the MultiViewRenderer + vision agents (env LATEXIFY_VISION_SYNTHESIS_ENABLED).",
+    )
+    parser.add_argument(
+        "--disable-vision-synthesis",
+        dest="enable_vision_synthesis",
+        action="store_false",
+        help="Disable the vision synthesis pipeline regardless of environment toggles.",
+    )
+    parser.add_argument(
+        "--enable-multi-branch",
+        dest="enable_multi_branch",
+        action="store_true",
+        default=None,
+        help="Enable the multi-branch orchestrator (env LATEXIFY_ENABLE_MULTI_BRANCH).",
+    )
+    parser.add_argument(
+        "--vision-preset",
+        choices=sorted(VISION_PRESETS.keys()),
+        default=default_vision_preset,
+        help="Vision synthesis preset controlling renderer hyperparameters (env LATEXIFY_VISION_SYNTHESIS_PRESET).",
+    )
+    parser.add_argument(
+        "--kimi-temperature",
+        type=float,
+        default=default_kimi_temp,
+        help="Sampling temperature passed to the Kimi-K2 adapters (env LATEXIFY_KIMI_K2_TEMPERATURE).",
+    )
+    parser.add_argument(
+        "--kimi-context-size",
+        type=int,
+        default=default_kimi_context,
+        help="Context window for Kimi-K2 adapters (env LATEXIFY_KIMI_K2_CONTEXT).",
+    )
+    parser.add_argument(
+        "--layout-confidence-threshold",
+        type=float,
+        default=default_layout_threshold,
+        help="Drop layout regions below this confidence before chunking (env LATEXIFY_LAYOUT_CONFIDENCE_THRESHOLD).",
+    )
+    parser.add_argument(
+        "--layout-backend",
+        choices=["pymupdf", "surya"],
+        default=os.environ.get("LATEXIFY_LAYOUT_BACKEND", "pymupdf"),
+        help="Layout backend used for document segmentation (PyMuPDF heuristics or Surya polygons).",
+    )
+    parser.add_argument(
+        "--disable-surya-math-detector",
+        action="store_true",
+        help="Disable Surya's math detector even when the Surya backend is active.",
+    )
+    parser.add_argument(
+        "--emit-constraint-maps",
+        action="store_true",
+        help="Render constraint maps + masks from master OCR items for render-aware reconstruction.",
+    )
+    parser.add_argument(
+        "--constraint-pages",
+        default=None,
+        help="Optional comma-separated list of page numbers to process when --emit-constraint-maps is set.",
+    )
+    parser.add_argument(
+        "--enable-render-aware",
+        action="store_true",
+        help="Run Flux-based render-aware reconstruction on pages with constraint maps.",
+    )
+    parser.add_argument(
+        "--render-aware-pages",
+        default=None,
+        help="Optional comma-separated list of pages to hand to the Flux renderer (default: all).",
+    )
+    parser.add_argument(
+        "--flux-model",
+        default=os.environ.get("LATEXIFY_FLUX_MODEL", "black-forest-labs/Flux.1-Fill-dev"),
+        help="Diffusion checkpoint (HF repo) for render-aware reconstruction.",
+    )
+    parser.add_argument(
+        "--flux-dtype",
+        choices=["fp16", "fp32"],
+        default=os.environ.get("LATEXIFY_FLUX_DTYPE", "fp16"),
+        help="Computation dtype for the Flux pipeline (fp16 recommended on CUDA).",
+    )
+    parser.add_argument(
+        "--flux-device",
+        default=os.environ.get("LATEXIFY_FLUX_DEVICE", "auto"),
+        help="Device placement for Flux (auto/cuda/cpu).",
+    )
+    parser.add_argument(
+        "--flux-steps",
+        type=int,
+        default=int(os.environ.get("LATEXIFY_FLUX_STEPS", "20")),
+        help="Number of inference steps per rendered page.",
+    )
+    parser.add_argument(
+        "--flux-guidance",
+        type=float,
+        default=float(os.environ.get("LATEXIFY_FLUX_GUIDANCE", "1.0")),
+        help="Guidance scale applied during diffusion (lower stays closer to constraint map).",
+    )
+    parser.add_argument(
+        "--flux-prompt",
+        default=os.environ.get(
+            "LATEXIFY_FLUX_PROMPT",
+            "High-quality academic page, clean serif typography, precise equations, Springer-style aesthetics.",
+        ),
+        help="Prompt injected into the Flux diffusion stage.",
+    )
+    parser.add_argument(
+        "--compilation-retry-count",
+        type=int,
+        default=default_retry_count,
+        help="Maximum number of robust compilation retries (env LATEXIFY_COMPILATION_RETRY_COUNT).",
+    )
     parser.add_argument("--skip-compile", action="store_true", help="Skip PDF compilation (generate .tex only)")
     parser.add_argument(
         "--no-unicode-sanitizer",
@@ -451,6 +652,26 @@ def parse_args() -> argparse.Namespace:
         help="Control hashing fallback usage when encoders are unavailable.",
     )
     parser.add_argument(
+        "--fusion-strategy",
+        default=default_fusion_strategy,
+        type=_resolve_fusion_strategy,
+        help=(
+            "Snippet fusion strategy (env LATEXIFY_SNIPPET_FUSION_STRATEGY). "
+            f"Canonical values: {', '.join(fusion_choices)}. Aliases: {', '.join(fusion_aliases)}."
+        ),
+    )
+    parser.add_argument(
+        "--branches",
+        default=None,
+        help="Comma-separated branch identifiers to run (subset of a,b,c).",
+    )
+    parser.add_argument(
+        "--branch-memory-limit",
+        type=float,
+        default=None,
+        help="Maximum GPU memory (GB) allocated per branch run (env LATEXIFY_BRANCH_MEMORY_LIMIT).",
+    )
+    parser.add_argument(
         "--ocr-backend",
         choices=["florence", "ensemble", "mineru"],
         default="ensemble",
@@ -472,7 +693,58 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable the MCP PDF processor adapter (local MCP server required).",
     )
+    parser.set_defaults(enable_robust_compilation=default_robust, enable_monkey_ocr=default_monkey)
+    parser.add_argument(
+        "--enable-robust-compilation",
+        dest="enable_robust_compilation",
+        action="store_true",
+        help="Force-enable the incremental compilation flow (env LATEXIFY_ENABLE_ROBUST_COMPILATION).",
+    )
+    parser.add_argument(
+        "--disable-robust-compilation",
+        dest="enable_robust_compilation",
+        action="store_false",
+        help="Disable robust compilation and use direct tectonic/latexmk execution.",
+    )
+    parser.add_argument(
+        "--enable-monkey-ocr",
+        dest="enable_monkey_ocr",
+        action="store_true",
+        help="Force-enable MonkeyOCR layout analysis (env LATEXIFY_ENABLE_MONKEY_OCR).",
+    )
+    parser.add_argument(
+        "--disable-monkey-ocr",
+        dest="enable_monkey_ocr",
+        action="store_false",
+        help="Disable MonkeyOCR even when the binary is available.",
+    )
     return parser.parse_args()
+
+
+_FUSION_STRATEGY_ALIASES: Dict[str, str] = {
+    "confidence": snippet_fusion.FusionStrategy.MERGE_HYBRID.value,
+    "rules": snippet_fusion.FusionStrategy.SELECT_BEST.value,
+    "llm": snippet_fusion.FusionStrategy.ENSEMBLE_AVERAGE.value,
+    "fallback": snippet_fusion.FusionStrategy.ADAPTIVE.value,
+    "multi_branch": snippet_fusion.FusionStrategy.MULTI_BRANCH.value,
+}
+
+
+def _resolve_fusion_strategy(value: str | snippet_fusion.FusionStrategy) -> snippet_fusion.FusionStrategy:
+    if isinstance(value, snippet_fusion.FusionStrategy):
+        return value
+    normalized = (value or "").strip().lower()
+    normalized = _FUSION_STRATEGY_ALIASES.get(normalized, normalized)
+    try:
+        return snippet_fusion.FusionStrategy(normalized)
+    except ValueError as exc:  # pragma: no cover - argument validation
+        valid_options = ", ".join(choice.value for choice in snippet_fusion.FusionStrategy)
+        alias_hint = ", ".join(sorted(_FUSION_STRATEGY_ALIASES))
+        message = (
+            f"Unsupported fusion strategy '{value}'. "
+            f"Valid values: {valid_options}. Aliases: {alias_hint or 'none'}."
+        )
+        raise argparse.ArgumentTypeError(message) from exc
 
 
 def _configure_chunker(args: argparse.Namespace) -> SemanticChunker | None:
@@ -498,6 +770,28 @@ def _configure_chunker(args: argparse.Namespace) -> SemanticChunker | None:
     if not overrides:
         return None
     return SemanticChunker(**overrides)
+
+
+def _parse_page_selection(raw: str | None) -> list[int] | None:
+    if raw is None:
+        return None
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if not tokens:
+        return None
+    if len(tokens) == 1 and tokens[0].lower() == "all":
+        return None
+    pages: list[int] = []
+    for token in tokens:
+        if token.lower() == "all":
+            return None
+        try:
+            value = int(token)
+        except ValueError:
+            logging.warning("Skipping invalid page token '%s' in --constraint-pages.", token)
+            continue
+        if value > 0:
+            pages.append(value)
+    return pages or None
 
 
 def run_pipeline(args: argparse.Namespace) -> Path:
@@ -530,6 +824,52 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     reports_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
     agent_stats: Dict[str, Dict[str, float]] = {}
+    chunk_objects: List[common.Chunk] | None = None
+    vision_result = None
+    vision_report: Dict[str, object] = {}
+    vision_branch_data: Dict[str, object] = {}
+    latex_image_summary: Dict[str, object] = {}
+    vision_runtime = build_vision_runtime_config(
+        enabled=args.enable_vision_synthesis,
+        preset=args.vision_preset,
+    )
+    kimi_runtime = build_kimi_runtime_config(
+        temperature=args.kimi_temperature,
+        context_size=args.kimi_context_size,
+    )
+    compilation_runtime = build_compilation_runtime_config(
+        enable_robust_compilation=args.enable_robust_compilation,
+        retry_count=args.compilation_retry_count,
+        layout_confidence_threshold=args.layout_confidence_threshold,
+        monkey_ocr_enabled=args.enable_monkey_ocr,
+    )
+    branch_runtime = build_branch_runtime_config(
+        enabled=args.enable_multi_branch,
+        branches=args.branches,
+        memory_limit_gb=args.branch_memory_limit,
+    )
+    branch_eval_report: Dict[str, object] = {}
+    branch_run_results: List[BranchRunResult] = []
+    branch_artifacts_manifest: Path | None = None
+    branch_performance_metrics: Dict[str, float] = {}
+    branch_model_utilization: Dict[str, object] = {}
+    branch_fallback_rates: Dict[str, float] = {}
+    branch_results_summary: Dict[str, object] = {}
+    branch_output_summary: Dict[str, object] = (
+        {
+            "enabled": branch_runtime.enabled,
+            "requested": list(branch_runtime.branches),
+        }
+        if branch_runtime.enabled
+        else {}
+    )
+    os.environ["LATEXIFY_ENABLE_VISION_SYNTHESIS"] = "1" if vision_runtime.enabled else "0"
+    fusion_strategy_arg = getattr(args, "fusion_strategy", snippet_fusion.FusionStrategy.SELECT_BEST)
+    fusion_strategy = (
+        fusion_strategy_arg
+        if isinstance(fusion_strategy_arg, snippet_fusion.FusionStrategy)
+        else _resolve_fusion_strategy(str(fusion_strategy_arg))
+    )
     stage_logger = StageLogger(logs_dir / "checkpoint.log")
     provenance = ProvenanceTracker()
     run_id_source = Path(run_name).name or default_run_name
@@ -546,8 +886,55 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         except ValueError:
             return str(path)
 
+    def _select_artifact(paths: Sequence[Path | str] | None, suffix: str) -> Path | None:
+        if not paths:
+            return None
+        target_suffix = suffix.lower()
+        for entry in paths:
+            candidate = Path(entry)
+            if candidate.suffix.lower() == target_suffix and candidate.exists():
+                return candidate
+        return None
+
+    def _summarize_branch_telemetry(results: Sequence[BranchRunResult]) -> Tuple[Dict[str, object], Dict[str, float]]:
+        model_utilization: Dict[str, object] = {}
+        fallback_rates: Dict[str, float] = {}
+        for result in results:
+            metadata = result.metadata or {}
+            models = metadata.get("models")
+            if models:
+                model_utilization[result.branch] = models
+            outputs = float(result.metrics.get("outputs", 0.0)) if result.metrics else 0.0
+            failures = float(result.metrics.get("failures", 0.0)) if result.metrics else 0.0
+            fallback_rates[result.branch] = round(failures / max(1.0, outputs), 3)
+        return model_utilization, fallback_rates
+
     build_run_dir = BUILD_ROOT / f"run-{run_id}"
     build_run_dir.mkdir(parents=True, exist_ok=True)
+    attempt_tracker_config = {
+        "pdf": _rel(pdf_path),
+        "args": {
+            "skip_compile": args.skip_compile,
+            "ocr_backend": args.ocr_backend,
+            "llm_mode": args.llm_mode,
+            "fusion_strategy": str(fusion_strategy),
+        },
+        "vision": vision_runtime.as_dict(),
+        "kimi": kimi_runtime.__dict__,
+        "branches": branch_runtime.as_dict(),
+        "compilation": {
+            "robust": compilation_runtime.enable_robust_compilation,
+            "retry_count": compilation_runtime.retry_count,
+            "layout_threshold": compilation_runtime.layout_confidence_threshold,
+        },
+    }
+    attempt_tracker = AttemptTracker(run_dir=build_run_dir, run_id=run_id, pdf_path=pdf_path, config=attempt_tracker_config)
+    if not AttemptTracker.can_run_next():
+        raise RuntimeError(
+            "Cumulative runtime across attempts is at or above 7200 seconds. "
+            "Stop running additional attempts and summarize current findings."
+        )
+    attempt_tracker.start()
     data_logger = init_logger(
         run_id,
         build_run_dir,
@@ -559,7 +946,16 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "skip_compile": args.skip_compile,
                 "reward_mode": args.reward_mode,
                 "llm_mode": args.llm_mode,
+                "fusion_strategy": fusion_strategy.value,
             },
+            "vision": vision_runtime.as_dict(),
+            "kimi": kimi_runtime.__dict__,
+            "compilation": {
+                "robust": compilation_runtime.enable_robust_compilation,
+                "retry_count": compilation_runtime.retry_count,
+                "layout_threshold": compilation_runtime.layout_confidence_threshold,
+            },
+            "branches": branch_runtime.as_dict(),
         },
     )
 
@@ -634,12 +1030,15 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         input_files=[_rel(pdf_path)],
         notes="Pipeline initialized.",
     )
-    backend_config = BackendToggleConfig(
+    backend_config = build_backend_toggle_config(
         ocr_backend=args.ocr_backend,
+        layout_backend=args.layout_backend,
+        surya_math_detector=not args.disable_surya_math_detector,
+        math_ocr_backend=args.math_ocr,
         mineru_enabled=args.ocr_backend == "mineru",
         marker_enabled=args.marker_backup,
         mcp_pdf_processor_enabled=args.mcp_pdf_processor,
-        math_ocr_backend=args.math_ocr,
+        env=os.environ,
     )
     ingestion_mode = backend_config.resolve_ingestion_mode()
     if backend_config.ocr_backend == "mineru" and ingestion_mode != "mineru":
@@ -667,7 +1066,10 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "started",
             input_files=[_rel(pdf_path)],
             models=ingestion_models,
-            notes=f"chunk_chars={args.chunk_chars}, backend={backend_config.ocr_backend}/{ingestion_mode}",
+            notes=(
+                f"chunk_chars={args.chunk_chars}, backend={backend_config.ocr_backend}/{ingestion_mode}, "
+                f"layout={backend_config.layout_backend}, vision={int(vision_runtime.enabled)}"
+            ),
         )
         try:
             chunks_result = run_agent(
@@ -682,10 +1084,29 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 semantic_chunker=chunker,
                 telemetry=telemetry_stage,
                 backend_config=backend_config,
+                vision_branch_enabled=vision_runtime.enabled,
+                layout_confidence_threshold=compilation_runtime.layout_confidence_threshold,
+                enable_monkey_ocr=compilation_runtime.monkey_ocr_enabled,
             )
         except Exception as exc:
             log_stage_event("ingestion", "failed", notes=_short(repr(exc)))
             raise
+        vision_branch_summary = chunks_result.vision_branch_summary or {}
+        if chunk_objects is None:
+            chunk_objects = common.load_chunks(chunks_result.chunks_path)
+        layout_conf_values = [
+            float((chunk.metadata or {}).get("layout_confidence", 0.0))
+            for chunk in (chunk_objects or [])
+            if (chunk.metadata or {}).get("layout_confidence") is not None
+        ]
+        if layout_conf_values:
+            layout_conf_metrics = {
+                "avg": round(sum(layout_conf_values) / len(layout_conf_values), 3),
+                "min": round(min(layout_conf_values), 3),
+                "threshold": args.layout_confidence_threshold,
+            }
+        else:
+            layout_conf_metrics = {"avg": 0.0, "min": 0.0, "threshold": args.layout_confidence_threshold}
         log_stage_event(
             "ingestion",
             "completed",
@@ -694,7 +1115,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 _rel(artifacts_dir),
             ],
             notes="Workspace artifacts ready.",
+            metrics={"vision_branch": vision_branch_summary, "layout_confidence": layout_conf_metrics},
         )
+        if vision_branch_summary:
+            stage_logger.log("VisionBranching", "summary", vision_branch_summary)
+        agent_stats["LayoutAnalysis"] = layout_conf_metrics
         provenance.record(chunks_result.chunks_path, "ingestion", ingestion_models, "chunked text")
         provenance.record(chunks_result.tree_path, "ingestion", ingestion_models, "document tree")
         provenance.record(chunks_result.document_path, "ingestion", ingestion_models, "document representation")
@@ -702,6 +1127,13 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         input_quality_profile: Dict[str, object] = chunks_result.quality_profile or {}
         input_quality_path = reports_dir / "input_quality.json"
         input_quality_path.write_text(json.dumps(input_quality_profile, indent=2), encoding="utf-8")
+        if vision_branch_summary:
+            vision_branch_data = vision_branch_summary
+            agent_stats["VisionBranching"] = {
+                "enabled": bool(vision_branch_summary.get("enabled", False)),
+                "branches": int(vision_branch_summary.get("branches", 0)),
+                "chunk_coverage": float(vision_branch_summary.get("chunk_coverage", 0.0)),
+            }
         log_stage_event(
             "input_quality",
             "completed",
@@ -710,6 +1142,143 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         )
         provenance.record(input_quality_path, "input_quality", [], "ingestion quality profile")
         quality_profile = input_quality_profile
+        constraint_dir = artifacts_dir / "rendered_pages"
+        constraint_artifacts: list[constraint_map_builder.ConstraintMapArtifact] = []
+        constraint_pages = _parse_page_selection(args.constraint_pages)
+        render_aware_pages = _parse_page_selection(args.render_aware_pages)
+        builder_page_filter = None
+       
+        if constraint_pages:
+            builder_page_filter = sorted(set(constraint_pages))
+        if render_aware_pages:
+            builder_page_filter = sorted(
+                set(builder_page_filter or []) | set(render_aware_pages)
+            ) if builder_page_filter is not None else sorted(set(render_aware_pages))
+
+        need_constraint_maps = args.emit_constraint_maps or args.enable_render_aware
+        if need_constraint_maps:
+            if not chunks_result.master_ocr_items_path:
+                logging.warning("Constraint maps requested but master_ocr_items.json was not emitted by ingestion.")
+            else:
+                try:
+                    formula_cache = artifacts_dir / "formula_cache"
+                    renderer = symbolic_render.FormulaRenderer(formula_cache)
+                    builder = constraint_map_builder.ConstraintMapBuilder(
+                        renderer,
+                        page_images_dir=chunks_result.page_images_dir,
+                    )
+                    constraint_artifacts = builder.build_from_master_items(
+                        chunks_result.master_ocr_items_path,
+                        constraint_dir,
+                        allowed_pages=builder_page_filter,
+                    )
+                except Exception as exc:
+                    logging.warning("Constraint map generation failed: %s", exc, exc_info=True)
+                else:
+                    summary_payload = [
+                        {
+                            "page": artifact.page_index,
+                            "constraint_map": _rel(artifact.constraint_map),
+                            "mask": _rel(artifact.mask_path),
+                            "rendered_items": artifact.rendered_items,
+                        }
+                        for artifact in constraint_artifacts
+                    ]
+                    summary_path = reports_dir / "constraint_maps.json"
+                    summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
+                    if constraint_artifacts:
+                        log_stage_event(
+                            "constraint_maps",
+                            "completed",
+                            output_files=[_rel(summary_path)] + [
+                                _rel(artifact.constraint_map) for artifact in constraint_artifacts
+                            ],
+                            metrics={
+                                "pages": len(constraint_artifacts),
+                                "rendered_items": sum(a.rendered_items for a in constraint_artifacts),
+                            },
+                        )
+                        agent_stats["ConstraintMaps"] = {
+                            "pages": len(constraint_artifacts),
+                            "items": sum(a.rendered_items for a in constraint_artifacts),
+                        }
+                        provenance.record(summary_path, "constraint_maps", [], "render-aware constraint summary")
+                    else:
+                        log_stage_event(
+                            "constraint_maps",
+                            "skipped",
+                            notes="No renderable regions discovered in master_ocr_items.json",
+                        )
+
+        render_summary: list[Dict[str, object]] = []
+        if args.enable_render_aware:
+            if not constraint_artifacts:
+                logging.warning(
+                    "Render-aware diffusion requested but constraint maps are missing. "
+                    "Pass --emit-constraint-maps or rerun with valid Surya output."
+                )
+            else:
+                target_pages = set(render_aware_pages) if render_aware_pages else None
+                flux_cfg = flux_inpainting.FluxConfig(
+                    model_id=args.flux_model,
+                    dtype=args.flux_dtype,
+                    device=args.flux_device,
+                    steps=args.flux_steps,
+                    guidance=args.flux_guidance,
+                    prompt=args.flux_prompt,
+                )
+                try:
+                    flux_engine = flux_inpainting.FluxInpaintingEngine(
+                        flux_cfg,
+                        workdir=constraint_dir / "renders",
+                    )
+                    for artifact in constraint_artifacts:
+                        if target_pages and artifact.page_index not in target_pages:
+                            continue
+                        render_path = flux_engine.generate_page(
+                            artifact.constraint_map,
+                            artifact.mask_path,
+                            page_index=artifact.page_index,
+                            prompt=args.flux_prompt,
+                            steps=args.flux_steps,
+                            guidance=args.flux_guidance,
+                        )
+                        render_summary.append(
+                            {
+                                "page": artifact.page_index,
+                                "constraint_map": _rel(artifact.constraint_map),
+                                "mask": _rel(artifact.mask_path),
+                                "render": _rel(render_path),
+                                "items": artifact.rendered_items,
+                            }
+                        )
+                except Exception as exc:
+                    logging.warning("Render-aware diffusion failed: %s", exc, exc_info=True)
+                else:
+                    if render_summary:
+                        render_summary_path = reports_dir / "render_aware.json"
+                        render_summary_path.write_text(json.dumps(render_summary, indent=2), encoding="utf-8")
+                        log_stage_event(
+                            "render_aware",
+                            "completed",
+                            output_files=[_rel(render_summary_path)]
+                            + [entry["render"] for entry in render_summary],
+                            metrics={
+                                "pages": len(render_summary),
+                                "renders": len(render_summary),
+                            },
+                        )
+                        agent_stats["RenderAware"] = {
+                            "pages": len(render_summary),
+                            "renders": len(render_summary),
+                        }
+                        provenance.record(render_summary_path, "render_aware", [], "flux render summary")
+                    else:
+                        log_stage_event(
+                            "render_aware",
+                            "skipped",
+                            notes="No pages met the criteria for render-aware diffusion.",
+                        )
         quality_mode = str(quality_profile.get("processing_mode", "balanced"))
         master_plan_path = reports_dir / "master_plan.json"
         title = args.title or pdf_path.stem
@@ -826,6 +1395,264 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             output_files=[_rel(retrieval_path)],
         )
         provenance.record(retrieval_path, "retrieval", [], "retrieval index")
+        branch_ledger = None
+        if branch_runtime.enabled:
+            branch_shared_context = {
+                "chunks_path": chunks_result.chunks_path,
+                "plan_path": plan_path,
+                "graph_path": graph_path,
+                "retrieval_path": retrieval_path,
+                "models_dir": MODELS_DIR,
+                "run_dir": run_dir,
+                "artifacts_dir": artifacts_dir,
+                "vision_runtime": vision_runtime.as_dict(),
+                "vision_branch_summary": vision_branch_data,
+                "branch_c_strategy": snippet_fusion.FusionStrategy.SELECT_BEST.value,
+                "preferred_gpu": os.environ.get("LATEXIFY_BRANCH_DEVICE")
+                or os.environ.get("LATEXIFY_FORCE_GPU_OCR"),
+                "branch_runtime": branch_runtime.as_dict(),
+            }
+            branch_ledger, branch_artifacts_manifest = parallel_branches.run_parallel_branches(
+                run_id=run_id,
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                reports_dir=reports_dir,
+                shared_context=branch_shared_context,
+                log_stage_event=log_stage_event,
+                branch_config=branch_runtime,
+            )
+            if branch_ledger:
+                branch_run_results = branch_ledger.results
+                branch_metrics = {
+                    "branches": float(branch_ledger.summary.total),
+                    "completed": float(branch_ledger.summary.completed),
+                    "failed": float(branch_ledger.summary.failed),
+                    "skipped": float(branch_ledger.summary.skipped),
+                }
+                branch_model_utilization, branch_fallback_rates = _summarize_branch_telemetry(branch_run_results)
+                branch_results_summary = {}
+                for result in branch_run_results:
+                    entry: Dict[str, object] = {
+                        "status": result.status,
+                    }
+                    if result.metrics:
+                        entry["metrics"] = dict(result.metrics)
+                    if result.metadata:
+                        entry["metadata"] = dict(result.metadata)
+                    if result.notes:
+                        entry["notes"] = result.notes
+                    branch_results_summary[result.branch] = entry
+                branch_output_summary.update(
+                    {
+                        "results": branch_results_summary,
+                        "model_utilization_per_branch": branch_model_utilization,
+                        "branch_fallback_rates": branch_fallback_rates,
+                        "orchestrator_metrics": branch_metrics,
+                    }
+                )
+                if branch_run_results:
+                    branch_metrics["max_confidence"] = max(
+                        (result.metrics.get("avg_confidence", 0.0) for result in branch_run_results),
+                        default=0.0,
+                    )
+                    branch_metrics["outputs"] = float(
+                        sum(result.metrics.get("outputs", 0.0) for result in branch_run_results)
+                    )
+                agent_stats["BranchOrchestrator"] = branch_metrics
+                if branch_artifacts_manifest and branch_artifacts_manifest.exists():
+                    log_stage_event(
+                        "parallel_branches",
+                        "completed",
+                        output_files=[_rel(branch_artifacts_manifest)],
+                        notes=f"branches={int(branch_metrics['branches'])}",
+                        metrics={"branch_orchestrator": branch_metrics},
+                        metadata={"selected": list(branch_runtime.branches)},
+                    )
+                    provenance.record(
+                        branch_artifacts_manifest,
+                        "parallel_branches",
+                        [],
+                        "branch artifact manifest",
+                    )
+        latex_images_dir = artifacts_dir / "latex_images"
+        log_stage_event(
+            "latex_image_generation",
+            "started",
+            input_files=[_rel(chunks_result.chunks_path)],
+        )
+        try:
+            if chunk_objects is None:
+                chunk_objects = common.load_chunks(chunks_result.chunks_path)
+            image_generator = latex_image_generator.LaTeXImageGenerator(max_regenerations=3)
+            latex_image_summary = image_generator.generate(chunk_objects, latex_images_dir)
+        except Exception as exc:
+            log_stage_event("latex_image_generation", "failed", notes=_short(repr(exc)))
+        else:
+            common.save_chunks(chunk_objects, chunks_result.chunks_path)
+            log_stage_event(
+                "latex_image_generation",
+                "completed",
+                output_files=[_rel(latex_images_dir)],
+                metrics=latex_image_summary.get("metrics", {}),
+            )
+            provenance.record(
+                latex_images_dir,
+                "latex_image_generation",
+                [],
+                "latex image previews",
+            )
+        vision_views_dir = artifacts_dir / "vision_views"
+        if vision_runtime.enabled:
+            log_stage_event(
+                "vision_synthesis",
+                "started",
+                input_files=[_rel(chunks_result.chunks_path)],
+                notes=f"preset={vision_runtime.preset}",
+            )
+            try:
+                chunk_objects = common.load_chunks(chunks_result.chunks_path)
+                renderer_defaults = asdict(VisionSynthesisConfig())
+                renderer_defaults.update(vision_runtime.resolved_overrides())
+                renderer_config = VisionSynthesisConfig(**renderer_defaults)
+                renderer = MultiViewRenderer(renderer_config, output_dir=vision_views_dir)
+                vision_result = run_agent(
+                    "MultiViewRenderer",
+                    renderer.render,
+                    chunk_objects,
+                    output_dir=vision_views_dir,
+                )
+            except Exception as exc:
+                log_stage_event("vision_synthesis", "failed", notes=_short(repr(exc)))
+                raise
+            chunk_objects = vision_result.attach_metadata(chunk_objects)
+            common.save_chunks(chunk_objects, chunks_result.chunks_path)
+            vision_summary = vision_result.summary()
+            log_stage_event(
+                "vision_synthesis",
+                "completed",
+                output_files=[_rel(chunks_result.chunks_path), _rel(vision_views_dir)],
+                notes=f"chunks={vision_summary['chunks']},views={vision_summary['views']}",
+                metrics={"vision_synthesis": vision_summary | {"preset": vision_runtime.preset}},
+            )
+            stage_logger.log(
+                "VisionSynthesis",
+                "summary",
+                {"preset": vision_runtime.preset, **vision_summary},
+            )
+            provenance.record(vision_views_dir, "vision_synthesis", [], "vision crops")
+            if "MultiViewRenderer" in agent_stats:
+                agent_stats["MultiViewRenderer"].update(
+                    {
+                        "chunks": float(vision_summary.get("chunks", 0)),
+                        "views": float(vision_summary.get("views", 0)),
+                        "avg_views_per_chunk": float(vision_summary.get("avg_views_per_chunk", 0.0)),
+                        "preset": vision_runtime.preset,
+                    }
+                )
+            else:
+                agent_stats["MultiViewRenderer"] = {
+                    "chunks": float(vision_summary.get("chunks", 0)),
+                    "views": float(vision_summary.get("views", 0)),
+                    "avg_views_per_chunk": float(vision_summary.get("avg_views_per_chunk", 0.0)),
+                    "preset": vision_runtime.preset,
+                }
+            vision_report_path = reports_dir / "vision_diagnostics.json"
+            log_stage_event(
+                "vision_agents",
+                "started",
+                input_files=[_rel(chunks_result.chunks_path)],
+                notes="VisionAgentSuite early pass",
+            )
+            try:
+                def _run_vision_agents() -> Dict[str, object]:
+                    if chunk_objects is None or vision_result is None:
+                        return {
+                            "summary": {"chunks": 0, "agents": [], "avg_confidence": 0.0},
+                            "chunks": {},
+                        }
+                    suite = VisionAgentSuite()
+                    chunk_payload: Dict[str, Dict[str, Dict[str, object]]] = {}
+                    total_conf = 0.0
+                    total_results = 0
+                    for chunk in chunk_objects:
+                        views = vision_result.views_by_chunk.get(chunk.chunk_id, [])
+                        if not views:
+                            continue
+                        results = suite.evaluate(chunk, views)
+                        if not results:
+                            continue
+                        total_results += len(results)
+                        total_conf += sum(entry.confidence for entry in results)
+                        metadata = dict(chunk.metadata or {})
+                        scores = dict(metadata.get("vision_scores") or {})
+                        notes_map = dict(metadata.get("vision_notes") or {})
+                        chunk_entry: Dict[str, Dict[str, object]] = {}
+                        for result in results:
+                            chunk_entry[result.agent] = {
+                                "confidence": result.confidence,
+                                "summary": result.summary,
+                                "metadata": result.metadata,
+                            }
+                            scores[result.agent] = result.confidence
+                            notes_map[result.agent] = result.summary
+                        metadata["vision_scores"] = scores
+                        metadata["vision_notes"] = notes_map
+                        chunk.metadata = metadata
+                        chunk_payload[chunk.chunk_id] = chunk_entry
+                    if chunk_payload:
+                        common.save_chunks(chunk_objects, chunks_result.chunks_path)
+                    avg_conf = total_conf / total_results if total_results else 0.0
+                    summary = {
+                        "chunks": len(chunk_payload),
+                        "agents": [agent.name for agent in suite.agents],
+                        "avg_confidence": round(avg_conf, 3),
+                    }
+                    return {"summary": summary, "chunks": chunk_payload}
+
+                vision_report = run_agent("VisionAgentSuite", _run_vision_agents)
+            except Exception as exc:
+                log_stage_event("vision_agents", "failed", notes=_short(repr(exc)))
+                raise
+            vision_report_path.write_text(json.dumps(vision_report, indent=2), encoding="utf-8")
+            vision_summary_payload = vision_report.get("summary", {})
+            chunk_count = int(vision_summary_payload.get("chunks", 0))
+            avg_conf = float(vision_summary_payload.get("avg_confidence", 0.0))
+            log_stage_event(
+                "vision_agents",
+                "completed",
+                output_files=[_rel(vision_report_path)],
+                notes=f"chunks={chunk_count},avg={avg_conf:.2f}",
+                metrics={
+                    "vision_agents": {
+                        "chunks": chunk_count,
+                        "avg_confidence": avg_conf,
+                    }
+                },
+            )
+            provenance.record(vision_report_path, "vision_agents", [], "vision diagnostics")
+            if "VisionAgentSuite" in agent_stats:
+                agent_stats["VisionAgentSuite"].update(
+                    {
+                        "chunks": float(chunk_count),
+                        "avg_confidence": avg_conf,
+                    }
+                )
+            else:
+                agent_stats["VisionAgentSuite"] = {"chunks": float(chunk_count), "avg_confidence": avg_conf}
+        else:
+            log_stage_event(
+                "vision_synthesis",
+                "skipped",
+                notes="vision synthesis disabled",
+            )
+            stage_logger.log("VisionSynthesis", "skipped", {"enabled": False})
+            log_stage_event(
+                "vision_agents",
+                "skipped",
+                notes="vision synthesis disabled",
+            )
+        vision_result = None
+        chunk_objects = None
         snippets_path = reports_dir / "snippets.json"
         preamble_path = reports_dir / "preamble.json"
         ensure_llm_refiner()
@@ -853,6 +1680,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 master_plan_path=master_plan_path,
                 quality_profile=quality_profile,
                 domain_profile=domain_profile_data,
+                refinement_passes=args.compilation_retry_count,
             )
         except Exception as exc:
             log_stage_event("synthesis", "failed", notes=_short(repr(exc)))
@@ -948,6 +1776,17 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "completed",
             output_files=outputs,
         )
+        compilation_metrics = assembly.consume_compilation_metrics()
+        if compilation_metrics:
+            agent_stats["RobustCompilation"] = {
+                "attempts": float(compilation_metrics.get("compilation_attempts", 0) or 0),
+                "recovery_success": 1.0 if compilation_metrics.get("recovery_success") else 0.0,
+            }
+            log_stage_event(
+                "robust_compilation",
+                "completed" if compilation_metrics.get("compilation_attempts") else "skipped",
+                metrics=compilation_metrics,
+            )
         log_stage_event(
             "preamble_opt",
             "started",
@@ -1055,6 +1894,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 author=args.author,
                 sanitize_unicode=use_sanitizer,
                 skip_compile=args.skip_compile,
+                max_iterations=args.compilation_retry_count,
             )
             log_stage_event("iterative_refiner", "started")
             try:
@@ -1220,9 +2060,96 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         logging.info("Stage metrics written to %s", metrics_path)
         log_stage_event("metrics", "completed", output_files=[_rel(metrics_path)])
         provenance.record(metrics_path, "metrics", [], "stage metrics")
+        fusion_report: Dict[str, object] = {}
+        snippet_fusion_path = reports_dir / "snippet_fusion.json"
+        log_stage_event(
+            "snippet_fusion",
+            "started",
+            input_files=[_rel(snippets_path)],
+            notes=f"strategy={fusion_strategy.value}",
+        )
+        try:
+            fusion_report = snippet_fusion.run_snippet_fusion(
+                chunks_result.chunks_path,
+                snippets_path,
+                metrics_path,
+                validation_path,
+                snippet_fusion_path,
+                strategy=fusion_strategy,
+                branch_manifest_path=branch_artifacts_manifest,
+            )
+        except Exception as exc:
+            log_stage_event("snippet_fusion", "failed", notes=_short(repr(exc)))
+            fusion_report = {}
+        else:
+            log_stage_event(
+                "snippet_fusion",
+                "completed",
+                output_files=[_rel(snippet_fusion_path)],
+                notes=f"avg={fusion_report.get('aggregate_confidence', 0.0):.2f}",
+                metrics={
+                    "snippet_fusion": {
+                        "strategy": fusion_strategy.value,
+                        "avg_confidence": fusion_report.get("aggregate_confidence", 0.0),
+                        "flagged": len(fusion_report.get("flagged_chunks", [])),
+                    },
+                    "fusion_effectiveness_scores": {
+                        "avg_confidence": fusion_report.get("aggregate_confidence", 0.0),
+                        "flagged": len(fusion_report.get("flagged_chunks", [])),
+                    },
+                },
+            )
+            provenance.record(snippet_fusion_path, "snippet_fusion", [], "snippet scoring")
+        if branch_runtime.enabled and branch_run_results:
+            branch_eval_path = reports_dir / "branch_evaluation.json"
+            log_stage_event("branch_evaluation", "started")
+            try:
+                branch_eval_report = branch_evaluator.evaluate_branches(
+                    chunks_result.chunks_path,
+                    snippets_path,
+                    branch_artifacts_manifest,
+                    latex_image_summary,
+                    vision_branch_data,
+                    branch_eval_path,
+                )
+            except Exception as exc:
+                branch_eval_report = {}
+                log_stage_event("branch_evaluation", "failed", notes=_short(repr(exc)))
+            else:
+                if not isinstance(branch_eval_report, dict):
+                    logging.warning(
+                        "Branch evaluator returned %s; wrapping for telemetry.",
+                        type(branch_eval_report).__name__,
+                    )
+                    branch_eval_report = {"raw": branch_eval_report}
+                log_stage_event(
+                    "branch_evaluation",
+                    "completed",
+                    output_files=[_rel(branch_eval_path)],
+                    metrics=branch_eval_report.get("metrics", {}),
+                )
+                provenance.record(branch_eval_path, "branch_evaluation", [], "branch comparison report")
+                agent_stats["BranchEvaluation"] = branch_eval_report.get("metrics", {})
+                if isinstance(quality_profile, dict):
+                    quality_profile.setdefault("branch_metrics", branch_eval_report.get("metrics", {}))
+                branch_performance_metrics = branch_eval_report.get("metrics", {})
+                if branch_output_summary:
+                    branch_output_summary.setdefault(
+                        "branch_performance_metrics",
+                        branch_performance_metrics,
+                    )
+        fusion_effectiveness = {
+            "avg_confidence": fusion_report.get("aggregate_confidence", 0.0),
+            "flagged_chunks": len(fusion_report.get("flagged_chunks", [])),
+        }
+        agent_stats["SnippetFusion"] = {
+            "strategy": fusion_strategy.value,
+            **fusion_effectiveness,
+        }
+        agent_stats["FusionEffectiveness"] = fusion_effectiveness
         consistency_report_path = reports_dir / "consistency.json"
         try:
-            consistency_payload = reward_mm.visual_textual_consistency(
+            consistency_payload = consistency_utils.visual_textual_consistency(
                 tex_path,
                 plan_path,
                 chunks_result.chunks_path,
@@ -1254,7 +2181,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             models=reward_models,
         )
         try:
-            reward.evaluate_rewards(
+            reward_suite.evaluate_rewards(
                 chunks_result.chunks_path,
                 tex_path,
                 validation_path,
@@ -1278,7 +2205,27 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 reward_report = json.loads(reward_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 reward_report = {}
+        cross_validation_report = reward_report.get("cross_validation") or {}
+        if cross_validation_report:
+            cv_metrics = {
+                "overall_score": cross_validation_report.get("overall_score", 0.0),
+                "confidence": cross_validation_report.get("confidence", 0.0),
+                "semantic": (cross_validation_report.get("semantic") or {}).get("composite", 0.0),
+                "content": (cross_validation_report.get("content") or {}).get("composite", 0.0),
+                "structural": (cross_validation_report.get("structural") or {}).get("composite", 0.0),
+                "visual": (cross_validation_report.get("visual") or {}).get("composite", 0.0),
+            }
+            agent_stats["CrossValidation"] = {
+                "overall": cv_metrics["overall_score"],
+                "confidence": cv_metrics["confidence"],
+            }
+            log_stage_event(
+                "cross_validation",
+                "completed",
+                metrics=cv_metrics,
+            )
         visual_report = None
+        quality_gate_report = None
         visual_stage_needed = not args.skip_compile and chunks_result.page_images_dir is not None
         if visual_stage_needed and not chunks_result.page_images_dir.exists():
             visual_stage_needed = False
@@ -1336,34 +2283,83 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "started",
             input_files=[_rel(tex_path)],
         )
-        gate_payload = {
-            "hallucination": hallucination_report or {},
+        doc_profile = adaptive_quality_gate.infer_document_profile(chunks_result.chunks_path, plan_path)
+        gate_evaluator = adaptive_quality_gate.AdaptiveQualityGate(doc_profile)
+        gate_metrics = {
+            "hallucination": hallucination_report,
             "validation": validation_result,
-            "visual": visual_report or {},
-            "models": {
-                "hallucination": HALLUCINATION_MODEL_NAME,
-                "validation": VALIDATION_MODEL_NAME,
-                "visual": VISUAL_MODEL_NAME,
-            },
+            "visual": visual_report,
+            "reward": reward_report,
+            "cross_validation": reward_report.get("cross_validation"),
+            "input_profile": input_quality_profile,
         }
-        quality_gate_path.write_text(json.dumps(gate_payload, indent=2), encoding="utf-8")
-        gate_flags = (
-            (hallucination_report or {}).get("flagged_count", 0)
-            + (hallucination_report or {}).get("claim_flag_count", 0)
-            + (visual_report or {}).get("flagged_pages", 0)
-        )
-        log_stage_event(
-            "quality_gate",
-            "completed",
-            output_files=[_rel(quality_gate_path)],
-            notes=f"flags={gate_flags}",
-        )
+        gate_result = gate_evaluator.evaluate(gate_metrics)
+        branch_summary_payload = {
+            "enabled": vision_runtime.enabled,
+            "preset": vision_runtime.preset,
+            "strategy": input_quality_profile.get("branch_strategy"),
+            "signal": input_quality_profile.get("vision_signal"),
+            "consistency": input_quality_profile.get("branch_consistency"),
+            "coverage": vision_branch_data.get("chunk_coverage"),
+            "branches": vision_branch_data.get("branches"),
+            "fusion_strategy": fusion_strategy.value,
+        }
+        gate_payload = gate_result.payload
+        gate_payload["vision_branch"] = branch_summary_payload
+        if isinstance(branch_eval_report, dict) and branch_eval_report:
+            gate_payload["branch_evaluation"] = branch_eval_report
+        if branch_output_summary:
+            gate_payload["branch_outputs"] = branch_output_summary
+        gate_payload["models"] = {
+            "hallucination": HALLUCINATION_MODEL_NAME,
+            "validation": VALIDATION_MODEL_NAME,
+            "visual": VISUAL_MODEL_NAME,
+            "vision": VISION_AGENT_VLM_NAME,
+        }
+        snippet_entry = fusion_report or {}
+        snippet_entry.setdefault("strategy", fusion_strategy.value)
+        gate_payload["snippet_fusion"] = snippet_entry
+        adaptive_quality_gate.save_gate_payload(quality_gate_path, gate_payload)
+        status = "completed"
+        notes = "passed"
+        if gate_result.failed_dimensions and not gate_result.overrides_applied:
+            status = "failed"
+            notes = f"failed={','.join(gate_result.failed_dimensions)}"
+        elif gate_result.failed_dimensions and gate_result.overrides_applied:
+            status = "override"
+            notes = f"override={','.join(gate_result.failed_dimensions)}"
+        gate_stage_metrics: Dict[str, object] = {}
+        if branch_performance_metrics:
+            gate_stage_metrics["branch_performance_metrics"] = branch_performance_metrics
+        if branch_model_utilization:
+            gate_stage_metrics["model_utilization_per_branch"] = branch_model_utilization
+        if branch_fallback_rates:
+            gate_stage_metrics["branch_fallback_rates"] = branch_fallback_rates
+        if fusion_effectiveness:
+            gate_stage_metrics["fusion_effectiveness_scores"] = fusion_effectiveness
+        log_kwargs: Dict[str, object] = {
+            "output_files": [_rel(quality_gate_path)],
+            "notes": _short(notes),
+        }
+        if gate_stage_metrics:
+            log_kwargs["metrics"] = gate_stage_metrics
+        log_stage_event("quality_gate", status, **log_kwargs)
         provenance.record(
             quality_gate_path,
             "quality_gate",
             [HALLUCINATION_MODEL_NAME, VALIDATION_MODEL_NAME, VISUAL_MODEL_NAME],
             "progressive quality validation",
         )
+        quality_gate_report = gate_payload
+        agent_stats["QualityGate"] = {
+            "passed": gate_result.passed,
+            "failed_dimensions": gate_result.failed_dimensions,
+            "overrides": gate_result.overrides_applied,
+        }
+        if not gate_result.passed and not gate_result.overrides_applied:
+            raise RuntimeError(
+                "Adaptive quality gate failed: " + ", ".join(gate_result.failed_dimensions or ["unknown"])
+            )
         quality_issues = quality.inspect_tex(tex_path)
         if quality_issues:
             agent_stats["QualityCheck"] = {"issues": quality_issues}
@@ -1371,6 +2367,80 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             raise RuntimeError("Quality check failed: " + "; ".join(quality_issues))
         agent_stats["QualityCheck"] = {"issues": 0}
         log_stage_event("quality_check", "completed")
+        branch_output_manifest_path = None
+        branch_metrics_summary: Dict[str, Dict[str, object]] = {}
+        if branch_run_results:
+            output_manager = branch_outputs.BranchOutputManager(
+                run_dir=run_dir,
+                reports_dir=reports_dir,
+                rel_path_fn=_rel,
+            )
+            pdf_source = pdf_candidate if (not args.skip_compile and pdf_candidate.exists()) else None
+            for result in branch_run_results:
+                entry_metadata = dict(result.metadata or {})
+                if result.notes:
+                    entry_metadata.setdefault("notes", result.notes)
+                tex_candidate = _select_artifact(result.output_files, suffix=".tex") or tex_path
+                pdf_candidate_path = pdf_source or _select_artifact(result.output_files, suffix=".pdf")
+                output_manager.register_branch_output(
+                    name=result.branch,
+                    tex_source=tex_candidate,
+                    pdf_source=pdf_candidate_path,
+                    status=result.status,
+                    metadata=entry_metadata,
+                )
+            best_branch = branch_outputs.select_best_branch(branch_run_results)
+            legacy_pdf_target = pdf_candidate if (pdf_candidate.exists() and not args.skip_compile) else None
+            branch_output_manifest_path = output_manager.finalize(
+                best_branch=best_branch,
+                legacy_tex=tex_path,
+                legacy_pdf=legacy_pdf_target,
+            )
+            branch_metrics_summary = output_manager.metrics_summary()
+            if branch_output_summary:
+                branch_output_summary.setdefault("results", branch_metrics_summary)
+                branch_output_summary["artifacts"] = branch_metrics_summary
+                branch_output_summary["manifest"] = _rel(branch_output_manifest_path)
+                branch_output_summary["best_branch"] = best_branch
+            log_stage_event(
+                "branch_outputs",
+                "completed",
+                output_files=[_rel(branch_output_manifest_path)],
+                notes=f"best={best_branch}",
+                metrics={
+                    "branch_outputs": branch_metrics_summary,
+                    "branch_performance_metrics": branch_performance_metrics,
+                    "model_utilization_per_branch": branch_model_utilization,
+                    "branch_fallback_rates": branch_fallback_rates,
+                    "fusion_effectiveness_scores": fusion_effectiveness,
+                },
+                metadata={"branches": list(branch_runtime.branches)},
+            )
+            provenance.record(
+                branch_output_manifest_path,
+                "branch_outputs",
+                [],
+                "branch output manifest",
+            )
+            agent_stats["BranchPerformance"] = branch_performance_metrics
+            agent_stats["FusionEffectiveness"] = fusion_effectiveness
+        kimi_snapshot = kimi_metrics.snapshot()
+        if kimi_snapshot.get("calls", 0):
+            calls = kimi_snapshot.get("calls", 0.0)
+            total_time = kimi_snapshot.get("total_time", 0.0)
+            average_ms = round((total_time / calls) * 1000.0, 2) if calls else 0.0
+            repair_attempts = kimi_snapshot.get("repair_attempts", 0.0) or 0.0
+            repair_rate = (
+                kimi_snapshot.get("repair_success", 0.0) / repair_attempts if repair_attempts else 0.0
+            )
+            kimi_payload = {
+                "calls": calls,
+                "avg_time_ms": average_ms,
+                "success_rate": round((kimi_snapshot.get("success", 0.0) / calls) if calls else 0.0, 3),
+                "repair_success_rate": round(repair_rate, 3),
+            }
+            agent_stats["KimiK2"] = kimi_payload
+            log_stage_event("kimi_k2", "completed", metrics=kimi_payload)
         agent_metrics_path = reports_dir / "agent_metrics.json"
         agent_metrics_path.write_text(json.dumps(agent_stats, indent=2), encoding="utf-8")
         provenance.record(agent_metrics_path, "agent_metrics", [], "stage durations")
@@ -1389,6 +2459,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 reward_report=reward_report,
                 validation_report=validation_result,
                 lint_report=lint_report,
+                quality_gate_report=quality_gate_report,
+                branch_report=branch_eval_report,
+                branch_outputs=branch_output_summary,
             )
         except Exception as exc:
             log_stage_event("active_learning", "failed", notes=_short(repr(exc)))
@@ -1411,6 +2484,14 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         clean_release_root_artifacts()
         stage_logger.log("Run", "success", {"output": str(tex_path)})
         total_duration = round(perf_counter() - run_start, 3)
+        attempt_tracker.finish(
+            status="success",
+            classification="technical_success",
+            duration_sec=total_duration,
+            outputs=outputs,
+            logs=[_rel(logs_dir / "checkpoint.log")],
+            notes="pipeline completed",
+        )
         log_stage_event(
             "run",
             "completed",
@@ -1431,6 +2512,15 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     except Exception as exc:
         stage_logger.log("Run", "error", {"error": repr(exc)})
         log_stage_event("run", "failed", notes=_short(repr(exc)))
+        elapsed = round(perf_counter() - run_start, 3)
+        attempt_tracker.finish(
+            status="failed",
+            classification="technical_failure",
+            duration_sec=elapsed,
+            outputs=outputs if "outputs" in locals() else None,
+            logs=[_rel(logs_dir / "checkpoint.log")],
+            notes=_short(repr(exc)),
+        )
         data_logger.set_run_summary(
             {
                 "status": "failed",
@@ -1466,27 +2556,19 @@ def run_benchmark(args: argparse.Namespace) -> None:
     for idx, pdf in enumerate(sorted(pdf_dir.glob("*.pdf"))):
         if idx >= args.benchmark_limit:
             break
-        bench_args = argparse.Namespace(
-            pdf=str(pdf),
-            title=pdf.stem,
-            author=args.author,
-            run_dir=f"benchmark/{pdf.stem}",
-            chunk_chars=args.chunk_chars,
-            skip_compile=True,
-            log_level=args.log_level,
-            benchmark_dir=None,
-            benchmark_limit=args.benchmark_limit,
-            rag_cache=args.rag_cache,
-            rag_refresh=args.rag_refresh,
-            reward_mode=args.reward_mode,
-            llm_mode=args.llm_mode,
-            llm_repo=args.llm_repo,
-             llm_backend=args.llm_backend,
-             llama_cpp_model=args.llama_cpp_model,
-             llama_cpp_grammar=args.llama_cpp_grammar,
-            style_domain=args.style_domain,
-            no_unicode_sanitizer=args.no_unicode_sanitizer,
+        bench_kwargs = vars(args).copy()
+        bench_kwargs.update(
+            {
+                "pdf": str(pdf),
+                "title": pdf.stem,
+                "author": args.author,
+                "run_dir": f"benchmark/{pdf.stem}",
+                "skip_compile": True,
+                "benchmark_dir": None,
+                "benchmark_limit": args.benchmark_limit,
+            }
         )
+        bench_args = argparse.Namespace(**bench_kwargs)
         tex_path = run_pipeline(bench_args)
         metrics_path = OUTPUT_DIR / bench_args.run_dir / "reports" / "metrics.json"
         if metrics_path.exists():

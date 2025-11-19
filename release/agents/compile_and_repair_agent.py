@@ -136,6 +136,8 @@ class CompileAndRepairAgent:
             latex, balanced, diag = self._heuristic_repair(latex, balanced)
             state.diagnostics = diag
         state.candidate_latex = latex
+        state.mark_stage("compile", notes=state.diagnostics or "compile_ok")
+        state.record_metrics(compile_attempts=state.failed_attempts + 1)
         state.log(f"compile: diagnostics={state.diagnostics}")
         return state
 

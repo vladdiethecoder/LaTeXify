@@ -160,7 +160,18 @@ class FontStackRule(BaseTypographyRule):
             packages = FONT_LIBRARY.get(key)
             if not packages:
                 continue
-            directives.add_packages(packages)
+            filtered: List[PackageSpec] = []
+            for spec in packages:
+                pkg_name = spec.get("package")
+                if pkg_name and not _package_available(pkg_name):
+                    LOGGER.info(
+                        "Skipping LaTeX package %s (not found via kpsewhich) for font stack '%s'.",
+                        pkg_name,
+                        key,
+                    )
+                    continue
+                filtered.append(spec)
+            directives.add_packages(filtered)
 
 
 class ExtraPackageRule(BaseTypographyRule):

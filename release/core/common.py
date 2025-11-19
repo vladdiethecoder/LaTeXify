@@ -31,6 +31,7 @@ class Snippet:
     chunk_id: str
     latex: str
     notes: Dict[str, Any] = field(default_factory=dict)
+    branch: Dict[str, Any] | None = None
 
 
 @dataclass
@@ -146,7 +147,13 @@ def load_snippets(path: Path) -> List[Snippet]:
 
 
 def save_snippets(snippets: Iterable[Snippet], path: Path) -> None:
-    save_json([asdict(snippet) for snippet in snippets], path)
+    payload: List[Dict[str, Any]] = []
+    for snippet in snippets:
+        data = asdict(snippet)
+        if data.get("branch") is None:
+            data.pop("branch", None)
+        payload.append(data)
+    save_json(payload, path)
 
 
 def save_document(document: Document, path: Path) -> None:

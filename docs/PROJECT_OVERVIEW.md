@@ -39,8 +39,27 @@ was produced.
 10. **Quality Gate** – Combine hallucination, compilation, and visual diffs into
     a single report for CI/publishing decisions.
 
+### Render-Aware (optional)
+- **Constraint Map Builder → Flux Renderer** – When `--emit-constraint-maps`
+  is active, `master_ocr_items.json` is converted into deterministic canvases
+  plus binary masks under `artifacts/rendered_pages/`. Enabling
+  `--enable-render-aware` feeds those canvases into the Flux-based diffusion
+  wrapper, generating photorealistic page renders that respect the rendered
+  formulas and routed figures. Outputs are consolidated in
+  `reports/render_aware.json` for agents/QA tooling.
+
 Each stage drops artifacts into `build/runs/<run_id>/`, making it easy to
 debug or replay.
+
+### Streaming Backend & UI
+- `backend/app` hosts a FastAPI streaming endpoint (`/events`) that surfaces the
+  planner output plus stage/status updates via Server Sent Events. The dispatcher
+  now calls the same `release.pipeline.planner.build_master_plan` helper used by
+  `run_release.py`, so the demo UI reflects real chunk/section metadata even
+  before a PDF upload flow is wired.
+- `apps/ui/gradio_app.py` consumes the stream and visualizes incremental tokens
+  for each plan block. Point `BACKEND` at your FastAPI host and the client will
+  display plan + status updates without needing to read the run directory.
 
 ## Run Directory Layout
 - `build/runs/<run_id>/main.tex` – final LaTeX.
@@ -50,6 +69,8 @@ debug or replay.
   agent metrics, reward traces, etc.
 - Progressive artifacts live under `reports/`: `input_quality.json`,
   `domain_profile.json`, `semantic_enrichment.json`, and `quality_gate.json`.
+- `build/runs/<run_id>/reports/snippet_fusion.json` – per-chunk scoring from the
+  new fusion stage (also embedded into `quality_gate.json`).
 - `build/runs/<run_id>/logs/checkpoint.log` – stage-by-stage telemetry.
   etc.
 - `build/run-<run_id>/DATA_PATHWAY.llm.jsonl` – per-stage JSONL log.

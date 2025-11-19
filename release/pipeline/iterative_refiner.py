@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List
 
 from ..core import common
-from .math_environment import MathEnvironmentDetector
+from .math_support import MathEnvironmentDetector
 from .quality_assessment import QualityAssessor
 from .symbol_normalizer import SymbolNormalizer
-from .assembly import ProgressiveAssembler, compile_tex
+from .assembly import ProgressiveAssembler
+from .latex_repair_agent import KimiK2LatexRepair
+from .robust_compilation import run_robust_compilation
 
 
 @dataclass
@@ -36,6 +38,7 @@ class IterativeRefiner:
     max_iterations: int = 2
     symbol_normalizer: SymbolNormalizer = field(default_factory=SymbolNormalizer)
     env_detector: MathEnvironmentDetector = field(default_factory=MathEnvironmentDetector)
+    repair_agent: KimiK2LatexRepair = field(default_factory=KimiK2LatexRepair)
     _plan_cache: Dict[str, common.PlanBlock] = field(init=False, default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -57,11 +60,22 @@ class IterativeRefiner:
             )
             tex_path = assembler.build(sanitize_unicode=self.sanitize_unicode)
             if not self.skip_compile:
-                pdf = compile_tex(tex_path)
-                if pdf is None:
+                self.repair_agent.preflight_check(tex_path)
+                result = run_robust_compilation(
+                    tex_path,
+                    cache_dir=tex_path.parent / ".latexify_cache",
+                    repair_agent=self.repair_agent,
+                    max_retries=self.max_iterations,
+                )
+                if result.pdf_path is None:
                     log_path = tex_path.with_suffix(".log")
                     if assembler.error_repair.repair(tex_path, log_path):
-                        compile_tex(tex_path)
+                        run_robust_compilation(
+                            tex_path,
+                            cache_dir=tex_path.parent / ".latexify_cache",
+                            repair_agent=self.repair_agent,
+                            max_retries=self.max_iterations,
+                        )
             report = self.assessor.evaluate(tex_path, self.chunks_path, self.plan_path, self.snippets_path)
             if report.get("aggregate", 0.0) >= self.assessor.target_score or not report.get("weak_sections"):
                 return IterativeRefinerResult(tex_path=tex_path, report=report, iterations=iteration + 1)

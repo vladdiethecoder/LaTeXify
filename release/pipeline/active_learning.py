@@ -59,6 +59,9 @@ def build_active_learning_queue(
     reward_report: Dict[str, object] | None = None,
     validation_report: Dict[str, object] | None = None,
     lint_report: Dict[str, object] | None = None,
+    quality_gate_report: Dict[str, object] | None = None,
+    branch_report: Dict[str, object] | None = None,
+    branch_outputs: Dict[str, object] | None = None,
     limit: int | None = None,
 ) -> ActiveLearningSummary:
     """Collect low-confidence snippets and persist them for human review."""
@@ -147,6 +150,24 @@ def build_active_learning_queue(
     if reward_value is not None and reward_value < 0:
         add_reason(DOCUMENT_CHUNK_ID, "low_reward", reward_value)
 
+    if quality_gate_report and not quality_gate_report.get("passed", True):
+        add_reason(
+            DOCUMENT_CHUNK_ID,
+            "quality_gate",
+            {
+                "failed_dimensions": quality_gate_report.get("failed_dimensions", []),
+                "relaxation": quality_gate_report.get("relaxation"),
+            },
+        )
+
+    if branch_report:
+        low_bleu = branch_report.get("low_bleu_chunks") or []
+        for chunk_id in low_bleu:
+            add_reason(chunk_id, "low_branch_bleu", branch_report.get("metrics"))
+        metrics = branch_report.get("metrics") or {}
+        if isinstance(metrics, dict) and metrics.get("compile_success_rate", 1.0) < 0.5:
+            add_reason(DOCUMENT_CHUNK_ID, "branch_instability", metrics)
+
     limit_value = DEFAULT_LIMIT if limit is None else max(1, limit)
     records: List[Dict[str, object]] = sorted(
         queue.values(),
@@ -183,6 +204,8 @@ def build_active_learning_queue(
         "summary_file": str(summary_path),
         "queue_file": str(queue_path),
     }
+    if branch_outputs:
+        summary_payload["branch_outputs"] = branch_outputs
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
     return ActiveLearningSummary(summary=summary_payload, summary_path=summary_path, queue_path=queue_path)
 
