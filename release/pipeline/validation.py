@@ -58,6 +58,7 @@ def run_validation(tex_path: Path, output_path: Path | None = None) -> Dict[str,
                 errors.append("bibliography-missing")
         except json.JSONDecodeError:
             errors.append("citations-corrupt")
+    result: Dict[str, object] = {"success": success, "errors": errors, "log_path": str(log_path)}
     if errors and log_text:
         analysis = _summarize_compile_errors(errors, log_text)
         diagnostics = repair_agent.diagnose_log(log_text)
@@ -72,7 +73,8 @@ def run_validation(tex_path: Path, output_path: Path | None = None) -> Dict[str,
             repair_summary = repair_agent.repair_from_log(tex_path, log_path)
             if repair_summary.get("actions"):
                 result["repair_actions"] = repair_summary["actions"]
-    result = {"success": success, "errors": errors, "log_path": str(log_path)}
+    result["success"] = success
+    result["errors"] = errors
     if analysis:
         result["analysis"] = analysis
     target = output_path or tex_path.parent.joinpath("validation.json")

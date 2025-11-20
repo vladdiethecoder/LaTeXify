@@ -13,6 +13,12 @@ from ..core import common
 from ..models.kimi_k2_adapter import get_kimi_adapter
 from . import kimi_metrics
 
+try:
+    from sympy.parsing.latex import parse_latex
+    from sympy import simplify
+except Exception:  # optional dependency; fail soft
+    parse_latex = None
+    simplify = None
 
 LATEX_SECTION_RE = re.compile(r"\\section\{|\\subsection\{", re.IGNORECASE)
 LATEX_MATH_RE = re.compile(r"\\begin\{(equation|align|gather)", re.IGNORECASE)
@@ -172,6 +178,115 @@ class SemanticKimiValidator:
             return None
 
 
+@dataclass
+class TableStructureDiff:
+    """Compare table structure in metadata vs generated LaTeX."""
+
+    def score(self, chunks: Sequence[common.Chunk], latex: str) -> Dict[str, float]:
+        table_chunks = [chunk for chunk in chunks if (chunk.metadata or {}).get("region_type") == "table"]
+        if not table_chunks:
+            return {"table_columns_match": 1.0, "table_count_match": 1.0, "table_column_delta": 0.0}
+        expected_tables = len(table_chunks)
+        expected_cols = [self._expected_columns(chunk.metadata or {}) for chunk in table_chunks if self._expected_columns(chunk.metadata or {}) > 0]
+        generated_tables = self._parse_tabulars(latex)
+        col_deltas: List[float] = []
+        for idx, gen_cols in enumerate(generated_tables[: len(expected_cols)]):
+            exp = expected_cols[idx] if idx < len(expected_cols) else expected_cols[-1]
+            col_deltas.append(abs(gen_cols - exp))
+        if not generated_tables:
+            return {"table_columns_match": 0.0, "table_count_match": 0.0, "table_column_delta": 1.0}
+        if not expected_cols:
+            return {
+                "table_columns_match": 0.5,
+                "table_count_match": _ratio(len(generated_tables), expected_tables),
+                "table_column_delta": 1.0,
+            }
+        column_delta = sum(col_deltas) / max(len(col_deltas), 1) if col_deltas else 0.0
+        count_match = _ratio(min(len(generated_tables), expected_tables), expected_tables)
+        match = max(0.0, 1.0 - min(column_delta / max(max(expected_cols), 1), 1.0))
+        return {
+            "table_columns_match": round(match, 3),
+            "table_count_match": round(count_match, 3),
+            "table_column_delta": round(column_delta, 3),
+        }
+
+    def _expected_columns(self, metadata: Dict[str, object]) -> int:
+        signature = metadata.get("table_signature") or {}
+        if isinstance(signature, dict):
+            columns = signature.get("columns")
+            if columns:
+                try:
+                    return int(columns)
+                except Exception:
+                    return 0
+        return int(metadata.get("columns") or 0)
+
+    def _parse_tabulars(self, latex: str) -> List[int]:
+        columns: List[int] = []
+        for match in re.finditer(r"\\begin\{tabular\}\{([^}]*)\}", latex or ""):
+            spec = match.group(1)
+            col_count = sum(1 for ch in spec if ch.lower() in {"c", "l", "r"})
+            columns.append(max(col_count, 1))
+        return columns
+
+
+@dataclass
+class SymbolicMathValidator:
+    """Optional SymPy-based equivalence check between source math and generated LaTeX."""
+
+    max_samples: int = 5
+
+    def score(self, chunks: Sequence[common.Chunk], latex: str) -> Dict[str, float]:
+        if parse_latex is None or simplify is None:
+            return {"symbolic_match": 0.5, "parse_success": 0.0, "samples": 0}
+        source_exprs = self._extract_expressions(chunks)[: self.max_samples]
+        generated_exprs = self._extract_latex_equations(latex)[: self.max_samples]
+        parsed_source = [self._parse_safe(expr) for expr in source_exprs]
+        parsed_generated = [self._parse_safe(expr) for expr in generated_exprs]
+        parsed_source = [expr for expr in parsed_source if expr is not None]
+        parsed_generated = [expr for expr in parsed_generated if expr is not None]
+        if not parsed_source or not parsed_generated:
+            return {"symbolic_match": 0.5, "parse_success": 0.0, "samples": 0}
+        matches = 0
+        for src in parsed_source:
+            for gen in parsed_generated:
+                try:
+                    if simplify(src - gen) == 0:
+                        matches += 1
+                        break
+                except Exception:
+                    continue
+        coverage = matches / max(len(parsed_source), 1)
+        parse_success = (len(parsed_source) + len(parsed_generated)) / max(len(source_exprs) + len(generated_exprs), 1)
+        return {
+            "symbolic_match": round(coverage, 3),
+            "parse_success": round(parse_success, 3),
+            "samples": min(len(parsed_source), len(parsed_generated)),
+        }
+
+    def _extract_expressions(self, chunks: Sequence[common.Chunk]) -> List[str]:
+        expressions: List[str] = []
+        for chunk in chunks:
+            region = str((chunk.metadata or {}).get("region_type", "")).lower()
+            if region in {"equation", "formula"} and chunk.text:
+                expressions.append(chunk.text.strip())
+        return expressions
+
+    def _extract_latex_equations(self, latex: str) -> List[str]:
+        exprs: List[str] = []
+        for match in re.finditer(r"\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}", latex, flags=re.S):
+            exprs.append(match.group(1).strip())
+        for match in re.finditer(r"\\\[(.*?)\\\]", latex, flags=re.S):
+            exprs.append(match.group(1).strip())
+        return exprs
+
+    def _parse_safe(self, expr: str):
+        try:
+            return parse_latex(expr)
+        except Exception:
+            return None
+
+
 def _ratio(output: int, expected: int) -> float:
     if expected == 0:
         return 1.0
@@ -220,6 +335,8 @@ def run_cross_validation(
     layout_metrics = LayoutFidelityMetrics().score(chunks, latex)
     visual_scores = VisualTextConsistency().score(chunks, latex, pdf_path)
     semantic_scores = SemanticKimiValidator().score(chunks, latex)
+    table_diff = TableStructureDiff().score(chunks, latex)
+    symbolic_scores = SymbolicMathValidator().score(chunks, latex)
 
     structural_score = _weighted_average([
         branch_scores.get("consistency", 1.0),
@@ -227,6 +344,7 @@ def run_cross_validation(
         layout_metrics.get("heading_alignment", 1.0),
         layout_metrics.get("table_alignment", 1.0),
         layout_metrics.get("math_alignment", 1.0),
+        table_diff.get("table_columns_match", 1.0),
     ])
     content_score = _weighted_average([
         content_metrics.get("token_overlap", 0.0),
@@ -237,11 +355,15 @@ def run_cross_validation(
         visual_scores.get("asset_coverage", 1.0),
         visual_scores.get("pdf_available", 0.0),
     ])
-    semantic_score = semantic_scores.get("kimi_consistency", 0.5)
+    semantic_score = _weighted_average([
+        semantic_scores.get("kimi_consistency", 0.5),
+        symbolic_scores.get("symbolic_match", 0.5),
+    ])
     confidence = _weighted_average([
         layout_metrics.get("layout_confidence", 0.7),
         semantic_scores.get("confidence", 0.0),
         branch_scores.get("confidence", 0.7),
+        symbolic_scores.get("parse_success", 0.0),
     ])
     extra_penalty = 0.0
     if validation_data and validation_data.get("errors"):
@@ -250,12 +372,14 @@ def run_cross_validation(
     overall = max(0.0, min(1.0, overall * (0.85 + 0.15 * confidence) - extra_penalty))
     structural_payload = dict(branch_scores)
     structural_payload.update(layout_metrics)
+    structural_payload.update(table_diff)
     structural_payload["composite"] = round(structural_score, 3)
     content_payload = dict(content_metrics)
     content_payload["composite"] = round(content_score, 3)
     visual_payload = dict(visual_scores)
     visual_payload["composite"] = round(visual_score, 3)
     semantic_payload = dict(semantic_scores)
+    semantic_payload.update(symbolic_scores)
     semantic_payload["composite"] = round(semantic_score, 3)
     return CrossValidationReport(
         structural={k: round(v, 3) if isinstance(v, float) else v for k, v in structural_payload.items()},
@@ -273,6 +397,8 @@ __all__ = [
     "LayoutFidelityMetrics",
     "VisualTextConsistency",
     "SemanticKimiValidator",
+    "TableStructureDiff",
+    "SymbolicMathValidator",
     "CrossValidationReport",
     "run_cross_validation",
 ]

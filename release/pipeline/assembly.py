@@ -33,6 +33,7 @@ from .typography_engine import TypographyEngine
 LOGGER = logging.getLogger(__name__)
 
 POSTAMBLE = "\\end{document}\n"
+INTERNAL_MACRO_RE = re.compile(r"\\providecommand.*(?:enit@|endtable)", re.MULTILINE)
 
 
 LATEX_ESCAPES = {
@@ -48,6 +49,13 @@ LATEX_ESCAPES = {
 }
 
 _LAST_COMPILATION_METRICS: Dict[str, object] | None = None
+
+
+def _strip_internal_macros(tex: str) -> str:
+    """Remove stray enumitem/internal macros that can break compilation."""
+    return "\n".join(
+        line for line in tex.splitlines() if not INTERNAL_MACRO_RE.search(line)
+    )
 
 
 def escape(text: str) -> str:
@@ -369,9 +377,19 @@ def build_preamble(config: Dict[str, object]) -> str:
     packages.extend(directives.packages)
     lines = [f"\\documentclass[{class_options}]{{{doc_class}}}"]
     seen = set()
+    
+    # Detect natbib usage in packages or extra commands
+    has_natbib = any(pkg.get("package") == "natbib" for pkg in packages)
+    if not has_natbib:
+        extra_str = " ".join(config.get("extra_preamble_commands") or [])
+        if "natbib" in extra_str:
+            has_natbib = True
+
     for pkg in packages:
         name = pkg.get("package")
         if not name:
+            continue
+        if name == "cite" and has_natbib:
             continue
         if name in seen:
             continue
@@ -471,6 +489,7 @@ def write_tex(
             POSTAMBLE,
         ]
     )
+    tex_content = _strip_internal_macros(tex_content)
     if sanitize_unicode:
         tex_content = sanitize_unicode_to_latex(tex_content)
     tex_path = output_dir / "main.tex"
@@ -598,9 +617,10 @@ class ProgressiveAssembler:
                 bibliography_generator=self.bibliography_generator,
                 citation_report=self.citation_report,
                 bibliography_result=self.bibliography_result,
-            )
+        )
         if self.bibliography_result and self.bibliography_result.latex:
             tex_content = "\n".join([tex_content, self.bibliography_result.latex])
+        tex_content = _strip_internal_macros(tex_content)
         if sanitize_unicode:
             tex_content = sanitize_unicode_to_latex(tex_content)
         tex_path = self.output_dir / "main.tex"

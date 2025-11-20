@@ -1,0 +1,1 @@
+/mnt/5da59c95-9aac-48f9-bc21-48c043812e8c/LaTeXify/docs/GEMINI.md

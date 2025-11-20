@@ -313,6 +313,18 @@ def _split_row_cells(row: str) -> List[str]:
     return [cell for cell in cells if cell]
 
 
+def _escape_table_cell(cell: str) -> str:
+    replacements = {
+        "&": "\\&",
+        "%": "\\%",
+        "#": "\\#",
+    }
+    sanitized = cell.strip()
+    for needle, repl in replacements.items():
+        sanitized = sanitized.replace(needle, repl)
+    return sanitized
+
+
 def _estimate_column_count(rows: List[str], metadata: Dict[str, object]) -> int:
     signature = metadata.get("table_signature") or {}
     columns = signature.get("columns")
@@ -369,7 +381,7 @@ def _extract_region_crop(metadata: Dict[str, object]) -> Path | None:
         return None
 
 
-def _generate_table_from_vlm(chunk: common.Chunk) -> str | None:
+def _generate_table_from_vlm(chunk: common.Chunk) -> List[List[str]] | None:
     crop_path = _extract_region_crop(chunk.metadata or {})
     if crop_path is None:
         return None
@@ -382,20 +394,15 @@ def _generate_table_from_vlm(chunk: common.Chunk) -> str | None:
             pass
     if not vlm_text:
         return None
-    snippet = vlm_text.strip()
-    if "\\begin{tabular" not in snippet:
-        snippet = "\\begin{tabular}{ll}\n" + snippet + "\n\\end{tabular}"
-    if "\\begin{table" not in snippet:
-        snippet = "\n".join(
-            [
-                "\\begin{table}[H]",
-                "  \\centering",
-                snippet,
-                "  \\caption{Auto-generated table}",
-                "\\end{table}",
-            ]
-        )
-    return snippet
+    rows = []
+    for raw_line in vlm_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        cells = _split_row_cells(line)
+        if cells:
+            rows.append(cells)
+    return rows or None
 
 
 def _generate_figure_caption(chunk: common.Chunk) -> str | None:
@@ -477,9 +484,35 @@ def table_agent(
         f"% table-profile rows={assessment.rows} cols={assessment.columns} width={width_value:.2f}\\linewidth"
     )
     header = "\n".join(filter(None, header_parts))
-    vlm_snippet = _generate_table_from_vlm(chunk)
-    if vlm_snippet:
-        latex = "\n".join(filter(None, [header, vlm_snippet]))
+    vlm_rows = _generate_table_from_vlm(chunk)
+    if vlm_rows:
+        cols = max(len(row) for row in vlm_rows)
+        body_lines = []
+        for row in vlm_rows:
+            cells = [
+                _escape_table_cell(cell)
+                for cell in (row[:cols] + [""] * max(0, cols - len(row)))
+            ]
+            body_lines.append(" & ".join(cells) + " \\\\ ")
+        body = "\n    ".join(body_lines)
+        header = header or "% auto table"
+        align = "".join(["c"] * max(cols, 1))
+        latex = "\n".join(
+            [
+                header,
+                "\\begin{table}[H]",
+                "  \\centering",
+                f"  \\resizebox{{{width_value:.2f}\\linewidth}}{{!}}{{%",
+                f"    \\begin{{tabular}}{{{align}}}",
+                "    \\toprule",
+                f"    {body}",
+                "    \\bottomrule",
+                "    \\end{tabular}",
+                "  }",
+                "  \\caption{Auto-transcribed table}",
+                "\\end{table}",
+            ]
+        )
         return SpecialistResult(latex=latex)
     body_lines: List[str] = []
     for row in rows:
@@ -571,6 +604,39 @@ def figure_agent(chunk: common.Chunk, examples=None, context: Dict[str, object] 
     return SpecialistResult(latex=latex)
 
 
+ROUTING_ALIASES = {
+    "math": "equation",
+    "formula": "equation",
+    "eq": "equation",
+    "img": "figure",
+}
+ROUTING_FIGURE_CONFIDENCE = float(os.environ.get("LATEXIFY_ROUTING_FIGURE_THRESHOLD", "0.45") or 0.45)
+
+
+def _route_modality(block_type: str, chunk: common.Chunk) -> Dict[str, object]:
+    """Centralized modality routing with configurable thresholds.
+
+    This consolidates heuristic checks so downstream agents share the same decision.
+    """
+    metadata = chunk.metadata or {}
+    region = str(metadata.get("region_type") or block_type or "text").lower()
+    region = ROUTING_ALIASES.get(region, region)
+    layout_conf = float(metadata.get("layout_confidence", 0.7) or 0.7)
+    if region not in {"question", "table", "equation", "list", "figure"}:
+        images = getattr(chunk, "images", None) or []
+        if images and layout_conf < ROUTING_FIGURE_CONFIDENCE:
+            region = "figure"
+        elif metadata.get("table_signature"):
+            region = "table"
+        elif "equation" in chunk.text.lower() or "formula" in chunk.text.lower():
+            region = "equation"
+        elif metadata.get("bulleted") or metadata.get("list"):
+            region = "list"
+        else:
+            region = "text"
+    return {"region": region, "layout_confidence": layout_conf}
+
+
 def dispatch_specialist(
     block_type: str,
     chunk: common.Chunk,
@@ -579,18 +645,22 @@ def dispatch_specialist(
     *,
     context: Dict[str, object] | None = None,
 ) -> SpecialistResult:
-    region = chunk.metadata.get("region_type", "text")
-    if block_type == "question" or region == "question":
-        return question_agent(chunk, preamble, examples, context)
-    if block_type == "table" or region == "table":
-        return table_agent(chunk, preamble, examples, context)
-    if block_type == "equation" or region == "formula":
-        return equation_agent(chunk, preamble, examples, context)
-    if block_type == "list" or region == "list":
-        return list_agent(chunk, examples, context)
-    if block_type == "figure" or region == "figure":
-        return figure_agent(chunk, examples, context)
-    return paragraph_agent(chunk, examples, context)
+    routing = _route_modality(block_type, chunk)
+    region = routing["region"]
+    if region == "question":
+        result = question_agent(chunk, preamble, examples, context)
+    elif region == "table":
+        result = table_agent(chunk, preamble, examples, context)
+    elif region == "equation":
+        result = equation_agent(chunk, preamble, examples, context)
+    elif region == "list":
+        result = list_agent(chunk, examples, context)
+    elif region == "figure":
+        result = figure_agent(chunk, examples, context)
+    else:
+        result = paragraph_agent(chunk, examples, context)
+    result.notes["routing"] = routing
+    return result
 
 
 __all__ = ["PreambleAgent", "dispatch_specialist", "SpecialistResult"]
