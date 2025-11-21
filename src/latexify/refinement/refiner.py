@@ -2,27 +2,58 @@ import torch
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+try:
+    from vllm import LLM, SamplingParams
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+
 class LLMRefiner:
-    def __init__(self, model_path: str = "Qwen/Qwen2.5-Coder-14B-Instruct", device: str = "cuda"):
+    def __init__(self, model_path: str = "Qwen/Qwen2.5-Coder-14B-Instruct", device: str = "cuda", use_vllm: bool = True, load_in_8bit: bool = False):
         self.model_path = model_path
         self.device = device
+        self.use_vllm = use_vllm and VLLM_AVAILABLE
+        self.load_in_8bit = load_in_8bit
+        
         self.model = None
         self.tokenizer = None
+        self.vllm_model = None
 
     def load_model(self):
         """
         Load the model. Delayed loading to save VRAM if not used immediately.
         """
-        print(f"Loading Refiner LLM: {self.model_path}...")
+        print(f"Loading Refiner LLM: {self.model_path} (vLLM={self.use_vllm}, 8bit={self.load_in_8bit})...")
+        
+        if self.use_vllm:
+            try:
+                # vLLM handles quantization automatically if configured or via args
+                # For now we assume standard load. 
+                # Note: vLLM usually requires running in a separate process or strictly managing CUDA context.
+                # We'll try initializing it.
+                self.vllm_model = LLM(model=self.model_path, trust_remote_code=True, dtype="float16") 
+                return
+            except Exception as e:
+                print(f"Failed to initialize vLLM: {e}. Falling back to Transformers.")
+                self.use_vllm = False
+
+        # Fallback or Standard Transformers
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path, 
-                device_map=self.device, 
-                torch_dtype=torch.float16
-            )
-            # Optimization: Compile model
-            if hasattr(torch, "compile"):
+            
+            model_kwargs = {
+                "device_map": self.device,
+                "torch_dtype": torch.float16,
+                "trust_remote_code": True
+            }
+            
+            if self.load_in_8bit:
+                model_kwargs["load_in_8bit"] = True
+            
+            self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
+            
+            # Optimization: Compile model (only if not 8-bit, as compile support varies)
+            if not self.load_in_8bit and hasattr(torch, "compile"):
                 try:
                     print("Compiling Refiner LLM with torch.compile...")
                     self.model = torch.compile(self.model, mode="max-autotune")
@@ -37,13 +68,17 @@ class LLMRefiner:
         """
         Refine the raw LaTeX string using the LLM.
         """
-        if self.model is None:
+        if self.model is None and self.vllm_model is None:
             self.load_model()
             
         prompt = f"""
-        You are a LaTeX expert. Fix any syntax errors, close unclosed environments, 
-        and correct OCR typos in the following LaTeX code. 
-        Do not change the content/meaning.
+        You are a LaTeX expert. Your task is to fix syntax errors, close unclosed environments, 
+        and correct OCR typos in the provided LaTeX code.
+        
+        Think step by step:
+        1. Identify broken environments (e.g. \begin{{equation}} without \end{{equation}}).
+        2. Identify OCR glitches (e.g. '1nt' instead of 'int').
+        3. Fix them while preserving the original content and structure.
         
         RAW LATEX:
         {raw_latex}
@@ -56,7 +91,7 @@ class LLMRefiner:
         """
         Fix LaTeX based on compiler error log.
         """
-        if self.model is None:
+        if self.model is None and self.vllm_model is None:
             self.load_model()
             
         prompt = f"""
@@ -68,18 +103,28 @@ class LLMRefiner:
         LATEX CODE:
         {latex_code}
         
-        Fix the errors reported in the log. Return only the fixed LaTeX.
+        Think step by step to resolve the specific error reported in the log.
+        Return only the fixed LaTeX code.
         
         FIXED LATEX:
         """
         return self._generate(prompt)
 
     def _generate(self, prompt: str) -> str:
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-        with torch.inference_mode():
-            outputs = self.model.generate(**inputs, max_new_tokens=4096)
-        result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        if self.use_vllm and self.vllm_model:
+            sampling_params = SamplingParams(temperature=0.7, max_tokens=4096)
+            outputs = self.vllm_model.generate([prompt], sampling_params)
+            result = outputs[0].outputs[0].text
+        else:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            with torch.inference_mode():
+                outputs = self.model.generate(**inputs, max_new_tokens=4096)
+            result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
+        # Clean up output
         if "FIXED LATEX:" in result:
             return result.split("FIXED LATEX:")[-1].strip()
+        
+        # Fallback: if model didn't repeat "FIXED LATEX:", try to heuristic extraction
+        # or just return the whole thing if it seems to be just the code.
         return result

@@ -15,6 +15,7 @@ from latexify.core.reading_order import ReadingOrder, LayoutBlock
 from latexify.core.assembler import Assembler
 from latexify.refinement.refiner import LLMRefiner
 from latexify.core.compiler import LatexCompiler
+from latexify.models.donut_adapter import DonutMetadataExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,16 @@ class LaTeXifyPipeline:
         self.assembler = Assembler()
         self.compiler = LatexCompiler()
         
+        # Optional Metadata Extractor
+        self.metadata_extractor = None
+        if cfg.pipeline.get("metadata_extraction", False):
+             self.metadata_extractor = DonutMetadataExtractor()
+        
         if cfg.pipeline.refinement.enabled:
-            self.refiner = LLMRefiner()
+            self.refiner = LLMRefiner(
+                use_vllm=cfg.pipeline.refinement.get("use_vllm", True),
+                load_in_8bit=cfg.pipeline.refinement.get("load_in_8bit", False)
+            )
         else:
             self.refiner = None
 
@@ -39,7 +48,17 @@ class LaTeXifyPipeline:
         images = self.ingestor.ingest(pdf_path)
         
         full_document_blocks = []
+        metadata = {}
         
+        # 0. Metadata Extraction (Page 1)
+        if self.metadata_extractor and images:
+            logger.info("Extracting metadata from Page 1...")
+            try:
+                metadata = self.metadata_extractor.extract(images[0])
+                logger.info(f"Metadata: {metadata}")
+            except Exception as e:
+                logger.error(f"Metadata extraction failed: {e}")
+
         for i, img_path in enumerate(images):
             logger.info(f"Analyzing page {i+1}")
             detections = self.layout.detect(img_path)
@@ -73,8 +92,6 @@ class LaTeXifyPipeline:
                     math_indices.append(j)
                     page_blocks_data.append({'bbox': bbox, 'category': category, 'conf': conf, 'content': None})
                 else:
-                    # Text/Table - process immediately or batch similarly (Text batching is harder with Paddle's structure but possible)
-                    # For now keep text sequential or use Paddle's batch mode if we refactor
                     content = ""
                     if category in ["Text_Block", "Title", "Caption", "List"]:
                         content = self.text_ocr.recognize(crop)
@@ -89,11 +106,6 @@ class LaTeXifyPipeline:
             if math_crops:
                 logger.info(f"Batch processing {len(math_crops)} equations...")
                 math_results = self.math_ocr.predict_batch(math_crops)
-                
-                # Fill back results
-                # math_indices maps 1:1 to math_crops order
-                # But page_blocks_data is Append-only. We need to map math_indices relative to... wait.
-                # simpler: iterate page_blocks_data and fill Nones.
                 
                 math_ptr = 0
                 for item in page_blocks_data:
@@ -121,6 +133,15 @@ class LaTeXifyPipeline:
         # Assemble
         raw_latex = self.assembler.assemble(full_document_blocks)
         
+        # Prepend Metadata if available
+        if metadata:
+            meta_tex = f"\\title{{{metadata.get('title', '')}}}\\n\\author{{{metadata.get('authors', '')}}}\\n\\begin{{abstract}}
+{metadata.get('abstract', '')}
+\\end{{abstract}}
+
+"
+            raw_latex = meta_tex + raw_latex
+
         # Refine & Compile Loop
         final_latex = raw_latex
         if self.refiner:
@@ -139,8 +160,6 @@ class LaTeXifyPipeline:
                     break
                 else:
                     logger.warning(f"Compilation failed. Log snippet: {log[:200]}...")
-                    # Feed error back to refiner
-                    # We need a new method in Refiner or just reuse refine with a specific prompt
                     final_latex = self.refiner.fix_error(final_latex, log)
         
         return final_latex
