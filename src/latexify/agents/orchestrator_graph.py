@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from typing import Dict, Any
 
 from latexify.pipeline.formal_verification import FormalVerifier
@@ -11,7 +12,7 @@ class OrchestratorGraph:
         self.verifier = FormalVerifier()
         self.vectorizer = Vectorizer()
 
-    def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         # ... existing logic ...
         
         # [Neuro-Symbolic 2.0] Verification Step
@@ -29,5 +30,10 @@ class OrchestratorGraph:
              pass
 
         return state
-        
-    # ... existing methods ...
+
+async def run_layout_graph(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Async entry point for the graph execution.
+    """
+    orchestrator = OrchestratorGraph()
+    return await orchestrator.run(state)

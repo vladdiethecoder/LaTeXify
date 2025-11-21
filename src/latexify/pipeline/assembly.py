@@ -838,10 +838,13 @@ def _traditional_compile(tex_path: Path) -> tuple[Path | None, List[Dict[str, ob
         else:
             cmd = [binary, "-pdf", "-silent", str(tex_path)]
         try:
-            subprocess.run(cmd, check=True, cwd=str(tex_path.parent))
+            subprocess.run(cmd, check=True, cwd=str(tex_path.parent), timeout=60)
             if pdf_path.exists():
                 attempts.append({"engine": engine, "success": True})
                 return pdf_path, attempts
+        except subprocess.TimeoutExpired:
+            LOGGER.warning("TeX compilation timed out with %s", engine)
+            attempts.append({"engine": engine, "success": False, "error": "timeout"})
         except subprocess.CalledProcessError as exc:  # pragma: no cover - depends on host
             LOGGER.warning("TeX compilation failed with %s: %s", engine, exc)
             attempts.append({"engine": engine, "success": False})

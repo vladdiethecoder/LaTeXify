@@ -21,3 +21,7 @@ class CompilationError(LatexifyError):
 class PipelineConfigurationError(LatexifyError):
     """Raised when the pipeline is misconfigured."""
     pass
+
+class HallucinationError(LatexifyError):
+    """Raised when the model output is determined to be hallucinated or invalid."""
+    pass

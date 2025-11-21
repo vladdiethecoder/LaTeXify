@@ -1,19 +1,8 @@
-"""Shared dataclasses used by the experimental agent stack."""
+"""Shared pydantic models used by the experimental agent stack."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
-
-@dataclass
-class ContentChunk:
-    """Lightweight representation of a chunk/page that needs layout reasoning."""
-
-    chunk_id: str
-    text: str
-    metadata: dict[str, object] = field(default_factory=dict)
-
-
+from typing import Dict, List, Optional, Any
+from pydantic import BaseModel, Field, ConfigDict
 
 AGENT_PIPELINE_STAGE_MAP = {
     "creative": "branch_b_vision",
@@ -23,10 +12,17 @@ AGENT_PIPELINE_STAGE_MAP = {
     "refinement": "robust_compilation",
 }
 
+class ContentChunk(BaseModel):
+    """Lightweight representation of a chunk/page that needs layout reasoning."""
+    model_config = ConfigDict(strict=True)
 
-@dataclass
-class GraphState:
+    chunk_id: str
+    text: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class GraphState(BaseModel):
     """Mutable state passed between agents, aligned with pipeline telemetry."""
+    model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
 
     chunk_id: str
     content: str
@@ -35,14 +31,15 @@ class GraphState:
     evaluation: Optional[str] = None
     score_notes: Optional[str] = None
     diagnostics: Optional[str] = None
-    research_snippets: List[str] = field(default_factory=list)
-    history: List[str] = field(default_factory=list)
+    research_snippets: List[str] = Field(default_factory=list)
+    history: List[str] = Field(default_factory=list)
     branch: Optional[str] = None
-    stage_history: List[str] = field(default_factory=list)
-    metrics: Dict[str, float] = field(default_factory=dict)
-    artifacts: Dict[str, str] = field(default_factory=dict)
-    quality_report: Dict[str, object] = field(default_factory=dict)
-    reward_report: Dict[str, object] = field(default_factory=dict)
+    stage_history: List[str] = Field(default_factory=list)
+    metrics: Dict[str, float] = Field(default_factory=dict)
+    artifacts: Dict[str, str] = Field(default_factory=dict)
+    quality_report: Dict[str, Any] = Field(default_factory=dict)
+    reward_report: Dict[str, Any] = Field(default_factory=dict)
+    config: Dict[str, Any] = Field(default_factory=dict) # Added config for flexibility
 
     def log(self, message: str) -> None:
         self.history.append(message)
@@ -63,6 +60,5 @@ class GraphState:
 
     def set_reward_report(self, report: Dict[str, object]) -> None:
         self.reward_report = dict(report)
-
 
 __all__ = ["ContentChunk", "GraphState", "AGENT_PIPELINE_STAGE_MAP"]

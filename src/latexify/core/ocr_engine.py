@@ -108,7 +108,6 @@ class FlorenceBackend(OCRBackend):
         try:
             from latexify.models.model_adapters import FlorenceAdapter, FlorenceConfig
             model_dir = self.models_dir / "ocr" / "florence-2-large"
-            # Simple device selection for now
             device = "cuda" if torch and torch.cuda.is_available() else "cpu"
             self._model = FlorenceAdapter(FlorenceConfig(model_dir=model_dir, device=device))
         except Exception as e:
@@ -129,10 +128,98 @@ class FlorenceBackend(OCRBackend):
             LOGGER.warning(f"Florence failed: {e}")
             return None
 
+class InternVLBackend(OCRBackend):
+    name = "internvl"
+    requires_gpu = True
+
+    def __init__(self, models_dir: Path):
+        super().__init__(models_dir)
+        self._model = None
+        self._subdir = "ocr/internvl-chat-v1-5" # Simplified path, actual path logic in config
+
+    def is_available(self) -> bool:
+        # Simple check, robust check uses resolved path
+        return True 
+
+    def load(self) -> None:
+        if self._model: return
+        try:
+            from latexify.models.model_adapters import InternVLAdapter, InternVLConfig
+            # Logic to find model path
+            # For now assume standard
+            # In production, this should use settings.internvl_model to find path
+            model_dir = self.models_dir / "ocr" / settings.internvl_model.replace("/", "-").lower()
+            if not model_dir.exists():
+                 # Fallback or raise
+                 pass
+            device = "cuda" if torch and torch.cuda.is_available() else "cpu"
+            self._model = InternVLAdapter(InternVLConfig(model_dir=model_dir, device=device))
+        except Exception as e:
+            raise ModelLoadError(f"Failed to load InternVL: {e}")
+
+    def unload(self) -> None:
+        if self._model and hasattr(self._model, 'close'):
+            self._model.close()
+        self._model = None
+        if torch: torch.cuda.empty_cache()
+
+    def process_page(self, image_path: Path) -> Optional[Tuple[str, Dict[str, object]]]:
+        if not self._model: self.load()
+        try:
+            text = self._model.predict(image_path)
+            return text, {}
+        except Exception as e:
+            LOGGER.warning(f"InternVL failed: {e}")
+            return None
+
+class QwenVLBackend(OCRBackend):
+    name = "qwenvl"
+    requires_gpu = True
+
+    def __init__(self, models_dir: Path):
+        super().__init__(models_dir)
+        self._model = None
+
+    def is_available(self) -> bool:
+        return True
+
+    def load(self) -> None:
+        if self._model: return
+        try:
+            from latexify.models.vlm_adapters import get_vlm_adapter
+            model_dir = self.models_dir / "ocr" / settings.qwenvl_model.replace("/", "-").lower()
+            device = "cuda" if torch and torch.cuda.is_available() else "cpu"
+            self._model = get_vlm_adapter(
+                "qwen-vl",
+                model_id=str(model_dir),
+                device=device,
+                load_in_8bit=False, # Optimize for 32GB VRAM -> FP16/BF16 preferred if space allows
+                load_in_4bit=False 
+            )
+        except Exception as e:
+            raise ModelLoadError(f"Failed to load QwenVL: {e}")
+
+    def unload(self) -> None:
+        if self._model and hasattr(self._model, 'close'):
+            self._model.close()
+        self._model = None
+        if torch: torch.cuda.empty_cache()
+
+    def process_page(self, image_path: Path) -> Optional[Tuple[str, Dict[str, object]]]:
+        if not self._model: self.load()
+        try:
+            text = self._model.describe(image_path, prompt="Transcribe this page to LaTeX.")
+            return text, {}
+        except Exception as e:
+            LOGGER.warning(f"QwenVL failed: {e}")
+            return None
+
 # Factory Registry
 BACKEND_REGISTRY: Dict[str, Type[OCRBackend]] = {
     "nougat": NougatBackend,
     "florence2": FlorenceBackend,
+    "internvl": InternVLBackend,
+    "qwenvl": QwenVLBackend,
 }
 
 class OCREngine:
@@ -145,9 +232,11 @@ class OCREngine:
         self._init_backends()
 
     def _init_backends(self):
-        # Simple strategy: if auto, try Florence then Nougat
         if self.mode == "auto":
             candidates = ["florence2", "nougat"]
+        elif self.mode == "ensemble":
+            # Best quality mix for 5090
+            candidates = ["florence2", "qwenvl", "nougat"]
         elif self.mode in BACKEND_REGISTRY:
             candidates = [self.mode]
         else:
@@ -157,6 +246,8 @@ class OCREngine:
             cls = BACKEND_REGISTRY.get(name)
             if cls:
                 backend = cls(self.models_dir)
+                # We skip availability check here to allow lazy loading or error on load
+                # But better to check if directory exists to avoid loading phantom backends
                 if backend.is_available():
                     self.backends.append(backend)
         
@@ -174,8 +265,12 @@ class OCREngine:
                     text, meta = result
                     sources[backend.name] = text
                     metadata[backend.name] = meta
-                    # If sequential, we might want to continue or stop. 
-                    # Current logic: collect all available.
+                
+                # Aggressive memory management for 32GB RAM / 32GB VRAM
+                # If running multiple heavy models (ensemble), unload immediately
+                if settings.ocr_release_mode == "page":
+                    backend.unload()
+                    
             except Exception as e:
                 LOGGER.error(f"Backend {backend.name} failed on page {page_index}: {e}")
                 

@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     # --- Compilation ---
     compilation_retry_count: int = 5
     layout_confidence_threshold: float = 0.0
+    
+    # --- Orchestration ---
+    max_attempts: int = Field(4, description="Maximum attempts for agent loops")
+    
+    # --- Neuro-Symbolic Flags ---
+    verify_truth: bool = Field(False, description="Enable formal verification (Lean 4)")
+    vectorize_diagrams: bool = Field(False, description="Enable VLM-to-TikZ vectorization")
+
+    # --- Secrets (Read from Env Only) ---
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API Key")
+    anthropic_api_key: Optional[str] = Field(None, description="Anthropic API Key")
 
     @field_validator("ocr_vram_headroom_gb", mode="before")
     @classmethod

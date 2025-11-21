@@ -1,0 +1,23 @@
+# LaTeXify Prompt Registry
+
+refinement_prompt: |
+  You are a LaTeX expert. Refine the following LaTeX snippet to match the style of the provided examples.
+  Source Text: {source_text}
+  Baseline LaTeX: {baseline_latex}
+  
+  Examples:
+  {examples}
+  
+  Return only the refined LaTeX code.
+
+hallucination_check_prompt: |
+  Verify if the following section headers are present in the original text.
+  Headers: {headers}
+  Original Text: {text}
+  
+  Return a JSON list of hallucinated headers.
+
+vectorization_prompt: |
+  Generate standalone TikZ code to precisely replicate this diagram.
+  Use PGFPlots if data-driven.
+  Wrap the output in \begin{tikzpicture}...\end{tikzpicture}.

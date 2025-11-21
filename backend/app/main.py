@@ -13,4 +13,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(events_router)
+app.include_router(events_router, prefix="/v1/events")
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
