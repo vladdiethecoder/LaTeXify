@@ -7,6 +7,7 @@ import logging
 sys.path.append(str(Path(__file__).parent / "src"))
 
 from latexify.core.pipeline import LaTeXifyPipeline
+from latexify.core.compiler import LatexCompiler
 
 def load_config():
     # Manual config loading to bypass Hydra/Python 3.14 incompatibility
@@ -41,9 +42,6 @@ def main():
     
     logger.info("Loading configuration...")
     cfg = load_config()
-    # Fix structure if needed: pipeline.yaml has 'pipeline' key.
-    # Hardware/Model seem to be flat.
-    # Let's just ensure cfg.pipeline.ingestion exists.
     
     # For now, hardcoding input pdf
     input_pdf = "src/latexify/inputs/sample.pdf" 
@@ -57,6 +55,14 @@ def main():
     output_path = Path("output.tex")
     output_path.write_text(result, encoding="utf-8")
     logger.info(f"Output written to {output_path}")
+    
+    logger.info("Compiling to PDF...")
+    compiler = LatexCompiler(engine="tectonic")
+    success, log = compiler.compile(result, output_pdf_path=Path("sample.pdf"))
+    if success:
+        logger.info(f"PDF compiled successfully: {Path('sample.pdf').absolute()}")
+    else:
+        logger.error(f"PDF Compilation failed: {log}")
 
 if __name__ == "__main__":
     main()

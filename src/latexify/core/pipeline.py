@@ -131,19 +131,8 @@ class LaTeXifyPipeline:
             full_document_blocks.extend(sorted_blocks)
             
         # Assemble
-        raw_latex = self.assembler.assemble(full_document_blocks)
+        raw_latex = self.assembler.assemble(full_document_blocks, metadata=metadata)
         
-        # Prepend Metadata if available
-        if metadata:
-            meta_tex = f"""\\title{{{metadata.get('title', '')}}}
-\\author{{{metadata.get('authors', '')}}}
-\\begin{{abstract}}
-{metadata.get('abstract', '')}
-\\end{{abstract}}
-
-"""
-            raw_latex = meta_tex + raw_latex
-
         # Refine & Compile Loop
         final_latex = raw_latex
         if self.refiner:

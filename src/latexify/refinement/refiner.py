@@ -38,14 +38,18 @@ class LLMRefiner:
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             
+            # For 8bit, avoid passing device_map="auto" if it causes dispatch errors.
+            # Usually load_in_8bit handles device placement on GPU 0 by default.
             model_kwargs = {
-                "device_map": self.device,
                 "torch_dtype": torch.float16,
                 "trust_remote_code": True
             }
             
             if self.load_in_8bit:
                 model_kwargs["load_in_8bit"] = True
+                # Do not set device_map here to avoid .to() calls during dispatch
+            else:
+                model_kwargs["device_map"] = self.device
             
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
             
@@ -58,6 +62,8 @@ class LLMRefiner:
 
         except Exception as e:
             print(f"Failed to load LLM ({e}). Switching to MOCK mode.")
+            import traceback
+            traceback.print_exc()
             self.mock_mode = True
 
     def refine(self, raw_latex: str) -> str:
@@ -126,6 +132,7 @@ class LLMRefiner:
                 outputs = self.model.generate(**inputs, max_new_tokens=4096)
             result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
+        # Clean up output
         if "FIXED LATEX:" in result:
             return result.split("FIXED LATEX:")[-1].strip()
         return result
