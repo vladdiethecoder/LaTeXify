@@ -58,7 +58,7 @@ def _resolve_paths(args: argparse.Namespace) -> Dict[str, Path]:
 def main() -> None:
     args = parse_args()
     spec = util.spec_from_file_location(
-        "visual_regression_module", REPO_ROOT / "release" / "pipeline" / "visual_regression.py"
+        "visual_regression_module", REPO_ROOT / "src" / "latexify" / "pipeline" / "visual_regression.py"
     )
     if spec is None or spec.loader is None:
         raise SystemExit("Unable to load visual_regression module")

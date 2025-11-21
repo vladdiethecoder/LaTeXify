@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-command helper to register layout datasets, ensure LayoutLM assets, and run the release pipeline."""
+"""Single-command helper to register layout datasets, ensure LayoutLM assets, and run the latexify.pipeline."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Iterable, List, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRAINING_DIR = REPO_ROOT / "training_data"
-RELEASE_VENV_PY = REPO_ROOT / "release" / ".venv" / "bin" / "python"
+RELEASE_VENV_PY = REPO_ROOT / "src" / "latexify" / ".venv" / "bin" / "python"
 DEFAULT_LAYOUT_SLUGS: Sequence[str] = tuple(
     sorted(
         {
@@ -90,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extra-env",
         action="append",
-        help="Additional KEY=VALUE entries exported before running the release pipeline.",
+        help="Additional KEY=VALUE entries exported before running the latexify.pipeline.",
     )
     return parser.parse_args()
 

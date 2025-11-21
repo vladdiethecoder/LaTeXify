@@ -1,7 +1,7 @@
 from typing import AsyncIterator, Dict, Any
 
 try:
-    from release.agents.orchestrator_graph import build_graph_manifest
+    from latexify.agents.orchestrator_graph import build_graph_manifest
 except Exception:  # runtime safe guard; graph manifest is optional
     build_graph_manifest = None
 

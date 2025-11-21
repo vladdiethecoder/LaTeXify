@@ -1,10 +1,10 @@
-"""Helpers that adapt release pipeline components for the backend demo."""
+"""Helpers that adapt latexify.pipeline components for the backend demo."""
 from __future__ import annotations
 
 from typing import Dict, Iterable, Iterator, List
 
-from release.core import common
-from release.pipeline import planner
+from latexify.core import common
+from latexify.pipeline import planner
 
 _SAMPLE_CHUNKS: List[common.Chunk] = [
     common.Chunk(

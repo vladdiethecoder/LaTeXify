@@ -1,10 +1,10 @@
 import pytest
 
-from release.pipeline.cross_validation import (
+from latexify.pipeline.cross_validation import (
     TableStructureDiff,
     SymbolicMathValidator,
 )
-from release.core import common
+from latexify.core import common
 
 
 def _make_chunk(region_type: str, text: str = "", metadata=None):

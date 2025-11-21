@@ -6,7 +6,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from release.core.data_pathway_logger import init_logger  # noqa: E402
+from latexify.core.data_pathway_logger import init_logger  # noqa: E402
 
 
 def read_jsonl(path: Path):
