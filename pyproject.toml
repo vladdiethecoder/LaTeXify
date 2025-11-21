@@ -22,12 +22,24 @@ dependencies = [
     "datasets>=4.4.0",
     "pyarrow>=22.0.0",
     "pandas>=2.3.0",
-    "flash-attn>=2.4.2",
-    "magic-pdf[full]>=0.1.0",
-    "vllm>=0.2.0",
     "loguru>=0.7.0",
     "tenacity>=8.2.0",
     "dspy-ai>=2.0.0",
+    # Core Pipeline Deps
+    "ultralytics>=8.2.0",
+    "pymupdf>=1.24.0",
+    "paddleocr>=2.7.0",
+    "paddlepaddle-gpu>=2.6.0",
+    "unimernet[full]>=0.1.0",
+    "transformers>=4.40.0",
+    "accelerate>=0.30.0",
+    "tectonic>=0.1.0",
+    "arxiv>=2.1.0",
+    "hydra-core>=1.3.2",
+    "omegaconf>=2.3.0",
+    "nltk>=3.8.1",
+    "jaxtyping>=0.2.28",
+    "torchtyping>=0.1.4"
 ]
 
 [tool.setuptools]

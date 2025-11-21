@@ -1,33 +1,18 @@
-version: '3.8'
-
 services:
-  backend:
+  latexify:
     build: .
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
+    image: latexify:latest
     volumes:
-      - ./src:/app/src
-      - ./logs:/app/logs
-    depends_on:
-      - redis
-      - chroma
-
-  redis:
-    image: redis:alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-
-  chroma:
-    image: chromadb/chroma
-    ports:
-      - "8000:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-
-volumes:
-  redis_data:
-  chroma_data:
+      - .:/app
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+    command: python3 run_latexify.py
+    ipc: host # Necessary for PyTorch/vLLM shared memory

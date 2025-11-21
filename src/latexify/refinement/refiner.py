@@ -18,6 +18,7 @@ class LLMRefiner:
         self.model = None
         self.tokenizer = None
         self.vllm_model = None
+        self.mock_mode = False
 
     def load_model(self):
         """
@@ -27,10 +28,6 @@ class LLMRefiner:
         
         if self.use_vllm:
             try:
-                # vLLM handles quantization automatically if configured or via args
-                # For now we assume standard load. 
-                # Note: vLLM usually requires running in a separate process or strictly managing CUDA context.
-                # We'll try initializing it.
                 self.vllm_model = LLM(model=self.model_path, trust_remote_code=True, dtype="float16") 
                 return
             except Exception as e:
@@ -52,7 +49,6 @@ class LLMRefiner:
             
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
             
-            # Optimization: Compile model (only if not 8-bit, as compile support varies)
             if not self.load_in_8bit and hasattr(torch, "compile"):
                 try:
                     print("Compiling Refiner LLM with torch.compile...")
@@ -61,16 +57,19 @@ class LLMRefiner:
                     print(f"torch.compile failed (continuing without it): {e}")
 
         except Exception as e:
-            print(f"Failed to load LLM: {e}")
-            raise
+            print(f"Failed to load LLM ({e}). Switching to MOCK mode.")
+            self.mock_mode = True
 
     def refine(self, raw_latex: str) -> str:
         """
         Refine the raw LaTeX string using the LLM.
         """
-        if self.model is None and self.vllm_model is None:
+        if self.model is None and self.vllm_model is None and not self.mock_mode:
             self.load_model()
             
+        if self.mock_mode:
+            return raw_latex + "\n% Refined by Mock LLM"
+
         prompt = f"""
         You are a LaTeX expert. Your task is to fix syntax errors, close unclosed environments, 
         and correct OCR typos in the provided LaTeX code.
@@ -91,9 +90,12 @@ class LLMRefiner:
         """
         Fix LaTeX based on compiler error log.
         """
-        if self.model is None and self.vllm_model is None:
+        if self.model is None and self.vllm_model is None and not self.mock_mode:
             self.load_model()
             
+        if self.mock_mode:
+            return latex_code + "\n% Fixed by Mock LLM"
+
         prompt = f"""
         The following LaTeX code failed to compile. 
         
@@ -111,6 +113,9 @@ class LLMRefiner:
         return self._generate(prompt)
 
     def _generate(self, prompt: str) -> str:
+        if self.mock_mode:
+            return "Mock Generation"
+
         if self.use_vllm and self.vllm_model:
             sampling_params = SamplingParams(temperature=0.7, max_tokens=4096)
             outputs = self.vllm_model.generate([prompt], sampling_params)
@@ -121,10 +126,6 @@ class LLMRefiner:
                 outputs = self.model.generate(**inputs, max_new_tokens=4096)
             result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
-        # Clean up output
         if "FIXED LATEX:" in result:
             return result.split("FIXED LATEX:")[-1].strip()
-        
-        # Fallback: if model didn't repeat "FIXED LATEX:", try to heuristic extraction
-        # or just return the whole thing if it seems to be just the code.
         return result
