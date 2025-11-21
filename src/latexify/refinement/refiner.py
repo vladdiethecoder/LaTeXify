@@ -49,9 +49,10 @@ class LLMRefiner:
             
             if self.load_in_8bit:
                 model_kwargs["load_in_8bit"] = True
-                # Do not set device_map here to avoid .to() calls during dispatch
+                model_kwargs["device_map"] = "auto"
             elif self.load_in_4bit:
                 model_kwargs["load_in_4bit"] = True
+                model_kwargs["device_map"] = "auto"
             else:
                 model_kwargs["device_map"] = self.device
             

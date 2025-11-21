@@ -95,8 +95,27 @@ streamlit run apps/ui/app.py
     python scripts/verify.py --run-pipeline
     ```
 
+## Phase 4: Performance Optimization
+
+This pipeline includes specific optimizations for the **NVIDIA RTX 5090 (Blackwell Architecture)**.
+
+### Key Optimizations
+1.  **FP8 Quantization**: Uses `torchao` to quantize the 72B parameter Qwen model to FP8, reducing VRAM usage by ~50% and doubling inference throughput.
+2.  **FlashAttention-3**: Leverages the latest attention kernels for Blackwell GPUs.
+3.  **Torch Compile**: Uses `torch.compile(mode='max-autotune')` to fuse kernels and reduce Python overhead.
+
+### Running with Optimizations
+
+To run the pipeline with all Phase 4 optimizations enabled:
+
+```bash
+python scripts/run_phase4_pipeline.py input.pdf
+```
+
+Configuration is managed via `config/hardware/rtx5090.yaml`.
+
 ## Documentation
 
-*   [Model Zoo](docs/MODEL_ZOO.md)
-*   [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+*   [Model Zoo](docs/model_zoo.md)
+*   [Troubleshooting Guide](docs/troubleshooting.md)
 *   [Verification Protocol](docs/VERIFICATION_PROTOCOL.md)
