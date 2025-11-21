@@ -33,42 +33,67 @@ LaTeXify/
 
 ## Setup
 
-1.  **Docker (Recommended)**:
-    ```bash
-    docker build -t latexify .
-    docker run --gpus all -v $(pwd):/app latexify
-    ```
+### 1. Docker (Recommended)
 
-2.  **Local Development**:
-    ```bash
-    uv sync
-    pre-commit install
-    ```
+The easiest way to run LaTeXify with full GPU support (CUDA 12.4) is using Docker Compose.
+
+```bash
+# Build and Run Pipeline
+docker compose up --build
+
+# Run Interactive Shell
+docker compose run --rm latexify /bin/bash
+```
+
+**Prerequisites:**
+*   Docker Engine
+*   NVIDIA Container Toolkit (`nvidia-docker2`)
+
+### 2. Local Development
+
+If you have a compatible environment (Linux, Python 3.10/3.11, CUDA 12.x):
+
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Sync dependencies
+uv sync
+
+# Install pre-commit hooks
+pre-commit install
+```
 
 ## Usage
 
-Run the main pipeline:
+### Run Pipeline
 
 ```bash
+# Inside Docker or venv
 python run_latexify.py --pdf input.pdf
 ```
 
-Run the Demo UI:
+### Run Demo UI
 
 ```bash
 streamlit run apps/ui/app.py
 ```
+
+## Golden Set Verification
+
+1.  **Populate Golden Set**:
+    ```bash
+    python scripts/download_golden_set.py
+    ```
+    This downloads sample PDFs from arXiv to `data/golden_set/`.
+
+2.  **Run Verification**:
+    ```bash
+    python scripts/verify.py --run-pipeline
+    ```
 
 ## Documentation
 
 *   [Model Zoo](docs/MODEL_ZOO.md)
 *   [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
 *   [Verification Protocol](docs/VERIFICATION_PROTOCOL.md)
-
-## Quality Assurance
-
-We verify pipeline accuracy using a 50-document Golden Set.
-
-```bash
-python scripts/verify.py
-```
