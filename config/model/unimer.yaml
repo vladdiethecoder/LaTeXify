@@ -1,0 +1,3 @@
+name: unimernet
+weights: "unimernet_base"
+batch_size: 32

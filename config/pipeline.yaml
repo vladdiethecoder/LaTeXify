@@ -1,0 +1,15 @@
+defaults:
+  - hardware: rtx5090
+  - model: unimer
+  - _self_
+
+pipeline:
+  ingestion:
+    dpi: 300
+  layout:
+    model: yolov10n.pt
+    conf_threshold: 0.25
+  ocr:
+    lang: en
+  refinement:
+    enabled: true

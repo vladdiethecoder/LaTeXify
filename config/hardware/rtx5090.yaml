@@ -1,0 +1,6 @@
+name: rtx5090
+vram: 32GB
+device: cuda
+precision: fp16
+batch_size: 16
+use_flash_attn: true
