@@ -25,3 +25,18 @@ class ReadingOrder:
         # For v1, we'll use a robust row-major sort with a threshold.
         
         return sorted(blocks, key=lambda b: (b.page_num, b.bbox[1], b.bbox[0]))
+
+class GNNReadingOrder(ReadingOrder):
+    def __init__(self, model_path: str = None):
+        # TODO: Load GNN model
+        pass
+
+    def sort(self, blocks: List[LayoutBlock]) -> List[LayoutBlock]:
+        """
+        Use GNN to predict edge connections and topological sort.
+        """
+        # 1. Build Graph from blocks (nodes)
+        # 2. Predict edges
+        # 3. Topological Sort
+        # For now, fallback to heuristic
+        return super().sort(blocks)
