@@ -16,6 +16,7 @@ import numpy as np
 from latexify.agents.base import BaseExtractor
 from latexify.core.document_state import BoundingBox, LayoutRegion
 from latexify.exceptions import LayoutDetectionError, ModelLoadingError
+from latexify.optimization import apply_fp8_quantization, CUDAGraphWrapper, warmup_model
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,26 @@ class DocLayoutYOLODetector(BaseExtractor):
         self.padding_percent = self.config.get("padding_percent", 0.08)
         self.use_cuda_graphs = self.config.get("use_cuda_graphs", False)
         self.torch_compile = self.config.get("torch_compile", True)
+        self.use_fp8 = self.config.get("use_fp8", False)
+        self.cuda_graph_wrapper = None
         
     def _initialize(self):
         """Load the YOLO model and optionally apply optimizations."""
         try:
             logger.info(f"Loading DocLayout-YOLO from {self.model_path}")
             self.model = YOLO(self.model_path)
+            
+            # Apply FP8 quantization if enabled (RTX 5090 optimization)
+            if self.use_fp8 and torch.cuda.is_available():
+                logger.info("Applying FP8 quantization to DocLayout-YOLO...")
+                try:
+                    self.model.model = apply_fp8_quantization(
+                        self.model.model,
+                        device="cuda"
+                    )
+                    logger.info("FP8 quantization applied successfully")
+                except Exception as e:
+                    logger.warning(f"FP8 quantization failed: {e}. Proceeding without FP8.")
             
             # Apply torch.compile if enabled (RTX 5090 optimization)
             if self.torch_compile and torch.cuda.is_available():
@@ -58,6 +73,16 @@ class DocLayoutYOLODetector(BaseExtractor):
                     )
                 except Exception as e:
                     logger.warning(f"torch.compile failed: {e}. Proceeding without compilation.")
+            
+            # Warmup model
+            if torch.cuda.is_available():
+                logger.info("Warming up DocLayout-YOLO...")
+                warmup_model(
+                    self.model.model,
+                    input_shape=(1, 3, 640, 640),
+                    n_iters=5,
+                    verbose=False
+                )
             
             logger.info("DocLayout-YOLO loaded successfully")
             

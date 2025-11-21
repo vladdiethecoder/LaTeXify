@@ -1,6 +1,32 @@
-name: rtx5090
-vram: 32GB
-device: cuda
-precision: fp16
-batch_size: 16
-use_flash_attn: true
+# RTX 5090 Hardware Configuration for LaTeXify Gen 3.0
+#
+# Blackwell Architecture (Compute Capability 12.0):
+# - 90 GB GDDR7 VRAM
+# - 1792 GB/s memory bandwidth
+# - FP8 Tensor Cores for 2x AI inference speedup
+# - FlashAttention-3 support
+
+name: "rtx5090"
+compute_capability: [12, 0]
+
+# Memory management
+memory:
+  total_vram_gb: 90
+  allocation_strategy: "max_split_size_mb:512" # Prevent fragmentation
+  reserved_vram_gb: 4 # Reserve for system/OS
+  max_batch_size: 64 # For math equations, layout crops
+
+# Compute settings
+compute:
+  precision: "fp16" # Default precision (FP8 applied via optimization.use_fp8)
+  cudnn_benchmark: true # Auto-tune conv kernels
+  tf32_matmul: true # TensorFloat-32 for matmul (faster, minimal accuracy loss)
+
+# RTX 5090 Specific Optimizations
+optimization:
+  use_fp8: true # Enable FP8 quantization via torchao
+  use_flash_attention: true # FlashAttention-3 for VLM
+  use_cuda_graphs: false # CUDA Graphs for fixed-size batches (experimental, can cause issues with dynamic shapes)
+  torch_compile: true # torch.compile() with max-autotune
+  compile_mode: "max-autotune" # Options: default, reduce-overhead, max-autotune
+

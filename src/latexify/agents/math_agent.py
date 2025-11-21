@@ -14,6 +14,7 @@ from PIL import Image
 
 from latexify.agents.base import BaseExtractor, BaseAgent
 from latexify.exceptions import ExtractionError
+from latexify.optimization import apply_fp8_quantization, warmup_model
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class UniMERExtractor(BaseExtractor):
         self.device = self.config.get("device", "cuda")
         self.use_fp16 = self.config.get("use_fp16", True)
         self.torch_compile = self.config.get("torch_compile", True)
+        self.use_fp8 = self.config.get("use_fp8", False)
         self.mock_mode = not UNIMER_AVAILABLE
         
         self._last_confidence = None
@@ -62,6 +64,8 @@ class UniMERExtractor(BaseExtractor):
             return
         
         try:
+            import torch
+            
             logger.info(f"Loading UniMERNet from {self.model_path}")
             self.cfg = Config({
                 "model": {"name": "unimernet_base"},
@@ -69,10 +73,21 @@ class UniMERExtractor(BaseExtractor):
             })
             self.predictor = UniMERPredictor(self.cfg)
             
+            # Apply FP8 quantization if enabled
+            if self.use_fp8 and hasattr(self.predictor, 'model'):
+                logger.info("Applying FP8 quantization to UniMERNet...")
+                try:
+                    self.predictor.model = apply_fp8_quantization(
+                        self.predictor.model,
+                        device=self.device
+                    )
+                    logger.info("FP8 quantization applied successfully")
+                except Exception as e:
+                    logger.warning(f"FP8 quantization failed: {e}. Proceeding without FP8.")
+            
             # Apply torch.compile if enabled
             if self.torch_compile:
                 try:
-                    import torch
                     if hasattr(self.predictor, 'model'):
                         logger.info("Applying torch.compile to UniMERNet...")
                         self.predictor.model = torch.compile(
@@ -81,6 +96,20 @@ class UniMERExtractor(BaseExtractor):
                         )
                 except Exception as e:
                     logger.warning(f"torch.compile failed: {e}")
+            
+            # Warmup model
+            if hasattr(self.predictor, 'model') and torch.cuda.is_available():
+                logger.info("Warming up UniMERNet...")
+                try:
+                    # Estimate typical equation crop size
+                    warmup_model(
+                        self.predictor.model,
+                        input_shape=(1, 3, 224, 224),
+                        n_iters=5,
+                        verbose=False
+                    )
+                except Exception as e:
+                    logger.debug(f"Warmup failed (non-critical): {e}")
             
             logger.info("UniMERNet loaded successfully")
             
