@@ -31,6 +31,10 @@ models/
 release/models/
 release/inputs/*.pdf
 release/cache/
+*.pt
+*.pth
+*.bin
+*.safetensors
 
 # Build + run artifacts
 build/
@@ -42,6 +46,7 @@ release/docs/_build/
 release/docs/_static/
 release/docs/_images/
 release/docs/_doctrees/
+output.tex
 
 # Training + research outputs
 training_runs/
@@ -49,6 +54,13 @@ training_data/raw/
 !training_data/raw/**/.gitkeep
 training_data/processed/
 !training_data/processed/**/.gitkeep
+
+# Data (local cache)
+data/test_output/
+data/golden_set/*.pdf
+data/golden_set/*.tar.gz
+data/golden_set/*.tex
+!data/golden_set/README.md
 
 # Frontend + local tooling
 node_modules/
