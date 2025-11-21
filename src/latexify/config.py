@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     max_attempts: int = Field(4, description="Maximum attempts for agent loops")
     
     # --- Neuro-Symbolic Flags ---
-    verify_truth: bool = Field(False, description="Enable formal verification (Lean 4)")
+    verify_truth: bool = Field(True, description="Enable formal verification (Lean 4)")
     vectorize_diagrams: bool = Field(False, description="Enable VLM-to-TikZ vectorization")
 
     # --- Secrets (Read from Env Only) ---
