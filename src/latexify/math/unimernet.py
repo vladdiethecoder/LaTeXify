@@ -30,3 +30,8 @@ class UniMERNetMathRecognizer(MathRecognizer):
         # image should be a PIL image
         output = self.predictor.predict(image)
         return output["latex"]
+
+    def predict_batch(self, images: list[Any]) -> list[str]:
+        # TODO: Check if self.predictor.predict supports list[Image] directly for true batch inference
+        # If not, we should implement a custom collate_fn here to stack tensors and run model.generate
+        return [self.predict(img) for img in images]

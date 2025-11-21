@@ -14,3 +14,16 @@ class MathRecognizer(ABC):
             str: LaTeX string.
         """
         pass
+
+    def predict_batch(self, images: list[Any]) -> list[str]:
+        """
+        Predict LaTeX from a batch of equation images.
+        Default implementation loops over predict().
+        
+        Args:
+            images: List of PIL Images or numpy arrays.
+            
+        Returns:
+            List[str]: List of LaTeX strings.
+        """
+        return [self.predict(img) for img in images]

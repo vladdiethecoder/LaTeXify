@@ -1,9 +1,11 @@
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Any
 
 import hydra
 from omegaconf import DictConfig
+import cv2
+from PIL import Image
 
 from latexify.ingestion.pymupdf import PyMuPDFIngestor
 from latexify.layout.yolo import YOLOLayoutEngine
@@ -12,6 +14,7 @@ from latexify.ocr.paddle import PaddleTextRecognizer
 from latexify.core.reading_order import ReadingOrder, LayoutBlock
 from latexify.core.assembler import Assembler
 from latexify.refinement.refiner import LLMRefiner
+from latexify.core.compiler import LatexCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ class LaTeXifyPipeline:
         self.text_ocr = PaddleTextRecognizer(lang=cfg.pipeline.ocr.lang)
         self.reading_order = ReadingOrder()
         self.assembler = Assembler()
+        self.compiler = LatexCompiler()
         
         if cfg.pipeline.refinement.enabled:
             self.refiner = LLMRefiner()
@@ -40,44 +44,73 @@ class LaTeXifyPipeline:
             logger.info(f"Analyzing page {i+1}")
             detections = self.layout.detect(img_path)
             
-            page_blocks = []
-            # Load image for cropping
-            # In a real implementation, we'd pass the in-memory image to avoid re-reading
-            # But for now, we'll assume we might need to read it again or change the APIs to accept objects
-            import cv2
+            # 1. Collect all crops first
             img = cv2.imread(str(img_path))
+            page_blocks_data = [] # Store (bbox, category, conf, crop)
+            
+            math_crops = []
+            math_indices = []
             
             for j, det in enumerate(detections):
                 bbox = det['bbox']
                 category = det['class']
                 conf = det['confidence']
                 
-                # Crop
                 x1, y1, x2, y2 = map(int, bbox)
+                # Clamp to image dimensions
+                h, w = img.shape[:2]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                    
                 crop = img[y1:y2, x1:x2]
                 
-                content = ""
                 if category in ["Equation_Display", "Equation_Inline"]:
-                    # Convert cv2 to PIL for UniMERNet
-                    from PIL import Image
                     crop_pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                    content = self.math_ocr.predict(crop_pil)
-                elif category in ["Text_Block", "Title", "Caption", "List"]:
-                    content = self.text_ocr.recognize(crop)
-                elif category == "Table":
-                    # TODO: Table recognition
-                    content = "[TABLE placeholder]"
+                    math_crops.append(crop_pil)
+                    math_indices.append(j)
+                    page_blocks_data.append({'bbox': bbox, 'category': category, 'conf': conf, 'content': None})
                 else:
-                    # Fallback
-                    content = self.text_ocr.recognize(crop)
+                    # Text/Table - process immediately or batch similarly (Text batching is harder with Paddle's structure but possible)
+                    # For now keep text sequential or use Paddle's batch mode if we refactor
+                    content = ""
+                    if category in ["Text_Block", "Title", "Caption", "List"]:
+                        content = self.text_ocr.recognize(crop)
+                    elif category == "Table":
+                        content = "[TABLE placeholder]"
+                    else:
+                        content = self.text_ocr.recognize(crop)
                     
+                    page_blocks_data.append({'bbox': bbox, 'category': category, 'conf': conf, 'content': content})
+
+            # 2. Run Math Batch
+            if math_crops:
+                logger.info(f"Batch processing {len(math_crops)} equations...")
+                math_results = self.math_ocr.predict_batch(math_crops)
+                
+                # Fill back results
+                # math_indices maps 1:1 to math_crops order
+                # But page_blocks_data is Append-only. We need to map math_indices relative to... wait.
+                # simpler: iterate page_blocks_data and fill Nones.
+                
+                math_ptr = 0
+                for item in page_blocks_data:
+                    if item['category'] in ["Equation_Display", "Equation_Inline"] and item['content'] is None:
+                        item['content'] = math_results[math_ptr]
+                        math_ptr += 1
+
+            # 3. Create LayoutBlocks
+            page_blocks = []
+            for j, item in enumerate(page_blocks_data):
                 block = LayoutBlock(
                     id=f"p{i}_b{j}",
-                    bbox=bbox,
-                    category=category,
-                    confidence=conf,
+                    bbox=item['bbox'],
+                    category=item['category'],
+                    confidence=item['conf'],
                     page_num=i,
-                    content=content
+                    content=item['content']
                 )
                 page_blocks.append(block)
             
@@ -88,10 +121,26 @@ class LaTeXifyPipeline:
         # Assemble
         raw_latex = self.assembler.assemble(full_document_blocks)
         
-        # Refine
+        # Refine & Compile Loop
+        final_latex = raw_latex
         if self.refiner:
             logger.info("Refining LaTeX...")
+            # Initial refinement
             final_latex = self.refiner.refine(raw_latex)
-            return final_latex
+            
+            # Compilation Loop (Self-Correction)
+            MAX_RETRIES = 3
+            for attempt in range(MAX_RETRIES):
+                logger.info(f"Compilation attempt {attempt+1}/{MAX_RETRIES}")
+                success, log = self.compiler.compile(final_latex)
+                
+                if success:
+                    logger.info("Compilation successful!")
+                    break
+                else:
+                    logger.warning(f"Compilation failed. Log snippet: {log[:200]}...")
+                    # Feed error back to refiner
+                    # We need a new method in Refiner or just reuse refine with a specific prompt
+                    final_latex = self.refiner.fix_error(final_latex, log)
         
-        return raw_latex
+        return final_latex
