@@ -12,31 +12,20 @@ class Assembler:
             content = block.content or ""
             
             if block.category == "Title":
-                latex_output.append(f"\\title{{{content}}}")
+                latex_output.append("\\title{" + content + "}")
             elif block.category == "Header":
-                # Often ignored or handled separately
                 pass 
             elif block.category == "Footer":
                 pass
             elif block.category == "Equation_Display":
-                latex_output.append(f"\n\[
-{content}
-\]
-")
+                latex_output.append("\\\[\n" + content + "\n\\\\]\n")
             elif block.category == "Equation_Inline":
-                # Usually inline equations are embedded in text, 
-                # but if detected separately (which is rare for inline), 
-                # we might wrap it.
-                latex_output.append(f"${content}$")
+                latex_output.append("$" + content + "$")
             elif block.category == "Table":
-                latex_output.append(content) # Tables often come pre-formatted
+                latex_output.append(content) 
             elif block.category == "Image":
-                latex_output.append(f"\\begin{{figure}}[h]
-\\centering
-\\includegraphics[width=0.8\\linewidth]{{{content}}}
-\\end{{figure}}")
-            else: # Text_Block or fallback
-                latex_output.append(f"\n{content}
-")
+                latex_output.append("\\begin{figure}[h]\n\\centering\n\\includegraphics[width=0.8\\linewidth]{" + content + "}\n\\end{figure}")
+            else: 
+                latex_output.append("\n" + content + "\n")
                 
         return "\n".join(latex_output)

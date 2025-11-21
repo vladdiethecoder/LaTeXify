@@ -135,11 +135,13 @@ class LaTeXifyPipeline:
         
         # Prepend Metadata if available
         if metadata:
-            meta_tex = f"\\title{{{metadata.get('title', '')}}}\\n\\author{{{metadata.get('authors', '')}}}\\n\\begin{{abstract}}
+            meta_tex = f"""\\title{{{metadata.get('title', '')}}}
+\\author{{{metadata.get('authors', '')}}}
+\\begin{{abstract}}
 {metadata.get('abstract', '')}
 \\end{{abstract}}
 
-"
+"""
             raw_latex = meta_tex + raw_latex
 
         # Refine & Compile Loop
