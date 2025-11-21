@@ -1,0 +1,77 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{iclr2024_conference,times}
+
+% -- Core Packages --
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amsthm}
+\usepackage{amssymb}
+\usepackage{wrapfig}
+
+% -- Metadata --
+\title{ {{ metadata.title | default("Generated ICLR Document") }} }
+
+% -- Author Block --
+\author{
+{% for author in metadata.authors %}
+{{ author.name }} \\
+{{ author.affiliation | default("Affiliation Not Found") }} \\
+\texttt{ {{ author.email }} } \\
+{% if not loop.last %} \And {% endif %}
+{% else %}
+LaTeXify Pipeline \\
+Automated Generation \\
+\texttt{latexify@example.com}
+{% endfor %}
+}
+
+\newcommand{\fix}{\marginpar{FIX}}
+\newcommand{\new}{\marginpar{NEW}}
+
+\iclrfinalcopy % Uncomment for camera-ready version, but we default to final for aesthetics
+
+\begin{document}
+
+\maketitle
+
+% -- Abstract --
+{% if content.abstract %}
+\begin{abstract}
+{{ content.abstract }}
+\end{abstract}
+{% endif %}
+
+% -- Main Content --
+{% for section in content.sections %}
+\section{ {{ section.heading }} }
+{{ section.body }}
+
+{% for subsection in section.subsections recursive %}
+\subsection{ {{ subsection.heading }} }
+{{ subsection.body }}
+{% if subsection.subsections %}
+    {{ loop(subsection.subsections) }}
+{% endif %}
+{% endfor %}
+
+{% endfor %}
+
+% -- Bibliography --
+{% if content.bibliography %}
+\bibliography{latexify_auto}
+\bibliographystyle{iclr2024_conference}
+{% endif %}
+
+% -- Appendices --
+{% if content.appendices %}
+\appendix
+{% for appendix in content.appendices %}
+\section{ {{ appendix.heading }} }
+{{ appendix.body }}
+{% endfor %}
+{% endif %}
+
+\end{document}

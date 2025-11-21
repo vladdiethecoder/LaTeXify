@@ -1,0 +1,116 @@
+\documentclass[11pt,a4paper,oneside]{memoir}
+
+% -- Memoir Customization for Textbook Look --
+\chapterstyle{madsen} % Clean, modern chapter style
+\setsecnumdepth{subsection}
+\maxtocdepth{subsection}
+
+% -- Core Packages --
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{tcolorbox} % For definitions, theorems, examples
+
+% -- Geometry --
+\geometry{
+    top=3cm,
+    bottom=3cm,
+    left=2.5cm,
+    right=2.5cm,
+    marginparwidth=2cm
+}
+
+% -- Hyperref Setup --
+\hypersetup{
+    colorlinks=true,
+    linkcolor=NavyBlue,
+    filecolor=Magenta,      
+    urlcolor=NavyBlue,
+    citecolor=TealBlue,
+}
+
+% -- Semantic Blocks --
+\newtcolorbox{definitionbox}[1][{
+    colback=blue!5!white,
+    colframe=blue!75!black,
+    title={#1},
+    fonttitle=\bfseries,
+    sharp corners=downhill,
+    enhanced,
+    attach boxed title to top left={yshift=-2mm, xshift=2mm},
+    boxed title style={colback=blue!75!black}
+}]
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{example}{Example}[chapter]
+
+% -- Metadata --
+\title{ {{ metadata.title | default("Modern Textbook") }} }
+\author{ {{ metadata.authors[0].name if metadata.authors else "LaTeXify Pipeline" }} }
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+
+{% if content.abstract %}
+\begin{abstract}
+{{ content.abstract }}
+\end{abstract}
+{% endif %}
+
+\tableofcontents*
+\clearpage
+
+\mainmatter
+
+% -- Main Content --
+{% for section in content.sections %}
+% In 'memoir' and textbooks, top-level is usually Chapter. 
+% Assuming the pipeline maps 'section' blocks to chapters for book templates.
+\chapter{ {{ section.heading }} }
+{{ section.body }}
+
+{% for subsection in section.subsections recursive %}
+\section{ {{ subsection.heading }} }
+{{ subsection.body }}
+
+{% for subsubsection in subsection.subsections recursive %}
+\subsection{ {{ subsubsection.heading }} }
+{{ subsubsection.body }}
+{% endfor %}
+
+{% endfor %}
+
+{% endfor %}
+
+% -- Bibliography --
+{% if content.bibliography %}
+\bibliographystyle{alpha}
+\bibliography{latexify_auto}
+{% endif %}
+
+% -- Appendices --
+{% if content.appendices %}
+\appendix
+{% for appendix in content.appendices %}
+\chapter{ {{ appendix.heading }} }
+{{ appendix.body }}
+{% endfor %}
+{% endif %}
+
+\backmatter
+% Index would go here
+
+\end{document}

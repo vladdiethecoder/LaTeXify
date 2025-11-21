@@ -5,7 +5,8 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Literal, Mapping, MutableMapping, Tuple
 
-OCRBackendChoice = Literal["florence", "ensemble", "mineru"]
+from latexify.config import settings, VisionPresetChoice, OCRBackendChoice
+
 MathOCRChoice = Literal["none", "pix2tex", "latex-ocr"]
 BranchName = Literal["branch_a", "branch_b", "branch_c"]
 
@@ -15,7 +16,7 @@ class BackendToggleConfig:
     """Flags that describe which ingestion/math OCR backends should be active."""
 
     ocr_backend: OCRBackendChoice = "ensemble"
-    layout_backend: str = "pymupdf"
+    layout_backend: str = "surya"
     surya_math_detector: bool = True
     mineru_enabled: bool = False
     marker_enabled: bool = False
@@ -24,7 +25,6 @@ class BackendToggleConfig:
 
     def resolve_ingestion_mode(self) -> str:
         """Map the high-level backend selection onto the ingestion OCR mode."""
-
         mapping = {
             "florence": "florence2",
             "ensemble": "auto",
@@ -34,7 +34,6 @@ class BackendToggleConfig:
 
     def as_dict(self) -> Dict[str, object]:
         """Materialize the toggle state for telemetry/manifest output."""
-
         return asdict(self)
 
     def wants_math_ocr(self) -> bool:
@@ -71,8 +70,6 @@ def _parse_int_list(value: str) -> tuple[int, ...]:
     return tuple(int(token) for token in tokens if token)
 
 
-VisionPresetChoice = Literal["balanced", "fast", "quality"]
-
 VISION_PRESETS: Dict[VisionPresetChoice, Dict[str, object]] = {
     "balanced": {},
     "fast": {
@@ -84,8 +81,8 @@ VISION_PRESETS: Dict[VisionPresetChoice, Dict[str, object]] = {
         "saturation": 0.05,
     },
     "quality": {
-        "target_sizes": (256, 320, 384),
-        "max_views_per_chunk": 6,
+        "target_sizes": (384, 448, 512), # Boosted for 32GB VRAM
+        "max_views_per_chunk": 8,        # Increased views
         "pad_to_square": True,
         "brightness": 0.2,
         "contrast": 0.2,
@@ -99,11 +96,11 @@ class VisionRuntimeConfig:
     """Runtime toggles for the optional vision synthesis stages."""
 
     enabled: bool = True
-    preset: VisionPresetChoice = "balanced"
+    preset: VisionPresetChoice = "quality" # Default to quality
     overrides: Dict[str, object] = field(default_factory=dict)
 
     def resolved_overrides(self) -> Dict[str, object]:
-        preset_key = self.preset if self.preset in VISION_PRESETS else "balanced"
+        preset_key = self.preset if self.preset in VISION_PRESETS else "quality"
         resolved = dict(VISION_PRESETS[preset_key])
         resolved.update(self.overrides)
         return resolved
@@ -139,10 +136,15 @@ def build_vision_runtime_config(
     """Resolve CLI/environment preferences for the vision synthesis stages."""
 
     source = env or os.environ
+    # Use settings default if env/arg not present
+    default_enabled = settings.enable_vision_synthesis
+    default_preset = settings.vision_preset
+
     resolved_enabled = enabled if enabled is not None else _env_flag(
-        source.get("LATEXIFY_VISION_SYNTHESIS_ENABLED"), True
+        source.get("LATEXIFY_VISION_SYNTHESIS_ENABLED"), default_enabled
     )
-    resolved_preset = (preset or source.get("LATEXIFY_VISION_SYNTHESIS_PRESET") or "balanced").lower()
+    resolved_preset = (preset or source.get("LATEXIFY_VISION_SYNTHESIS_PRESET") or default_preset).lower()
+    
     overrides: Dict[str, object] = {}
     for suffix, (field_name, parser) in _VISION_ENV_PARSERS.items():
         env_key = f"LATEXIFY_VISION_SYNTHESIS_{suffix}"
@@ -163,8 +165,11 @@ def build_backend_toggle_config(
     env: MutableMapping[str, str] | None = None,
 ) -> BackendToggleConfig:
     source: MutableMapping[str, str] = env if env is not None else os.environ
-    resolved_ocr = (ocr_backend or source.get("LATEXIFY_OCR_BACKEND") or "ensemble").lower()
-    resolved_layout = (layout_backend or source.get("LATEXIFY_LAYOUT_BACKEND") or "pymupdf").lower()
+    
+    # Defaults from settings
+    resolved_ocr = (ocr_backend or source.get("LATEXIFY_OCR_BACKEND") or settings.ocr_backend).lower()
+    resolved_layout = (layout_backend or source.get("LATEXIFY_LAYOUT_BACKEND") or settings.layout_backend).lower()
+    
     resolved_math_flag = (
         surya_math_detector
         if surya_math_detector is not None
@@ -318,21 +323,21 @@ def build_compilation_runtime_config(
     resolved_enable = (
         enable_robust_compilation
         if enable_robust_compilation is not None
-        else _env_flag(source.get("LATEXIFY_ENABLE_ROBUST_COMPILATION"), True)
+        else _env_flag(source.get("LATEXIFY_ENABLE_ROBUST_COMPILATION"), settings.enable_robust_compilation)
     )
     resolved_retry = retry_count if retry_count is not None else _env_int(
         source.get("LATEXIFY_COMPILATION_RETRY_COUNT"),
-        3,
+        settings.compilation_retry_count,
     )
     resolved_layout = (
         layout_confidence_threshold
         if layout_confidence_threshold is not None
-        else _env_float(source.get("LATEXIFY_LAYOUT_CONFIDENCE_THRESHOLD"), 0.0)
+        else _env_float(source.get("LATEXIFY_LAYOUT_CONFIDENCE_THRESHOLD"), settings.layout_confidence_threshold)
     )
     resolved_monkey = (
         monkey_ocr_enabled
         if monkey_ocr_enabled is not None
-        else _env_flag(source.get("LATEXIFY_ENABLE_MONKEY_OCR"), True)
+        else _env_flag(source.get("LATEXIFY_ENABLE_MONKEY_OCR"), settings.enable_monkey_ocr)
     )
     source["LATEXIFY_ENABLE_ROBUST_COMPILATION"] = "1" if resolved_enable else "0"
     source["LATEXIFY_COMPILATION_RETRY_COUNT"] = str(resolved_retry)

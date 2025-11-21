@@ -1,4 +1,4 @@
-"""Automatic document-style detection and template selection helpers."""
+"Automatic document-style detection and template selection helpers."
 from __future__ import annotations
 
 import logging
@@ -6,7 +6,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple, Optional
 
 try:  # pragma: no cover - optional dependency for CLI evaluation
     from pypdf import PdfReader
@@ -14,12 +14,15 @@ except Exception:  # pragma: no cover - dependency may be missing on CI
     PdfReader = None  # type: ignore
 
 from ..core import common
+from ..ml.style_classifier import StyleClassifier  # Integration of new ML module
 
 LOGGER = logging.getLogger(__name__)
 REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "reference_tex"
-CITATION_BRACKET_RE = re.compile(r"\[[0-9]{1,3}(?:\s*,\s*[0-9]{1,3})*\]")
-CITATION_PAREN_RE = re.compile(r"\([A-Z][A-Za-z-]+\s*,\s*\d{4}\)")
-MATH_TOKEN_RE = re.compile(r"\\(begin\{equation|frac|sum|int|alpha|beta|gamma|nabla|sqrt)")
+MODEL_DIR = Path(__file__).resolve().parents[1] / "models" / "style_classifier"
+
+CITATION_BRACKET_RE = re.compile(r"\\[[0-9]{1,3}(?:\s*,\s*[0-9]{1,3})*\\]")
+CITATION_PAREN_RE = re.compile(r"\([A-Z][A-Za-z-]+\s*,\s*\d{4}\")
+MATH_TOKEN_RE = re.compile(r"\\(begin{equation|frac|sum|int|alpha|beta|gamma|nabla|sqrt)")
 SECTION_KEYWORD_RE = re.compile(r"(?i)\b(section|chapter|part)\b")
 REFERENCE_RE = re.compile(r"(?i)\b(references|bibliography)\b")
 
@@ -40,9 +43,12 @@ DOC_TYPE_KEYWORDS: Dict[str, Tuple[str, ...]] = {
 DOC_TYPE_CLASS_MAP: Dict[str, Tuple[str, str]] = {
     "article": ("article", "11pt"),
     "report": ("report", "11pt"),
-    "book": ("book", "11pt"),
+    "book": ("memoir", "11pt"), # Updated to memoir per blueprint
     "thesis": ("report", "12pt"),
     "presentation": ("beamer", "11pt"),
+    "neurips": ("neurips", "10pt"), # Placeholder mapping, template handles actual class
+    "iclr": ("iclr", "10pt"),
+    "textbook": ("memoir", "10pt"),
 }
 
 DOC_TYPE_PACKAGES: Dict[str, List[Dict[str, str | None]]] = {
@@ -51,6 +57,9 @@ DOC_TYPE_PACKAGES: Dict[str, List[Dict[str, str | None]]] = {
     "book": [{"package": "tocloft"}],
     "thesis": [{"package": "setspace", "options": "onehalfspacing"}],
     "presentation": [{"package": "xcolor"}],
+    "neurips": [], # Handled by template
+    "iclr": [],
+    "textbook": [{"package": "microtype"}]
 }
 
 STYLE_FAMILY_PACKAGES: Dict[str, List[Dict[str, str | None]]] = {
@@ -141,6 +150,7 @@ class DocumentStyle:
     similarity: float
     features: StyleFeatures
     similarity_breakdown: Dict[str, float] = field(default_factory=dict)
+    ml_confidence: float = 0.0  # Added confidence score
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -153,17 +163,25 @@ class DocumentStyle:
             "packages": self.packages,
             "template_hint": self.template_hint,
             "similarity": round(self.similarity, 3),
+            "ml_confidence": round(self.ml_confidence, 3),
             "features": self.features.to_dict(),
             "similarity_breakdown": self.similarity_breakdown,
         }
 
 
 class StyleDetector:
-    """Detect document style using structural heuristics and exemplar similarity."""
+    """
+    Detect document style using a hybrid approach:
+    1. ML-based classification (StyleClassifier) for high-level types (NeurIPS, ICLR, Textbook).
+    2. Heuristic fallbacks for domains, features, and package selection.
+    """
 
-    def __init__(self, reference_root: Path | None = None) -> None:
+    def __init__(self, reference_root: Path | None = None, model_dir: Path | None = None) -> None:
         self.reference_root = reference_root or REFERENCE_ROOT
         self.reference_profiles = self._load_reference_profiles()
+        
+        self.classifier = StyleClassifier(model_dir=model_dir or MODEL_DIR)
+        self.classifier_loaded = self.classifier.load()
 
     # --------------------------- public entry points ---------------------------
     def detect_from_plan(
@@ -248,7 +266,25 @@ class StyleDetector:
     # --------------------------- classification ---------------------------
     def _build_profile(self, features: StyleFeatures, text_samples: Sequence[str]) -> DocumentStyle:
         merged_text = "\n".join(text_samples)
-        doc_type = self._classify_doc_type(features, merged_text)
+        
+        # Hybrid Classification Strategy
+        ml_doc_type = None
+        ml_confidence = 0.0
+        
+        if self.classifier_loaded:
+            # We use the first 512 chars roughly or whatever the model handles (it truncates internally)
+            prediction = self.classifier.predict(merged_text[:2000]) 
+            if prediction.confidence > 0.7: # Threshold for trusting ML over heuristics
+                ml_doc_type = prediction.style_label
+                ml_confidence = prediction.confidence
+                LOGGER.info(f"ML Style Classifier detected: {ml_doc_type} (conf: {ml_confidence:.2f})")
+
+        if ml_doc_type:
+            doc_type = ml_doc_type
+        else:
+            doc_type = self._classify_doc_type(features, merged_text)
+            LOGGER.info(f"Heuristic Style Classifier detected: {doc_type}")
+
         style_family = self._infer_style_family(features, doc_type)
         domain = self._infer_domain(merged_text) or "default"
         ref_domain, similarity, breakdown = self._match_reference_domain(features)
@@ -258,7 +294,14 @@ class StyleDetector:
             STYLE_FAMILY_PACKAGES.get(style_family, []),
             DOMAIN_PACKAGES.get(domain, []),
         )
-        template_hint = str(self.reference_root / ref_domain) if ref_domain and ref_domain != "default" else None
+        
+        # Map doc_type directly to template if it exists
+        template_hint = None
+        if doc_type in ["neurips", "iclr", "textbook"]:
+            template_hint = f"{doc_type}.tex" # Direct template mapping
+        elif ref_domain and ref_domain != "default":
+            template_hint = str(self.reference_root / ref_domain)
+
         return DocumentStyle(
             doc_type=doc_type,
             style_family=style_family,
@@ -271,6 +314,7 @@ class StyleDetector:
             similarity=similarity,
             features=features,
             similarity_breakdown=breakdown,
+            ml_confidence=ml_confidence
         )
 
     def _classify_doc_type(self, features: StyleFeatures, text: str) -> str:
@@ -294,7 +338,7 @@ class StyleDetector:
             return "ieee"
         if features.paren_ratio() > 0.45 and doc_type in {"article", "report"}:
             return "acm"
-        if doc_type in {"book", "thesis"}:
+        if doc_type in {"book", "thesis", "textbook"}:
             return "springer"
         return "generic"
 

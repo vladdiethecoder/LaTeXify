@@ -286,7 +286,11 @@ def chunk_text(
                  meta["tag"] = region.get("tag")
                  text_val = region.get("text", "")
             else:
+                 meta = dict(region.extras) if hasattr(region, "extras") else {}
                  meta["tag"] = region.tag
+                 # [GAZE] Ensure source_bbox is preserved
+                 if hasattr(region, "bbox"):
+                     meta["source_bbox"] = region.bbox
                  text_val = region.text
             structured_records.append((text_val, meta["tag"], meta))
             
