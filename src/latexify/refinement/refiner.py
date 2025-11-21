@@ -1,4 +1,5 @@
 import torch
+import re
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -9,11 +10,12 @@ except ImportError:
     VLLM_AVAILABLE = False
 
 class LLMRefiner:
-    def __init__(self, model_path: str = "Qwen/Qwen2.5-Coder-14B-Instruct", device: str = "cuda", use_vllm: bool = True, load_in_8bit: bool = False):
+    def __init__(self, model_path: str = "Qwen/Qwen2.5-Coder-14B-Instruct", device: str = "cuda", use_vllm: bool = True, load_in_8bit: bool = False, load_in_4bit: bool = False):
         self.model_path = model_path
         self.device = device
         self.use_vllm = use_vllm and VLLM_AVAILABLE
         self.load_in_8bit = load_in_8bit
+        self.load_in_4bit = load_in_4bit
         
         self.model = None
         self.tokenizer = None
@@ -24,7 +26,7 @@ class LLMRefiner:
         """
         Load the model. Delayed loading to save VRAM if not used immediately.
         """
-        print(f"Loading Refiner LLM: {self.model_path} (vLLM={self.use_vllm}, 8bit={self.load_in_8bit})...")
+        print(f"Loading Refiner LLM: {self.model_path} (vLLM={self.use_vllm}, 8bit={self.load_in_8bit}, 4bit={self.load_in_4bit})...")
         
         if self.use_vllm:
             try:
@@ -48,12 +50,14 @@ class LLMRefiner:
             if self.load_in_8bit:
                 model_kwargs["load_in_8bit"] = True
                 # Do not set device_map here to avoid .to() calls during dispatch
+            elif self.load_in_4bit:
+                model_kwargs["load_in_4bit"] = True
             else:
                 model_kwargs["device_map"] = self.device
             
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
             
-            if not self.load_in_8bit and hasattr(torch, "compile"):
+            if not self.load_in_8bit and not self.load_in_4bit and hasattr(torch, "compile"):
                 try:
                     print("Compiling Refiner LLM with torch.compile...")
                     self.model = torch.compile(self.model, mode="max-autotune")
@@ -133,6 +137,14 @@ class LLMRefiner:
             result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         
         # Clean up output
+        # Clean up output
         if "FIXED LATEX:" in result:
-            return result.split("FIXED LATEX:")[-1].strip()
+            result = result.split("FIXED LATEX:")[-1].strip()
+            
+        # Strip markdown code blocks
+        code_block_pattern = re.compile(r"```(?:latex)?\s*(.*?)\s*```", re.DOTALL)
+        match = code_block_pattern.search(result)
+        if match:
+            result = match.group(1).strip()
+            
         return result

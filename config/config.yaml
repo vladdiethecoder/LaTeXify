@@ -1,0 +1,83 @@
+# LaTeXify Gen 3.0 - Main Pipeline Configuration
+# This is the default configuration composed from multiple config groups
+
+defaults:
+  - hardware: rtx5090 # Change to 'default' for CPU or other GPUs
+  - models/layout: layout
+  - models/math: math
+  - models/vlm: vlm
+  - models/table: table
+
+# Pipeline stages
+pipeline:
+  # Ingestion
+  ingestion:
+    dpi: 200 # PDF → Image resolution
+
+  # Layout detection
+  layout:
+    enable: true
+    batch_pages: 4 # Process 4 pages in parallel
+
+  # Content extraction
+  extraction:
+    # Text
+    text:
+      enable: true
+      ocr_backend: "paddleocr" # or "qwen_vlm" for handwriting
+      lang: "en"
+
+    # Math
+    math:
+      enable: true
+      batch_size: 32
+      validate_with_sympy: true
+
+    # Tables
+    tables:
+      enable: true
+      enable_llm_repair: true
+
+    # Figures
+    figures:
+      enable: true
+      generate_captions: true # Use VLM for captioning
+
+  # Reading order
+  reading_order:
+    algorithm: "xy_cut" # or "topological_sort", "naive"
+    multi_column_detection: true
+
+  # Assembly
+  assembly:
+    enable_metadata: true # Extract title/authors from page 1
+
+  # Refinement
+  refinement:
+    enable: true
+    use_vllm: true
+    max_retries: 3 # Compilation self-correction attempts
+
+  # Compilation
+  compilation:
+    compiler: "tectonic" # or "pdflatex", "xelatex"
+    timeout_seconds: 60
+
+# Logging
+logging:
+  level: INFO # DEBUG, INFO, WARNING, ERROR
+  format: "json" # or "text"
+  enable_gpu_monitoring: true
+  log_dir: "logs"
+
+# Caching
+caching:
+  enable: true
+  cache_dir: ".cache"
+  cache_extractions: true # Cache OCR/math results
+  cache_layout: true
+
+# Debugging
+debug:
+  save_intermediate_outputs: false # Save crops, JSON manifests
+  visualize_bboxes: false # Overlay bboxes on images

@@ -14,4 +14,5 @@ pipeline:
   refinement:
     enabled: true
     use_vllm: false
-    load_in_8bit: true
+    load_in_8bit: false
+    load_in_4bit: true

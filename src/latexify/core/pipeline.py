@@ -38,7 +38,8 @@ class LaTeXifyPipeline:
         if cfg.pipeline.refinement.enabled:
             self.refiner = LLMRefiner(
                 use_vllm=cfg.pipeline.refinement.get("use_vllm", True),
-                load_in_8bit=cfg.pipeline.refinement.get("load_in_8bit", False)
+                load_in_8bit=cfg.pipeline.refinement.get("load_in_8bit", False),
+                load_in_4bit=cfg.pipeline.refinement.get("load_in_4bit", False)
             )
         else:
             self.refiner = None

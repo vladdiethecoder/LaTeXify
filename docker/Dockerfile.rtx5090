@@ -1,0 +1,101 @@
+# LaTeXify Gen 3.0 - RTX 5090 Optimized Container
+#
+# This Dockerfile creates a bleeding-edge environment for running LaTeXify
+# on NVIDIA RTX 5090 (Blackwell architecture) with CUDA 12.8 and PyTorch 2.7+.
+#
+# Build: docker build -f docker/Dockerfile.rtx5090 -t latexify:rtx5090 .
+# Run:   docker run --gpus all -v $(pwd):/workspace latexify:rtx5090
+
+FROM nvcr.io/nvidia/pytorch:25.02-py3
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    curl \
+    vim \
+    poppler-utils \
+    libpoppler-dev \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Tectonic (static binary for LaTeX compilation)
+RUN wget https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-musl.tar.gz \
+    && tar -xzf tectonic-0.15.0-x86_64-unknown-linux-musl.tar.gz \
+    && mv tectonic /usr/local/bin/ \
+    && chmod +x /usr/local/bin/tectonic \
+    && rm tectonic-0.15.0-x86_64-unknown-linux-musl.tar.gz
+
+# Upgrade pip and install build tools
+RUN pip install --upgrade pip setuptools wheel
+
+# Install PyTorch ecosystem (already in base image, but verify versions)
+# Base image should have:
+# - PyTorch 2.7+ with CUDA 12.8
+# - CUDA 12.8 runtime and development tools
+
+# Install FlashAttention-3 (beta, for Blackwell architecture)
+RUN pip install flash-attn --no-build-isolation
+
+# Install vLLM for serving Qwen2.5-VL
+RUN pip install vllm
+
+# Install torchao for FP8 quantization
+RUN pip install torchao
+
+# Install Hydra for hierarchical configuration
+RUN pip install hydra-core omegaconf
+
+# Install observability and logging
+RUN pip install structlog nvml-py
+
+# Install Ray for distributed orchestration (optional)
+RUN pip install "ray[default]"
+
+# Install core ML dependencies
+RUN pip install \
+    transformers \
+    accelerate \
+    bitsandbytes \
+    sentencepiece \
+    protobuf
+
+# Install vision/OCR dependencies
+RUN pip install \
+    ultralytics \
+    opencv-python-headless \
+    paddlepaddle \
+    paddleocr \
+    pillow
+
+# Install document processing
+RUN pip install \
+    PyMuPDF \
+    pdf2image \
+    scipy \
+    scikit-learn
+
+# Install LaTeX and symbolic math
+RUN pip install \
+    sympy
+
+# Copy project files
+COPY . /workspace
+
+# Install LaTeXify in development mode
+RUN pip install -e .
+
+# Set environment variables for CUDA optimization
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+ENV CUDA_LAUNCH_BLOCKING=0
+ENV TORCH_CUDNN_V8_API_ENABLED=1
+
+# Expose ports for vLLM server and Gradio UI
+EXPOSE 8000 7860
+
+# Default command: run tests to verify environment
+CMD ["python", "-c", "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"No GPU\"}')"]

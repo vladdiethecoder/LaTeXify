@@ -1,53 +1,56 @@
-# LaTeXify
+# LaTeXify Gen 3.0
 
-A modular, high-fidelity pipeline for converting PDFs to clean, compilable LaTeX.
-Optimized for RTX 5090 hardware with 32GB VRAM.
+**Research-grade PDF → LaTeX conversion for STEM documents**
+
+A modular Pipeline-of-Experts system optimized for RTX 5090, converting complex academic PDFs (with math, tables, figures) into high-fidelity, compilable LaTeX.
+
+## Features
+
+- **DocLayout-YOLO**: SOTA layout detection fine-tuned on DocStructBench
+- **UniMERNet**: >92% accuracy on mathematical formulas
+- **StructEqTable**: Table structure recognition with LaTeX output
+- **Qwen2.5-VL (72B)**: Vision-language model for figure captioning and refinement
+- **RTX 5090 Optimized**: FP8 quantization, FlashAttention-3, vLLM serving
+- **Visual Regression Testing**: SSIM-based quality validation
 
 ## Architecture
 
-This system uses a multi-stage expert model approach:
+Pipeline stages:
 
-1.  **Ingestion**: High-fidelity rasterization (300-400 DPI) using PyMuPDF.
-2.  **Layout Analysis**: YOLOv10/RT-DETR based object detection (Text, Tables, Equations).
-3.  **Expert Recognition**:
-    *   **Math**: UniMERNet
-    *   **Text**: PaddleOCR
-    *   **Tables**: TableMaster / StructureMaster (Planned)
-4.  **Assembly**: Topological sorting and reconstruction.
-5.  **Refinement**: Local LLM (Qwen2.5-Coder) for syntax repair and glitch correction.
+1. **Ingestion**: PyMuPDF at 200 DPI → page images
+2. **Layout Detection**: DocLayout-YOLO → bounding boxes + categories
+3. **Content Extraction**:
+   - Text: PaddleOCR (typed) or Qwen2.5-VL (handwriting)
+   - Math: UniMERNet with SymPy validation
+   - Tables: StructEqTable with LLM repair
+   - Figures: Qwen2.5-VL captioning
+4. **Reading Order**: XY-Cut algorithm for multi-column layouts
+5. **Assembly**: Merge blocks → initial LaTeX
+6. **Refinement**: Qwen2.5-VL via vLLM for syntax repair
+7. **Compilation**: Tectonic with self-correction loop (max 3 attempts)
 
-## Directory Structure
+## Quick Start (Docker)
 
-```
-LaTeXify/
-├── config/             # Hydra configuration
-├── src/latexify/
-│   ├── ingestion/      # PDF -> Image
-│   ├── layout/         # YOLO Logic
-│   ├── ocr/            # PaddleOCR Wrapper
-│   ├── math/           # UniMERNet Wrapper
-│   ├── refinement/     # LLM Refiner
-│   └── core/           # Pipeline Logic
-└── scripts/            # Utilities
-```
-
-## Setup
-
-### 1. Docker (Recommended)
-
-The easiest way to run LaTeXify with full GPU support (CUDA 12.4) is using Docker Compose.
+### RTX 5090 Setup
 
 ```bash
-# Build and Run Pipeline
-docker compose up --build
+# Build RTX 5090 optimized image
+docker build -f docker/Dockerfile.rtx5090 -t latexify:rtx5090 .
 
-# Run Interactive Shell
-docker compose run --rm latexify /bin/bash
+# Start vLLM server (in one terminal)
+docker run --gpus all -p 8000:8000 latexify:rtx5090 \
+  vllm serve Qwen/Qwen2.5-VL-72B-Instruct \
+  --quantization fp8 --gpu-memory-utilization 0.9
+
+# Run pipeline (in another terminal)
+docker run --gpus all -v $(pwd):/workspace latexify:rtx5090 \
+  python run_latexify.py input.pdf
 ```
 
 **Prerequisites:**
-*   Docker Engine
-*   NVIDIA Container Toolkit (`nvidia-docker2`)
+- Docker Engine 24.0+
+- NVIDIA Container Toolkit
+- RTX 5090 GPU (or 4090 with reduced batch sizes)
 
 ### 2. Local Development
 
