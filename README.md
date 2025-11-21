@@ -42,19 +42,33 @@ LaTeXify/
 2.  **Local Development**:
     ```bash
     uv sync
-    # OR
-    pip install -r requirements.txt
+    pre-commit install
     ```
 
 ## Usage
 
-Run the main pipeline (to be implemented in `run_latexify.py` using the new modules):
+Run the main pipeline:
 
 ```bash
 python run_latexify.py --pdf input.pdf
 ```
 
-## Golden Set Verification
+Run the Demo UI:
 
-Place benchmark PDFs in `data/golden_set/`.
-Run `python scripts/verify.py` (to be implemented) to check BLEU scores.
+```bash
+streamlit run apps/ui/app.py
+```
+
+## Documentation
+
+*   [Model Zoo](docs/MODEL_ZOO.md)
+*   [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+*   [Verification Protocol](docs/VERIFICATION_PROTOCOL.md)
+
+## Quality Assurance
+
+We verify pipeline accuracy using a 50-document Golden Set.
+
+```bash
+python scripts/verify.py
+```
