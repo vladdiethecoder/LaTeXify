@@ -12,6 +12,9 @@ _STATIC_FALLBACKS: List[Path] = [
 ]
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_MATH_MODEL = "Qwen/Qwen2.5-Math-7B-Instruct"
+DEFAULT_VISION_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
+
 
 def _parse_extra_paths(raw: str | None) -> List[Path]:
     if not raw:
