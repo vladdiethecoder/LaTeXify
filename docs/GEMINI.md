@@ -1,4 +1,4 @@
-# GEMINI – LaTeXify Project Guide
+# GEMINI – MCP Protocol; LaTeXify Project Guide
 
 You are collaborating on the **LaTeXify** project: an AI-driven pipeline that
 turns messy course materials (handwritten notes, typed PDFs, slides, etc.) into

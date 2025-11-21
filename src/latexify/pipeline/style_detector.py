@@ -21,7 +21,7 @@ REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "reference_tex"
 MODEL_DIR = Path(__file__).resolve().parents[1] / "models" / "style_classifier"
 
 CITATION_BRACKET_RE = re.compile(r"\\[[0-9]{1,3}(?:\s*,\s*[0-9]{1,3})*\\]")
-CITATION_PAREN_RE = re.compile(r"\([A-Z][A-Za-z-]+\s*,\s*\d{4}\")
+CITATION_PAREN_RE = re.compile(r"\([A-Z][A-Za-z-]+\s*,\s*\d{4}\)")
 MATH_TOKEN_RE = re.compile(r"\\(begin{equation|frac|sum|int|alpha|beta|gamma|nabla|sqrt)")
 SECTION_KEYWORD_RE = re.compile(r"(?i)\b(section|chapter|part)\b")
 REFERENCE_RE = re.compile(r"(?i)\b(references|bibliography)\b")
