@@ -71,73 +71,62 @@ class LLMRefiner:
             traceback.print_exc()
             self.mock_mode = True
 
-    def refine(self, raw_latex: str) -> str:
-        """
-        Refine the raw LaTeX string using the LLM.
-        """
-        if self.model is None and self.vllm_model is None and not self.mock_mode:
-            self.load_model()
-            
-        if self.mock_mode:
-            return raw_latex + "\n% Refined by Mock LLM"
-
-        prompt = f"""
-        You are a LaTeX expert. Your task is to fix syntax errors, close unclosed environments, 
-        and correct OCR typos in the provided LaTeX code.
-        
-        Think step by step:
-        1. Identify broken environments (e.g. \begin{{equation}} without \end{{equation}}).
-        2. Identify OCR glitches (e.g. '1nt' instead of 'int').
-        3. Fix them while preserving the original content and structure.
-        
-        RAW LATEX:
-        {raw_latex}
-        
-        FIXED LATEX:
-        """
-        return self._generate(prompt)
-
-    def fix_error(self, latex_code: str, error_log: str) -> str:
-        """
-        Fix LaTeX based on compiler error log.
-        """
-        if self.model is None and self.vllm_model is None and not self.mock_mode:
-            self.load_model()
-            
-        if self.mock_mode:
-            return latex_code + "\n% Fixed by Mock LLM"
-
-        prompt = f"""
-        The following LaTeX code failed to compile. 
-        
-        ERROR LOG:
-        {error_log}
-        
-        LATEX CODE:
-        {latex_code}
-        
-        Think step by step to resolve the specific error reported in the log.
-        Return only the fixed LaTeX code.
-        
-        FIXED LATEX:
-        """
-        return self._generate(prompt)
-
-    def _generate(self, prompt: str) -> str:
+    def _generate(self, prompt: str, step_name: str = "generate") -> str:
         if self.mock_mode:
             return "Mock Generation"
 
+        # Construct messages for Chat Model
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant and a LaTeX expert."},
+            {"role": "user", "content": prompt}
+        ]
+
         if self.use_vllm and self.vllm_model:
-            sampling_params = SamplingParams(temperature=0.7, max_tokens=4096)
-            outputs = self.vllm_model.generate([prompt], sampling_params)
+            # vLLM usually handles chat templates if we pass prompt as string with special tokens, 
+            # OR we use the chat entrypoint. But here we are using LLM class which is for completion.
+            # We need to format it manually using tokenizer (if available) or just hope the model works?
+            # Actually LLM class in vLLM 0.4 supports 'chat' via `chat` method in newer versions, 
+            # or we format it. Let's try formatting if tokenizer is available, else raw prompt might fail.
+            # The current `LLM` class usage suggests text completion.
+            # Let's try to use the tokenizer to format it if we have one, or just use raw prompt if we can't.
+            # Ideally we should use `tokenizer.apply_chat_template`.
+            # Since we don't have the tokenizer loaded in vLLM mode easily (it's inside the engine),
+            # let's assume we can load it or it's Qwen which needs <|im_start|>.
+            
+            # For safety, let's fallback to transformers logic for formatting if possible, 
+            # or just disable vLLM if we can't format.
+            # But wait, we didn't load tokenizer in vLLM mode.
+            # Let's load tokenizer always.
+            pass
+
+        # Ensure tokenizer is loaded for template application
+        if self.tokenizer is None:
+             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+
+        text_prompt = self.tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+
+        if self.use_vllm and self.vllm_model:
+            sampling_params = SamplingParams(temperature=0.4, max_tokens=8192, repetition_penalty=1.1)
+            outputs = self.vllm_model.generate([text_prompt], sampling_params)
             result = outputs[0].outputs[0].text
         else:
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            inputs = self.tokenizer(text_prompt, return_tensors="pt").to(self.device)
+            input_len = inputs.input_ids.shape[1]
             with torch.inference_mode():
-                outputs = self.model.generate(**inputs, max_new_tokens=4096)
-            result = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                outputs = self.model.generate(**inputs, max_new_tokens=8192, temperature=0.4, do_sample=True, repetition_penalty=1.1)
+            
+            # Decode only the new tokens
+            generated_tokens = outputs[0][input_len:]
+            result = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         
-        # Clean up output
+        # Debug: Log raw LLM output
+        with open(f"debug_llm_{step_name}.txt", "w", encoding="utf-8") as f:
+            f.write(result)
+
         # Clean up output
         if "FIXED LATEX:" in result:
             result = result.split("FIXED LATEX:")[-1].strip()
@@ -147,5 +136,66 @@ class LLMRefiner:
         match = code_block_pattern.search(result)
         if match:
             result = match.group(1).strip()
+        else:
+            # Fallback: heuristic cleanup if no code blocks found
+            # Look for \documentclass
+            if "\\documentclass" in result:
+                start = result.find("\\documentclass")
+                result = result[start:]
+            # Look for end document
+            if "\\end{document}" in result:
+                end = result.find("\\end{document}") + len("\\end{document}")
+                result = result[:end]
             
         return result
+
+    def refine(self, raw_latex: str) -> str:
+        # ... (omitted init check) ...
+        if self.model is None and self.vllm_model is None and not self.mock_mode:
+            self.load_model()
+            
+        if self.mock_mode:
+            return raw_latex + "\n% Refined by Mock LLM"
+
+        prompt = f"""
+        You are a professional LaTeX typesetter.
+        
+        **TASK:**
+        Convert the following Raw OCR content into a complete, compilable LaTeX document.
+        
+        **RULES:**
+        1. Output **ONLY** the LaTeX code inside a Markdown code block (```latex ... ```).
+        2. Do NOT include conversational text, explanations, or preambles outside the code block.
+        3. Use a standard `article` class.
+        4. Fix all syntax errors and OCR typos.
+        5. Infer sections and structure from the text.
+        6. Ensure all math is correctly formatted.
+        
+        **RAW INPUT:**
+        {raw_latex}
+        """
+        return self._generate(prompt, step_name="refine_initial")
+
+    def fix_error(self, latex_code: str, error_log: str) -> str:
+        # ... (omitted init check) ...
+        if self.model is None and self.vllm_model is None and not self.mock_mode:
+            self.load_model()
+            
+        if self.mock_mode:
+            return latex_code + "\n% Fixed by Mock LLM"
+
+        prompt = f"""
+        The following LaTeX code failed to compile.
+        
+        **ERROR LOG:**
+        {error_log}
+        
+        **LATEX CODE:**
+        {latex_code}
+        
+        **INSTRUCTIONS:**
+        1. Fix the specific error reported in the log.
+        2. Return **ONLY** the corrected LaTeX code inside a Markdown code block (```latex ... ```).
+        3. Do NOT add explanations.
+        """
+        return self._generate(prompt, step_name="refine_fix")

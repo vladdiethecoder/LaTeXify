@@ -29,7 +29,7 @@ except Exception as exc:  # pragma: no cover
         pass
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_model_paths_module():
@@ -141,6 +141,12 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         repo_id="facebook/nougat-small",
         target=Path("ocr/nougat-small"),
         notes="Nougat LaTeX OCR specialist.",
+    ),
+    "ocr/unimernet": ModelSpec(
+        key="ocr/unimernet",
+        repo_id="wanderkid/unimernet_base",
+        target=Path("ocr/unimernet"),
+        notes="UniMERNet base model for formula recognition.",
     ),
     "ocr/trocr-math": ModelSpec(
         key="ocr/trocr-math",

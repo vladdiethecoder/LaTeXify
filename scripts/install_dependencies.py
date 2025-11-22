@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, List
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUIREMENTS = REPO_ROOT / "src" / "latexify" / "requirements.txt"
 DEFAULT_EXTRAS = [
     "PyMuPDF>=1.24.0",

@@ -6,6 +6,7 @@ import hydra
 from omegaconf import DictConfig
 import cv2
 from PIL import Image
+import fitz
 
 from latexify.ingestion.pymupdf import PyMuPDFIngestor
 from latexify.layout.yolo import YOLOLayoutEngine
@@ -47,6 +48,7 @@ class LaTeXifyPipeline:
     def process(self, pdf_path: Path) -> str:
         logger.info(f"Processing {pdf_path}")
         images = self.ingestor.ingest(pdf_path)
+        pdf_doc = fitz.open(pdf_path)
         
         full_document_blocks = []
         metadata = {}
@@ -114,6 +116,21 @@ class LaTeXifyPipeline:
                         item['content'] = math_results[math_ptr]
                         math_ptr += 1
 
+            # Fallback: if no detections produced content, create a whole-page block from PyMuPDF text
+            if not page_blocks_data:
+                try:
+                    page_text = pdf_doc[i].get_text()
+                except Exception:
+                    page_text = ""
+                page_blocks_data.append(
+                    {
+                        "bbox": [0, 0, img.shape[1], img.shape[0]],
+                        "category": "Text_Block",
+                        "conf": 1.0,
+                        "content": page_text,
+                    }
+                )
+
             # 3. Create LayoutBlocks
             page_blocks = []
             for j, item in enumerate(page_blocks_data):
@@ -133,6 +150,15 @@ class LaTeXifyPipeline:
             
         # Assemble
         raw_latex = self.assembler.assemble(full_document_blocks, metadata=metadata)
+        
+        # Debug: Save raw latex
+        raw_path = pdf_path.with_name(pdf_path.stem + "_raw.tex")
+        try:
+            with open(raw_path, "w", encoding="utf-8") as f:
+                f.write(raw_latex)
+            logger.info(f"Raw LaTeX (pre-refinement) saved to {raw_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save raw latex: {e}")
         
         # Refine & Compile Loop
         final_latex = raw_latex

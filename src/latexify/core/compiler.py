@@ -29,11 +29,19 @@ class LatexCompiler:
             
             cmd = []
             if self.engine == "tectonic":
-                if not shutil.which("tectonic"):
-                    return False, "tectonic not found in PATH"
-                # tectonic outputs to the same dir as input by default, or we specify outdir?
-                # Tectonic CLI: `tectonic main.tex` -> produces `main.pdf` next to it.
-                cmd = ["tectonic", str(tex_file)]
+                if shutil.which("tectonic"):
+                    cmd = ["tectonic", str(tex_file)]
+                elif shutil.which("latexmk"):
+                    # Fallback to latexmk when tectonic is unavailable.
+                    cmd = [
+                        "latexmk",
+                        "-pdf",
+                        "-interaction=nonstopmode",
+                        "-output-directory=" + str(tmp_path),
+                        str(tex_file),
+                    ]
+                else:
+                    return False, "tectonic not found in PATH and latexmk fallback unavailable"
             elif self.engine == "latexmk":
                 if not shutil.which("latexmk"):
                     return False, "latexmk not found in PATH"

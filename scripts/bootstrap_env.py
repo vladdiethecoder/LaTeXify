@@ -10,8 +10,20 @@ import sys
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-RELEASE_DIR = Path(__file__).resolve().parents[2] / "src" / "latexify"
-REPO_ROOT = RELEASE_DIR.parent
+SCRIPT_PATH = Path(__file__).resolve()
+
+# Discover repository root robustly (works whether the script lives in release/scripts or repo/scripts).
+# We walk parents until we find src/latexify/requirements.txt.
+def _discover_repo_root(start: Path) -> Path:
+    for parent in start.parents:
+        candidate = parent / "src" / "latexify" / "requirements.txt"
+        if candidate.exists():
+            return parent
+    # Fallback to the old heuristic (may misfire if directory layout changes)
+    return start.parents[2]
+
+REPO_ROOT = _discover_repo_root(SCRIPT_PATH)
+RELEASE_DIR = REPO_ROOT / "src" / "latexify"
 DEFAULT_VENV = RELEASE_DIR / ".venv"
 REQUIREMENTS_FILE = RELEASE_DIR / "requirements.txt"
 KIMI_MODEL_KEY = "llm/kimi-k2-instruct-gguf"

@@ -12,7 +12,7 @@ defaults:
 pipeline:
   # Ingestion
   ingestion:
-    dpi: 200 # PDF → Image resolution
+    dpi: 400 # PDF → Image resolution
 
   # Layout detection
   layout:
@@ -56,7 +56,7 @@ pipeline:
   refinement:
     enable: true
     use_vllm: true
-    max_retries: 3 # Compilation self-correction attempts
+    max_retries: 5 # Compilation self-correction attempts
 
   # Compilation
   compilation:
@@ -79,5 +79,5 @@ caching:
 
 # Debugging
 debug:
-  save_intermediate_outputs: false # Save crops, JSON manifests
-  visualize_bboxes: false # Overlay bboxes on images
+  save_intermediate_outputs: true # Save crops, JSON manifests
+  visualize_bboxes: true # Overlay bboxes on images

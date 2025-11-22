@@ -36,17 +36,26 @@ class PaddleTextRecognizer(TextRecognizer):
             return "Mock Text Block"
 
         # PaddleOCR expects path or numpy array
-        result = self.ocr.ocr(image, cls=True)
-        
-        if not result or result[0] is None:
+        # Newer PaddleOCR versions route angle classification via initialization args, so drop the old cls kwarg.
+        result = self.ocr.ocr(image)
+
+        if not result:
             return ""
-            
-        # Result structure is a list of lists of [box, (text, score)]
-        # We just want the text combined.
+
+        # Newer PaddleOCR returns a dict per page with rec_texts/rec_scores.
+        first = result[0]
+        if isinstance(first, dict):
+            texts = first.get("rec_texts") or []
+            if texts:
+                return " ".join(texts)
+
+        # Legacy structure: list of lists of [box, (text, score)]
         full_text = []
         for line in result:
+            if not line:
+                continue
             for word_info in line:
-                text, score = word_info[1]
-                full_text.append(text)
-                
+                if isinstance(word_info, (list, tuple)) and len(word_info) >= 2:
+                    text = word_info[1][0] if isinstance(word_info[1], (list, tuple)) else word_info[1]
+                    full_text.append(text)
         return " ".join(full_text)

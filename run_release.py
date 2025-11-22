@@ -49,11 +49,7 @@ def load_config():
         return cfg
     return pipeline_cfg
 
-def main():
-    parser = argparse.ArgumentParser(description="Run LaTeXify Release Pipeline")
-    parser.add_argument("--pdf", required=True, help="Path to input PDF")
-    args = parser.parse_args()
-
+def run_pipeline(args):
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("run_release")
     
@@ -72,7 +68,7 @@ def main():
     result = pipeline.process(input_pdf)
     
     # Output directory setup
-    output_dir = Path("release/output")
+    output_dir = Path(args.run_dir) if hasattr(args, "run_dir") else Path("release/output")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     output_base = output_dir / input_pdf.stem
@@ -82,15 +78,24 @@ def main():
     output_tex.write_text(result, encoding="utf-8")
     logger.info(f"LaTeX written to {output_tex}")
     
-    logger.info("Compiling to PDF...")
-    compiler = LatexCompiler(engine="tectonic")
-    success, log = compiler.compile(result, output_pdf_path=output_pdf)
-    
-    if success:
-        logger.info(f"PDF compiled successfully: {output_pdf}")
-    else:
-        logger.error(f"PDF Compilation failed. Log:\n{log}")
-        sys.exit(1)
+    if not getattr(args, "skip_compile", False):
+        logger.info("Compiling to PDF...")
+        compiler = LatexCompiler(engine="tectonic")
+        success, log = compiler.compile(result, output_pdf_path=output_pdf)
+        
+        if success:
+            logger.info(f"PDF compiled successfully: {output_pdf}")
+        else:
+            logger.error(f"PDF Compilation failed. Log:\n{log}")
+            sys.exit(1)
+            
+    return output_tex
+
+def main():
+    parser = argparse.ArgumentParser(description="Run LaTeXify Release Pipeline")
+    parser.add_argument("--pdf", required=True, help="Path to input PDF")
+    args = parser.parse_args()
+    run_pipeline(args)
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,4 @@
+```latex
 \documentclass{article}
 \usepackage{amsmath}
 \usepackage{graphicx}
@@ -176,3 +177,4 @@ y' = a y + c = (-1)(-2) + 3 = 5
 Therefore, the resulting point is (−2, 5).
 
 \end{document}
+```
