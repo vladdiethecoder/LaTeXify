@@ -6,6 +6,7 @@ defaults:
 pipeline:
   ingestion:
     dpi: 300
+    chunk_chars: 2000
   layout:
     model: yolov10n.pt
     conf_threshold: 0.25

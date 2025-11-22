@@ -608,7 +608,12 @@ ROUTING_ALIASES = {
     "math": "equation",
     "formula": "equation",
     "eq": "equation",
+    "display_equation": "equation",
     "img": "figure",
+    "question_block": "question",
+    "answer_block": "paragraph", # Map answer to paragraph for now, or add answer_agent
+    "theorem_block": "paragraph", # Map to paragraph (will be formatted by latex content)
+    "proof_block": "paragraph",
 }
 ROUTING_FIGURE_CONFIDENCE = float(os.environ.get("LATEXIFY_ROUTING_FIGURE_THRESHOLD", "0.45") or 0.45)
 

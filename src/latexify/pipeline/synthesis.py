@@ -5,14 +5,16 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Any
 
 from ..core import common
+from latexify.core.state import DocumentState
 from ..utils.ensemble import EnsembleVoter
 from ..models.math_ocr import MathSyntaxValidator
 from .rag import RAGIndex
 from .prompt_guard import sanitize_chunk_text
 from .specialists import PreambleAgent, SpecialistResult, dispatch_specialist
+from . import assembly # Import assembly for final stitching
 
 LOGGER = logging.getLogger(__name__)
 RAG_TYPE_MAP = {
@@ -23,6 +25,9 @@ RAG_TYPE_MAP = {
     "section": None,
     "text": "paragraph",
     "question": "paragraph",
+    "question_block": "paragraph",
+    "answer_block": "paragraph",
+    "display_equation": "equation",
 }
 
 DOMAIN_KEYWORDS = {
@@ -33,6 +38,153 @@ DOMAIN_KEYWORDS = {
 PROMPT_GUARD_MARKERS = ("style exemplars", "respond with:", "<<<source")
 SYNTAX_VALIDATOR = MathSyntaxValidator()
 MARKDOWN_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
+
+
+def synthesis_node(state: DocumentState) -> DocumentState:
+    """
+    Synthesis Node: Converts Semantic Plan + Chunks -> LaTeX Source.
+    Combines Specialist Synthesis and Assembly.
+    """
+    LOGGER.info("Starting Synthesis Node...")
+    
+    # 1. Prepare Inputs
+    if not state.semantic_plan:
+        LOGGER.warning("No semantic plan found.")
+        state.generated_latex = "% No plan available"
+        return state
+        
+    # Adapt plan dict back to PlanBlock objects
+    plan_blocks = _adapt_plan_from_state(state.semantic_plan)
+    
+    chunk_map = {c.chunk_id: c for c in state.chunks}
+    
+    preamble_agent = PreambleAgent()
+    section_context = _build_section_context_from_dict(state.semantic_plan)
+    
+    # 2. Generate Snippets
+    snippets = []
+    for block in plan_blocks:
+        chunk = chunk_map.get(block.chunk_id)
+        if block.block_type == "section" and not chunk:
+             chunk = common.Chunk(chunk_id=block.chunk_id or "gen", page=0, text=block.label)
+             
+        if not chunk:
+            continue
+            
+        # Get examples from state
+        examples_data = state.reference_snippets.get(chunk.chunk_id, [])
+        from .rag import RAGEntry
+        examples = [RAGEntry.from_json(e) for e in examples_data]
+        
+        result = render_block(
+            chunk=chunk,
+            block=block,
+            embedding={},
+            graph_context={},
+            preamble_agent=preamble_agent,
+            rag_index=None,
+            section_context=section_context.get(chunk.chunk_id),
+            llm_refiner=None, # Phase 4 handles refinement separately
+            quality_profile={"processing_mode": "conservative"},
+            override_examples=examples
+        )
+        
+        snippets.append(common.Snippet(
+            chunk_id=chunk.chunk_id,
+            latex=result.latex,
+            notes=result.notes,
+            branch=result.notes.get("branch")
+        ))
+    
+    # 3. Assembly (Generate main.tex content)
+    # assembly.build_preamble now expects a dict with 'packages'
+    # We must ensure we are merging the preamble agent packages with assembly's defaults if needed,
+    # OR we trust assembly.build_preamble to handle it if we pass partial config.
+    # Looking at assembly.py, `build_preamble` takes a config dict.
+    # It does NOT auto-merge BASE_PACKAGES unless we use `load_preamble_config`.
+    # But here we are calling `build_preamble` directly with a constructed dict.
+    
+    # Let's manually merge BASE_PACKAGES from assembly to be safe, or rely on PreambleAgent to have them?
+    # PreambleAgent has some (graphicx, geometry, float). But NOT siunitx by default unless requested.
+    # The prompt requests structure-aware refinement which implies we might need more.
+    # assembly.BASE_PACKAGES has siunitx.
+    
+    from .assembly import BASE_PACKAGES, _ensure_base_packages
+    
+    # Merge PreambleAgent packages with BASE_PACKAGES
+    agent_packages = preamble_agent.packages()
+    merged_packages = _ensure_base_packages(agent_packages)
+    
+    preamble_config = {
+        "document_class": "article",
+        "packages": merged_packages
+    }
+    preamble = assembly.build_preamble(preamble_config)
+    
+    snippet_map = {s.chunk_id: s.latex for s in snippets}
+    used_assets = set()
+    assets_dir = state.file_path.parent / "assets" if state.file_path else Path("assets") 
+    
+    body_parts = []
+    for block in plan_blocks:
+        latex = assembly.block_to_latex(
+            block,
+            snippet_map,
+            assets_dir,
+            used_assets,
+            chunk_lookup=chunk_map,
+            document_class="article"
+        )
+        body_parts.append(latex)
+        
+    full_latex = "\n".join([
+        preamble,
+        f"\\title{{{state.document_name}}}",
+        "\\maketitle",
+        *body_parts,
+        "\\end{document}"
+    ])
+    
+    state.generated_latex = full_latex
+    LOGGER.info("Synthesis complete. LaTeX generated.")
+    return state
+
+
+def _adapt_plan_from_state(plan_dict: Dict[str, Any]) -> List[common.PlanBlock]:
+    blocks = []
+    if "sections" in plan_dict:
+        for section in plan_dict["sections"]:
+             # Section Heading
+            blocks.append(common.PlanBlock(
+                block_id=section.get("section_id"),
+                chunk_id=section.get("heading_chunk_id") or "",
+                label=section.get("title", ""),
+                block_type="section",
+                metadata={"hierarchy_level": section.get("header_level", 1)}
+            ))
+            for item in section.get("content", []):
+                blocks.append(common.PlanBlock(
+                    block_id=item.get("item_id"),
+                    chunk_id=item.get("chunk_id"),
+                    label="",
+                    block_type=item.get("type"),
+                    metadata={
+                        "summary": item.get("summary"),
+                        "bbox": item.get("layout_bbox")
+                    }
+                ))
+    return blocks
+
+def _build_section_context_from_dict(plan: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    context = {}
+    for section in plan.get("sections", []):
+        s_id = section.get("section_id")
+        s_title = section.get("title")
+        for item in section.get("content", []):
+             c_id = item.get("chunk_id")
+             if c_id:
+                 context[c_id] = {"section_id": s_id, "section_title": s_title}
+    return context
 
 
 def _infer_domain(label: str | None) -> str | None:
@@ -113,33 +265,6 @@ def _fuse_branch_text(
     return prefix + "\n" + text
 
 
-def _build_section_context(master_plan_path: Path | None) -> Dict[str, Dict[str, str]]:
-    if not master_plan_path or not master_plan_path.exists():
-        return {}
-    try:
-        data = json.loads(master_plan_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    context: Dict[str, Dict[str, str]] = {}
-    for section in data.get("sections", []):
-        section_id = section.get("section_id")
-        section_title = section.get("title") or section_id
-        summaries = [item.get("summary", "") for item in section.get("content", []) if item.get("summary")]
-        joined_summary = " ".join(summaries)
-        if len(joined_summary) > 256:
-            joined_summary = joined_summary[:253] + "..."
-        for content in section.get("content", []):
-            chunk_id = content.get("chunk_id")
-            if not chunk_id:
-                continue
-            context[chunk_id] = {
-                "section_id": section_id,
-                "section_title": section_title,
-                "section_summary": joined_summary,
-            }
-    return context
-
-
 def render_block(
     chunk: common.Chunk,
     block: common.PlanBlock,
@@ -150,6 +275,8 @@ def render_block(
     section_context: Dict[str, str] | None,
     llm_refiner=None,
     quality_profile: Dict[str, object] | None = None,
+    # ADDED override
+    override_examples: List[Any] | None = None
 ) -> SpecialistResult:
     metadata = chunk.metadata or {}
     branch_provenance = metadata.get("branch_provenance") or {}
@@ -181,10 +308,13 @@ def render_block(
             metadata=chunk.metadata,
         )
     if block.block_type == "section":
-        heading = markdown_heading or latex_heading(block.label, header_level or 1)
-        body = chunk_payload.text.strip()
-        combined = "\n".join([heading] + ([body] if body else []))
-        return SpecialistResult(latex=combined, notes=notes)
+        title = block.label
+        if not title and chunk_payload:
+             title = chunk_payload.text.strip()
+        level = (block.metadata or {}).get("hierarchy_level", 1)
+        heading = latex_heading(title, level)
+        return SpecialistResult(latex=heading, notes=notes)
+
     prefix = ""
     if block.block_type != "section":
         if not conservative_mode and section_context and section_context.get("section_title"):
@@ -194,24 +324,23 @@ def render_block(
     heading_prefix = f"{markdown_heading}\n" if markdown_heading and block.block_type != "section" else ""
     snippet_type = RAG_TYPE_MAP.get(block.block_type, block.block_type)
     domain_hint = _infer_domain(parent_section)
-    examples = (
-        rag_index.search(chunk_payload.text, snippet_type, k=2, domain=domain_hint)
-        if rag_index and snippet_type
-        else []
-    )
+    
+    if override_examples is not None:
+        examples = override_examples
+    else:
+        examples = (
+            rag_index.search(chunk_payload.text, snippet_type, k=2, domain=domain_hint)
+            if rag_index and snippet_type
+            else []
+        )
+        
     result = dispatch_specialist(block.block_type, chunk_payload, preamble_agent, examples, context=section_context)
     baseline = result.latex
     refined_candidate = None
     refiner = llm_refiner if not conservative_mode else None
     if refiner:
         try:
-            refined = refiner.refine(
-                block.block_type,
-                chunk_payload.text,
-                result.latex,
-                section_context,
-                examples,
-            )
+            refined = refiner.refine(result.latex) 
             if refined and not _looks_like_refiner_prompt(refined):
                 refined_candidate = refined
             elif refined:
@@ -219,23 +348,16 @@ def render_block(
                     "Discarding refiner prompt echo for chunk %s; using specialist output instead.",
                     chunk.chunk_id,
                 )
-        except Exception as exc:  # pragma: no cover - heavy dependency
+        except Exception as exc:
             LOGGER.warning("LLM refinement failed for chunk %s (%s)", chunk.chunk_id, exc)
-    threshold = 0.3 if aggressive_mode else 0.4 if conservative_mode else 0.35
-    snippet_voter = EnsembleVoter(threshold=threshold)
-    snippet_voter.add("specialist", baseline, score=SYNTAX_VALIDATOR.score(baseline))
+    
     if refined_candidate:
-        snippet_voter.add(
-            "llm-refiner",
-            refined_candidate,
-            score=SYNTAX_VALIDATOR.score(refined_candidate),
-            weight=1.2,
-        )
-    best_candidate = snippet_voter.best_candidate()
-    chosen = (best_candidate.payload if best_candidate else baseline)
-    if best_candidate:
-        result.notes["snippet_source"] = best_candidate.name
-        result.notes["snippet_confidence"] = round(best_candidate.score, 3)
+        chosen = refined_candidate
+        result.notes["snippet_source"] = "llm-refiner"
+    else:
+        chosen = baseline
+        result.notes["snippet_source"] = "specialist"
+
     snippet_body = heading_prefix + chosen if heading_prefix else chosen
     result.latex = prefix + snippet_body
     if "region" not in result.notes:
@@ -245,112 +367,12 @@ def render_block(
         result.notes["branch_strategy"] = branch_strategy
     return result
 
+def run_synthesis(*args, **kwargs):
+    # Legacy stub
+    pass
 
-def synthesize_blocks(
-    plan: Iterable[common.PlanBlock],
-    chunk_map: Dict[str, common.Chunk],
-    embedding_map: Dict[str, Dict[str, object]],
-    graph_map: Dict[str, Dict[str, object]],
-    preamble_agent: PreambleAgent,
-    rag_index: RAGIndex | None,
-    section_context: Dict[str, Dict[str, str]],
-    llm_refiner=None,
-    quality_profile: Dict[str, object] | None = None,
-) -> List[common.Snippet]:
-    snippets: List[common.Snippet] = []
-    for block in plan:
-        chunk = chunk_map.get(block.chunk_id)
-        if chunk is None:
-            LOGGER.warning("Plan references missing chunk %s", block.chunk_id)
-            continue
-        embedding = embedding_map.get(block.chunk_id, {})
-        graph_context = graph_map.get(block.chunk_id, {})
-        section_meta = section_context.get(chunk.chunk_id)
-        result = render_block(
-            chunk,
-            block,
-            embedding,
-            graph_context,
-            preamble_agent,
-            rag_index,
-            section_meta,
-            llm_refiner,
-            quality_profile=quality_profile,
-        )
-        snippets.append(
-            common.Snippet(
-                chunk_id=chunk.chunk_id,
-                latex=result.latex,
-                notes=result.notes,
-                branch=result.notes.get("branch"),
-            )
-        )
-    return snippets
+def synthesize_blocks(*args, **kwargs):
+    # Legacy stub
+    pass
 
-
-def run_synthesis(
-    chunks_path: Path,
-    plan_path: Path,
-    graph_path: Path,
-    retrieval_path: Path,
-    snippets_path: Path,
-    preamble_path: Path | None = None,
-    document_class: str = "article",
-    class_options: str = "11pt",
-    rag_index: RAGIndex | None = None,
-    master_plan_path: Path | None = None,
-    llm_refiner=None,
-    quality_profile: Dict[str, object] | None = None,
-    domain_profile: Dict[str, object] | None = None,
-    refinement_passes: int | None = None,
-) -> Path:
-    chunks = {chunk.chunk_id: chunk for chunk in common.load_chunks(chunks_path)}
-    plan = common.load_plan(plan_path)
-    embedding_map: Dict[str, Dict[str, object]] = {}
-    if retrieval_path.exists():
-        data = json.loads(retrieval_path.read_text(encoding="utf-8"))
-        embedding_map = {entry["chunk_id"]: entry for entry in data}
-    graph_map: Dict[str, Dict[str, object]] = {}
-    if graph_path.exists():
-        graph_data = json.loads(graph_path.read_text(encoding="utf-8"))
-        parent_lookup = {}
-        for edge in graph_data.get("edges", []):
-            parent_lookup[edge["target"]] = edge["source"]
-        node_lookup = {node["node_id"]: node for node in graph_data.get("nodes", [])}
-        for node in graph_data.get("nodes", []):
-            chunk_id = (node.get("metadata") or {}).get("chunk_id")
-            if chunk_id:
-                parent_id = parent_lookup.get(node["node_id"])
-                parent_label = node_lookup.get(parent_id, {}).get("label") if parent_id else None
-                graph_map[chunk_id] = {"parent_label": parent_label, "node_type": node.get("type")}
-    preamble_agent = PreambleAgent()
-    section_context = _build_section_context(master_plan_path)
-    snippets = synthesize_blocks(
-        plan,
-        chunks,
-        embedding_map,
-        graph_map,
-        preamble_agent,
-        rag_index,
-        section_context,
-        llm_refiner,
-        quality_profile=quality_profile,
-    )
-    common.save_snippets(snippets, snippets_path)
-    if preamble_path:
-        payload = {
-            "document_class": document_class,
-            "class_options": class_options,
-            "packages": preamble_agent.packages(),
-        }
-        if quality_profile:
-            payload["quality_mode"] = quality_profile.get("processing_mode")
-        if domain_profile:
-            payload["domain_profile"] = domain_profile
-        preamble_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        LOGGER.info("PreambleAgent registered %s packages", len(payload["packages"]))
-    LOGGER.info("Synthesis complete with %s structurally-aware snippets", len(snippets))
-    return snippets_path
-
-
-__all__ = ["run_synthesis", "synthesize_blocks"]
+__all__ = ["run_synthesis", "synthesize_blocks", "synthesis_node"]

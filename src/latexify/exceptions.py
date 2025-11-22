@@ -5,17 +5,17 @@ class LatexifyError(Exception):
 class ModelLoadError(LatexifyError):
     """Raised when a model fails to load or weights are missing."""
 
-class LayoutDetectionError(LaTeXifyError):
+class LayoutDetectionError(LatexifyError):
     """Raised when layout detection fails or produces no results."""
     pass
 
 
-class ModelLoadingError(LaTeXifyError):
+class ModelLoadingError(LatexifyError):
     """Raised when a model fails to load (CUDA OOM, missing weights, etc.)."""
     pass
 
 
-class CompilationError(LaTeXifyError):
+class CompilationError(LatexifyError):
     """Raised when generated LaTeX fails to compile."""
     
     def __init__(self, message: str, latex_code: str = "", error_log: str = ""):
@@ -24,7 +24,7 @@ class CompilationError(LaTeXifyError):
         self.error_log = error_log
 
 
-class LowConfidenceError(LaTeXifyError):
+class LowConfidenceError(LatexifyError):
     """Raised when OCR/extraction confidence is below acceptable threshold."""
     
     def __init__(self, message: str, confidence: float, threshold: float):
@@ -33,7 +33,7 @@ class LowConfidenceError(LaTeXifyError):
         self.threshold = threshold
 
 
-class ExtractionError(LaTeXifyError):
+class ExtractionError(LatexifyError):
     """Raised when content extraction fails for a specific region."""
     
     def __init__(self, message: str, region_id: str = "", extractor: str = ""):
@@ -42,18 +42,18 @@ class ExtractionError(LaTeXifyError):
         self.extractor = extractor
 
 
-class ReadingOrderError(LaTeXifyError):
+class ReadingOrderError(LatexifyError):
     """Raised when reading order reconstruction fails."""
     pass
 
 
-class EnvironmentError(LaTeXifyError):
+class EnvironmentError(LatexifyError):
     """Raised when required environment/dependencies are missing."""
 
-class PipelineConfigurationError(LaTeXifyError):
+class PipelineConfigurationError(LatexifyError):
     """Raised when the pipeline is misconfigured."""
     pass
 
-class HallucinationError(LaTeXifyError):
+class HallucinationError(LatexifyError):
     """Raised when the model output is determined to be hallucinated or invalid."""
     pass

@@ -1,4 +1,4 @@
-"""PlannerAgent that emits a schema-constrained master plan."""
+"PlannerAgent that emits a schema-constrained master plan based on semantic tags."
 from __future__ import annotations
 
 import json
@@ -9,10 +9,24 @@ from typing import Dict, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from ..core import common
-from .enhanced_structure_graph import generate_enhanced_graph
+from latexify.core.state import DocumentState
+# from .enhanced_structure_graph import generate_enhanced_graph
 
 LOGGER = logging.getLogger(__name__)
-ContentType = Literal["paragraph", "equation", "table", "list", "figure", "metadata"]
+
+# Extended types to match Blueprint
+ContentType = Literal[
+    "paragraph", 
+    "display_equation", 
+    "table", 
+    "list", 
+    "figure", 
+    "metadata",
+    "question_block",
+    "answer_block",
+    "theorem_block",
+    "proof_block"
+]
 
 
 class PlanContent(BaseModel):
@@ -20,8 +34,10 @@ class PlanContent(BaseModel):
     chunk_id: str
     type: ContentType
     summary: str | None = None
-    region_type: str | None = None
-    header_level: int | None = None
+    # Carry forward layout data for synthesis agents
+    layout_bbox: List[float] | None = None
+    contains_images: bool = False
+    contains_equations: bool = False
 
 
 class PlanSection(BaseModel):
@@ -34,17 +50,40 @@ class PlanSection(BaseModel):
 
 class MasterPlan(BaseModel):
     document_title: str
-    document_class: str = "article"
-    class_options: str = "12pt,twocolumn"
+    document_class: str = "article" # Default, usually overridden by CLI
+    class_options: str = "12pt,twoside" # Better default for textbooks
     sections: List[PlanSection]
+
+
+def plan_node(state: DocumentState) -> DocumentState:
+    """
+    Planning Node: Generates a MasterPlan from semantic chunks.
+    """
+    LOGGER.info("Starting Planning Node...")
+    if not state.chunks:
+        LOGGER.warning("No chunks found in state. Planning might be empty.")
+    
+    # Reuse existing logic
+    plan = build_master_plan(
+        chunks=state.chunks,
+        document_title=state.document_name,
+        document_class="article" # could be from state.config
+    )
+    
+    state.semantic_plan = plan.model_dump()
+    LOGGER.info(f"Planning complete. Generated {len(plan.sections)} sections.")
+    return state
 
 
 def _safe_label(text: str, fallback: str) -> str:
     stripped = (text or "").strip()
     if not stripped:
         return fallback
-    first_line = stripped.splitlines()[0].strip()
-    return first_line or fallback
+    # Extract first line or reasonable substring
+    lines = stripped.splitlines()
+    if not lines:
+        return fallback
+    return lines[0][:100].strip() or fallback
 
 
 def _summarize(text: str, limit: int = 32) -> str:
@@ -56,15 +95,32 @@ def _summarize(text: str, limit: int = 32) -> str:
     return " ".join(tokens[:limit]) + "..."
 
 
-def _content_type(region_type: str) -> ContentType:
-    mapping: Dict[str, ContentType] = {
-        "table": "table",
-        "list": "list",
-        "figure": "figure",
-        "formula": "equation",
-        "heading": "metadata",
-    }
-    return mapping.get(region_type, "paragraph")
+def _map_tag_to_type(tag: str, chunk: common.Chunk) -> ContentType:
+    """
+    Maps ingestion semantic tags to synthesis templates.
+    """
+    # 1. Strong types from ingestion
+    if tag == "question":
+        return "question_block"
+    if tag == "answer":
+        return "answer_block"
+    if tag == "equation":
+        return "display_equation"
+    if tag == "figure":
+        return "figure"
+    if tag == "table":
+        return "table"
+    
+    # 2. Text heuristics (if ingestion missed it)
+    text_lower = chunk.text.lower().strip()
+    if text_lower.startswith("proof"):
+        return "proof_block"
+    if text_lower.startswith("theorem") or text_lower.startswith("lemma"):
+        return "theorem_block"
+        
+    # 3. Content scanning
+    # If text contains "where x is...", it's a paragraph. 
+    return "paragraph"
 
 
 def _ensure_section(
@@ -85,8 +141,8 @@ def _ensure_section(
 def build_master_plan(
     chunks: Iterable[common.Chunk],
     document_title: str,
-    document_class: str = "article",
-    class_options: str = "12pt,twocolumn",
+    document_class: str = "book", # Default to book for textbook quality
+    class_options: str = "12pt",
 ) -> MasterPlan:
     sections: List[PlanSection] = []
     section_counter = 1
@@ -98,35 +154,44 @@ def build_master_plan(
         section_counter += 1
         return current_section
 
+    # Initial pass: Create a default section if none exists
+    # ensure_current("Introduction", 1)
+
     for chunk in chunks:
         metadata = chunk.metadata or {}
-        header_level = metadata.get("header_level", 0)
-        region = metadata.get("region_type", "text")
-        if header_level > 0 or region == "heading":
+        tag = metadata.get("tag", "text")
+        
+        # 1. Handle Section Headings
+        if tag == "heading":
             title = _safe_label(chunk.text, f"Section {section_counter}")
-            section = ensure_current(title, header_level or 1)
+            # Ingest might not give level, assume 1 for now or infer from font size if available
+            header_level = 1 
+            section = ensure_current(title, header_level)
             section.heading_chunk_id = chunk.chunk_id
             continue
+            
+        # 2. Ensure we have a section context
         if current_section is None:
-            ensure_current("Introduction", 1)
-        assert current_section is not None  # mypy guard
-        current_section.content.append(
-            PlanContent(
-                item_id=f"{current_section.section_id}-content-{len(current_section.content) + 1:03d}",
-                chunk_id=chunk.chunk_id,
-                type=_content_type(region),
-                summary=_summarize(chunk.text),
-                region_type=region,
-                header_level=metadata.get("header_level"),
-            )
-        )
+            ensure_current("Preamble / Introduction", 1)
+        assert current_section is not None
 
-    if not sections:
-        default_section = PlanSection(section_id="sec-001", title=document_title or "Document", header_level=1)
-        sections.append(default_section)
+        # 3. Map Content
+        plan_type = _map_tag_to_type(tag, chunk)
+        
+        # 4. Create Node
+        node = PlanContent(
+            item_id=f"{current_section.section_id}-item-{len(current_section.content) + 1:03d}",
+            chunk_id=chunk.chunk_id,
+            type=plan_type,
+            summary=_summarize(chunk.text),
+            layout_bbox=metadata.get("bbox"),
+            contains_images=metadata.get("contains_images", False),
+            contains_equations=metadata.get("contains_equations", False)
+        )
+        current_section.content.append(node)
 
     return MasterPlan(
-        document_title=document_title or "Generated Document",
+        document_title=document_title or "Generated Textbook",
         document_class=document_class,
         class_options=class_options,
         sections=sections,
@@ -148,25 +213,22 @@ def run_planner(
     chunks_path: Path,
     master_plan_path: Path,
     document_title: str | None = None,
-    document_class: str = "article",
-    class_options: str = "12pt,twocolumn",
+    document_class: str = "book",
+    class_options: str = "12pt",
 ) -> Path:
     chunks = common.load_chunks(chunks_path)
     plan = build_master_plan(chunks, document_title or "Generated Document", document_class, class_options)
     save_master_plan(plan, master_plan_path)
     LOGGER.info("PlannerAgent generated %s sections", len(plan.sections))
-    try:
-        output_dir = master_plan_path.parent
-        generate_enhanced_graph(
-            chunks_path,
-            master_plan_path,
-            output_dir / "enhanced_structure_graph.json",
-            output_dir / "semantic_relationships.json",
-            output_dir / "cross_reference_map.json",
-        )
-    except Exception as exc:  # pragma: no cover - graph is auxiliary
-        LOGGER.warning("Enhanced structure graph generation skipped: %s", exc)
+    
+    # Optional: Generate Graph (commented out to reduce dependencies for this phase)
+    # try:
+    #     output_dir = master_plan_path.parent
+    #     generate_enhanced_graph(...)
+    # except Exception as exc:
+    #     LOGGER.warning("Enhanced structure graph generation skipped: %s", exc)
+        
     return master_plan_path
 
 
-__all__ = ["MasterPlan", "PlanSection", "PlanContent", "run_planner", "load_master_plan", "build_master_plan"]
+__all__ = ["MasterPlan", "PlanSection", "PlanContent", "run_planner", "load_master_plan", "build_master_plan", "plan_node"]

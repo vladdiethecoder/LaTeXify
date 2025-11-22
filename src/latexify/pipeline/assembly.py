@@ -135,6 +135,9 @@ def _demote_plain_text_equations(snippet: str) -> str:
 
 
 def _sanitize_snippet(snippet: str) -> str:
+    # First, apply Unicode replacements
+    snippet = sanitize_unicode_to_latex(snippet)
+    
     cleaned_lines: List[str] = []
     skip_block = False
     for raw_line in snippet.splitlines():
@@ -311,6 +314,7 @@ BASE_PACKAGES = [
     {"package": "tcolorbox", "options": "most"},
     {"package": "enumitem", "options": None},
     {"package": "hyperref", "options": None},
+    {"package": "siunitx", "options": None},
 ]
 DECLARATIONS = [
     "\\newtheorem{theorem}{Theorem}",
@@ -318,9 +322,12 @@ DECLARATIONS = [
     "\\newcommand{\\Question}[1]{\\section*{Question~#1}}",
     "\\newcommand{\\Transform}[2]{#1\\rightarrow #2}",
     "\\tcbset{colback=white,colframe=black!15!white,boxrule=0.4pt,arc=2pt}",
+    # Flashcard Skin
+    "\\tcbset{flashcard/.style={enhanced, drop shadow, colback=white, colframe=gray!50!black, fonttitle=\\bfseries}}", 
     "\\newtcolorbox{questionbox}[2][]{title={Question~#2},#1}",
     "\\newenvironment{question}[1]{\\begin{questionbox}{#1}}{\\end{questionbox}}",
     "\\newenvironment{answer}{\\begin{tcolorbox}[title={Answer},colback=green!5]}{\\end{tcolorbox}}",
+    "\\newenvironment{summarycard}[1]{\\begin{tcolorbox}[flashcard, title={#1}]}{\\end{tcolorbox}}",
     "\\setlist{leftmargin=*}",
 ]
 

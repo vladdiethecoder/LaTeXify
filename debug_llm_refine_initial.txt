@@ -1,180 +1,59 @@
 ```latex
 \documentclass{article}
 \usepackage{amsmath}
-\usepackage{graphicx}
-\usepackage{booktabs}
 
 \begin{document}
 
-\title{Basic Advanced Functions — Part 1: Communication Problems}
-\author{Your Name}
-\date{October 28, 2025}
-\maketitle
+\section*{Preamble / Introduction}
+\subsection*{Basic Advanced Functions — Part 1: Communication Problems}
 
-\section*{Question 1}
-(6 points)
+Your Name \\
+October 2...
 
-\textbf{a)}
-An airplane must travel 400 km. Let \( t \) be the travel time (in hours) and let \( s(t) \) denote the speed (in km/h).
+\section*{Transformations on Function $f$}
 
-\[
-\text{Speed} = \frac{\text{Distance}}{\text{Time}}
-\]
-\[
-s(t) = \frac{400}{t} \quad (t > 0, \text{ km/h})
-\]
-
-\textbf{b)}
-An ice cream cone starts at 125 mL and loses half its volume every 5 min. Let \( t \) be in minutes and \( v(t) \) be the volume (mL); the discrete half-life model is
-
-\[
-v(t) = v_0 \left(\frac{1}{2}\right)^{t/T_{1/2}}
-\]
-\[
-v(t) = 125 \left(\frac{1}{2}\right)^{t/5}
-\]
-
-\textbf{c)}
-Scott drives at a constant speed of 50 km/h. If \( d(t) \) is the distance (km) after \( t \) hours,
-
-\[
-d(t) = 50t
-\]
-
-\section*{Question 2}
-(6 points)
-
-\textbf{a)} 
-\begin{align*}
-p(r) &= 2r^2 + 2r - 1 \\
-x &= 2y^2 + 2y - 1 \\
-x + 1 &= 2\left(y + 1\right)^2 - 1 \\
-x + 1 &= 2\left(\frac{y + 1}{2}\right)^2 - 1 \\
-x + 1 &= 2\left(\frac{(y + 1)^2}{4}\right) - 1 \\
-x + 1 &= \frac{(y + 1)^2}{2} - 1 \\
-x + 3 &= \frac{(y + 1)^2}{2} \\
-2(x + 3) &= (y + 1)^2 \\
-y + 1 &= \pm \sqrt{2(x + 3)} \\
-y &= -1 \pm \sqrt{2(x + 3)} \\
-p^{-1}(x) &= -1 \pm \sqrt{2(x + 3)}
-\end{align*}
-
-\textbf{b)}
-\begin{align*}
-3y + 5x &= 18 \\
-3y &= -5x + 18 \\
-y &= -\frac{5}{3}x + 6 \\
-x &= -\frac{5}{3}y + 6 \\
-x - 6 &= -\frac{5}{3}y \\
-y &= -\frac{3}{5}(x - 6) \\
-y &= -\frac{3}{5}x + \frac{18}{5} \\
-f^{-1}(x) &= -\frac{3}{5}x + \frac{18}{5}
-\end{align*}
-
-\textbf{c)}
-\begin{align*}
-h(t) &= -4.9(t + 3)^2 + 45.8 \\
-x &= -4.9(y + 3)^2 + 45.8 \\
-x - 45.8 &= -4.9(y + 3)^2 \\
-45.8 - x &= 4.9(y + 3)^2 \\
-\frac{45.8 - x}{4.9} &= (y + 3)^2 \\
-y + 3 &= \pm \sqrt{\frac{45.8 - x}{4.9}} \\
-y &= -3 \pm \sqrt{\frac{45.8 - x}{4.9}} \\
-h^{-1}(x) &= -3 \pm \sqrt{\frac{45.8 - x}{4.9}}
-\end{align*}
-
-\section*{Question 3}
-(6 points)
-
-\textbf{a)}
-\begin{itemize}
-    \item Inverse (reflection across \( y = x \)).
-    \item Vertical line test: fails.
-\end{itemize}
-Construct inverse: reflect graph of \( y = p(x) \) across \( y = x \)
-\[
-\Rightarrow \text{graph of } p^{-1}
-\]
-Apply VLT to \( p^{-1} \): some verticals cut the graph twice
-\[
-\Rightarrow \text{Inverse is not a function}
-\]
-Domain/Range swap: \(\text{Dom}(p^{-1}) = \text{Ran}(p)\), \(\text{Ran}(p^{-1}) = \text{Dom}(p)\)
-
-\textbf{b)}
-\begin{itemize}
-    \item Inverse of a line (reflection across \( y = x \)).
-    \item Vertical line test: passes.
-\end{itemize}
-Construct inverse: reflect non-vertical line across \( y = x \)
-\[
-\Rightarrow \text{another non-vertical line}
-\]
-Apply VLT to \( f^{-1} \): each vertical meets at most once
-\[
-\Rightarrow \text{Inverse is a function}
-\]
-Domain/Range swap: \(\text{Dom}(f^{-1}) = \text{Ran}(f)\), \(\text{Ran}(f^{-1}) = \text{Dom}(f)\)
-
-\section*{Question 5}
-(8 points)
-
-The point (1, −2) is on the graph of \( f \). Describe the following transformations on \( f \), and determine the resulting point.
+The point $(1, -2)$ is on the graph of $f$. Describe the following transformations on $f$, and determine the resulting point.
 
 We use
-\[
-g(x) = a f(k(x - d)) + c,
-\]
-\[
-x' = \frac{x}{k} + d,
-\]
-\[
-y' = a y + c.
-\]
+\[ g(x) = a f \left( \frac{x - d}{k} \right) + c, \]
+\[ x' = \frac{x}{k} + d, \]
+\[ y' = a y + c. \]
 
-\textbf{a)} \( g(x) = 2f(x) + 3 \)
+\subsection*{Part (a)}
+\[ g(x) = 2f(x) + 3 \]
 
-The \( a = 2 \) indicates a vertical stretch by a factor of 2 and the \( c = 3 \) indicates a vertical translation of 3 units up.
-\[
-x' = \frac{x}{k} + d = 1 \cdot \frac{1}{1} + 0 = 1
-\]
-\[
-y' = a y + c = 2(-2) + 3 = -1
-\]
-Therefore, the resulting point is (1, −1).
+The $a = 2$ indicates a vertical stretch by a factor of 2 and the $c = 3$ indicates a vertical translation of 3 units up.
+\[ x' = \frac{x}{k} + d = \frac{1}{1} + 0 = 1 \]
+\[ y' = a y + c = 2(-2) + 3 = -1 \]
 
-\textbf{b)} \( g(x) = f(x + 1) - 3 \)
+Therefore, the resulting point is $(1, -1)$.
 
-The \( d = -1 \) (since \( x - d = x - (-1) = x + 1 \)) indicates a horizontal translation of 1 unit to the left and the \( c = -3 \) indicates a vertical translation of 3 units down.
-\[
-x' = \frac{x}{k} + d = 1 \cdot \frac{1}{1} + (-1) = 0
-\]
-\[
-y' = a y + c = 1(-2) + (-3) = -5
-\]
-Therefore, the resulting point is (0, −5).
+\subsection*{Part (b)}
+\[ g(x) = f(x + 1) - 3 \]
 
-\textbf{c)} \( g(x) = -f(2x) \)
+The $d = -1$ (since $x - d = x - (-1) = x + 1$) indicates a horizontal translation of 1 unit to the left and the $c = -3$ indicates a vertical translation of 3 units down.
+\[ x' = \frac{x}{k} + d = \frac{1}{1} + (-1) = 0 \]
+\[ y' = a y + c = 1(-2) + (-3) = -5 \]
 
-The \( a = -1 \) indicates a reflection in the x-axis and the \( k = 2 \) indicates a horizontal compression by a factor of \( \frac{1}{2} \).
-\[
-x' = \frac{x}{k} + d = 1 \cdot \frac{1}{2} + 0 = \frac{1}{2}
-\]
-\[
-y' = a y + c = (-1)(-2) + 0 = 2
-\]
-Therefore, the resulting point is \( \left( \frac{1}{2}, 2 \right) \).
+Therefore, the resulting point is $(0, -5)$.
 
-\textbf{d)} \( g(x) = -f(-x - 1) + 3 \)
+\subsection*{Part (c)}
+\[ g(x) = -f(2x) \]
 
-The \( a = -1 \) indicates a reflection in the x-axis, the \( k = -1 \) indicates a reflection in the y-axis, the \( d = -1 \) (from \( x - d = x - (-1) = x + 1 \)) indicates a horizontal translation of 1 unit to the left, and the \( c = 3 \) indicates a vertical translation of 3 units up.
-\[
-x' = \frac{x}{k} + d = 1 \cdot \frac{1}{-1} + (-1) = -2
-\]
-\[
-y' = a y + c = (-1)(-2) + 3 = 5
-\]
-Therefore, the resulting point is (−2, 5).
+The $a = -1$ indicates a reflection in the x-axis and the $k = 2$ indicates a horizontal compression by a factor of $\frac{1}{2}$.
+\[ x' = \frac{x}{k} + d = \frac{1}{2} + 0 = \frac{1}{2} \]
+\[ y' = a y + c = (-1)(-2) + 0 = 2 \]
+
+Therefore, the resulting point is $\left( \frac{1}{2}, 2 \right)$.
+
+\subsection*{Part (d)}
+\[ g(x) = -f(-x - 1) + 3 \]
+
+The $a = -1$ indicates a reflection in the x-axis, the $k = -1$ indicates a reflection in the y-axis, the $d = -1$ (from $x - d = x - (-1) = x + 1$) indicates a horizontal translation of 1 unit to the left, and the $c = 3$ indicates a vertical translation of 3 units up.
+\[ x' = \frac{x}{k} + d = \frac{1}{-1} + (-1) = -2 \]
+\[ y' = a y + c = (-1)(-2) + 3 = 5 \]
+
+Therefore, the resulting point is $(-2, 5)$.
 
 \end{document}
 ```

@@ -15,7 +15,8 @@ SEQUENCE_LATEX_MAP: Dict[str, str] = {
 # Expandable lookup for troublesome Unicode glyphs that frequently leak through.
 # Entries should remain context-free so they are safe in both math and text mode.
 UNICODE_LATEX_MAP: Dict[str, str] = {
-    "−": "-",  # minus sign
+    "−": "-",  # minus sign (U+2212) -> hyphen (U+002D)
+    "\u2212": "-", # Explicit unicode escape for minus sign
     "–": "--",
     "—": "---",
     "“": "``",

@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict
+from .common import Chunk
 
 class ProcessingStatus(str, Enum):
     PENDING = "PENDING"
@@ -10,41 +13,59 @@ class ProcessingStatus(str, Enum):
     FAILED = "FAILED"
 
 class TextBlock(BaseModel):
+    """Represents a layout element (text, figure, etc.) from ingestion."""
     text: str
-    confidence: float
-    bbox: tuple[float, float, float, float]  # x1, y1, x2, y2
+    confidence: float = 1.0
+    bbox: Optional[tuple[float, float, float, float]] = None  # x1, y1, x2, y2
     page_index: int = 0
-    tag: str = "text"
+    tag: str = "text" # e.g., "question", "header", "equation"
     metadata: dict = Field(default_factory=dict)
 
 class DocumentState(BaseModel):
     """
     The Single Source of Truth passed through the pipeline.
     """
-    model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Metadata
-    doc_id: str
-    file_path: Path
+    # Input / Metadata
+    document_name: str = "document"
+    file_path: Optional[Path] = None
+    
+    # Configuration (Runtime Toggles)
+    config: Dict[str, Any] = Field(default_factory=lambda: {
+        "chunk_chars": 2000,
+        "use_vllm": True,
+        "refinement_passes": 1,
+        "skip_compile": False
+    })
+    
+    # Phase 1: Ingestion Data
+    # Structured blocks from MinerU/PyMuPDF
+    layout_blocks: List[TextBlock] = Field(default_factory=list)
+    # Semantic chunks created from layout blocks
+    chunks: List[Chunk] = Field(default_factory=list)
+    
+    # Phase 2: Planning
+    # The semantic structure (MasterPlan)
+    semantic_plan: Optional[Dict[str, Any]] = None 
+    
+    # Phase 3: Retrieval & Synthesis
+    # Context snippets retrieved for blocks (ChunkID -> List[Snippet])
+    reference_snippets: Dict[str, List[Any]] = Field(default_factory=dict)
+    
+    # The working draft of LaTeX code
+    generated_latex: str = ""
+    
+    # Phase 4: Validation & Repair
+    # Artifacts from compilation (PDF path, logs)
+    compilation_result: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Errors/Warnings to drive self-healing loop
+    diagnostics: List[str] = Field(default_factory=list)
+    
+    # Status Tracking
     status: ProcessingStatus = ProcessingStatus.PENDING
-    
-    # Data Layers (Populated by respective steps)
-    raw_text: Optional[str] = None
-    pages: List[str] = Field(default_factory=list)
-    ocr_blocks: List[TextBlock] = Field(default_factory=list)
-    ocr_content: dict[int, dict[str, str]] = Field(default_factory=dict)
-    chunks: List[dict] = Field(default_factory=list)
-    
-    # Observability
     processing_log: List[str] = Field(default_factory=list)
 
     def add_log(self, message: str):
         self.processing_log.append(message)
-
-    @field_validator('ocr_blocks')
-    @classmethod
-    def validate_blocks(cls, v):
-        # Ensure confidence is logical
-        if any(b.confidence < 0 or b.confidence > 1 for b in v):
-            raise ValueError("Confidence must be between 0 and 1")
-        return v

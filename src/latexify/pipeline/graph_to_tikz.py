@@ -11,7 +11,11 @@ from ..models.model_adapters import InternVLAdapter, InternVLConfig
 PROMPT = (
     "You are a LaTeX graphics expert. Convert the plotted data in the image into "
     "TikZ/PGFPlots code. Include axis labels, legends, and data points approximated "
-    "from the image. Respond ONLY with LaTeX code containing a complete tikzpicture."
+    "from the image. "
+    "If the plot shows a function and its inverse, or if specifically requested, "
+    "include a dashed vertical line that intersects the curve twice to demonstrate "
+    "the Vertical Line Test (VLT) if applicable. "
+    "Respond ONLY with LaTeX code containing a complete tikzpicture."
 )
 
 
