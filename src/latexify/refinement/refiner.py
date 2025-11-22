@@ -170,6 +170,8 @@ class LLMRefiner:
         4. Fix all syntax errors and OCR typos.
         5. Infer sections and structure from the text.
         6. Ensure all math is correctly formatted.
+        7. **STRICTLY FORBIDDEN:** Do NOT use Unicode mathematical symbols (e.g., −, ×, ≤, ≥, ’). You MUST use their LaTeX equivalents (e.g., -, \\times, \\leq, \\geq, ').
+        8. Wrap all single-letter mathematical variables in math mode (e.g., $x$, $y$).
         
         **RAW INPUT:**
         {raw_latex}
@@ -197,5 +199,6 @@ class LLMRefiner:
         1. Fix the specific error reported in the log.
         2. Return **ONLY** the corrected LaTeX code inside a Markdown code block (```latex ... ```).
         3. Do NOT add explanations.
+        4. Ensure no Unicode characters remain in the fixed code. Use LaTeX macros instead.
         """
         return self._generate(prompt, step_name="refine_fix")

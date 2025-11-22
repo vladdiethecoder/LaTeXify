@@ -20,10 +20,13 @@ class LaTeXifyPipeline:
         logger.info(f"Initializing Pipeline for {pdf_path}")
         
         pipeline_cfg = OmegaConf.to_container(self.cfg.pipeline, resolve=True)
+        hardware_cfg = OmegaConf.to_container(self.cfg.hardware, resolve=True) if "hardware" in self.cfg else {}
         
         flat_config = {
             "chunk_chars": pipeline_cfg.get("ingestion", {}).get("chunk_chars", 2000),
             "use_vllm": pipeline_cfg.get("refinement", {}).get("use_vllm", True),
+            "llm_repo": pipeline_cfg.get("refinement", {}).get("llm_repo", None),
+            "llm_device": hardware_cfg.get("llm_device", "cuda"),
             "load_in_4bit": pipeline_cfg.get("refinement", {}).get("load_in_4bit", False),
             "load_in_8bit": pipeline_cfg.get("refinement", {}).get("load_in_8bit", False),
             "refinement_passes": 1,

@@ -18,6 +18,8 @@ def refine_node(state: DocumentState) -> DocumentState:
     
     # Initialize Refiner
     refiner = LLMRefiner(
+        model_path=state.config.get("llm_repo", "Qwen/Qwen2.5-Coder-14B-Instruct"),
+        device=state.config.get("llm_device", "cuda"),
         use_vllm=state.config.get("use_vllm", True),
         load_in_4bit=state.config.get("load_in_4bit", False),
         load_in_8bit=state.config.get("load_in_8bit", False)

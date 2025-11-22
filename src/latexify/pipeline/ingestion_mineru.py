@@ -8,6 +8,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+from difflib import SequenceMatcher
 
 try:
     from magic_pdf.data.dataset import PymuDocDataset
@@ -54,12 +55,10 @@ def ingest_node(state: DocumentState) -> DocumentState:
         source = "pymupdf"
         
     if not blocks and source == "pymupdf":
-        # Run PyMuPDF extraction logic here (adapted from PyMuPDFIngestor.process logic)
-        # But PyMuPDFIngestor.process returns IngestionResult.
-        # We need raw blocks.
-        # We can use PyMuPDFIngestor to get blocks if we expose a method or just implement here.
-        # Let's use a helper.
         blocks = _extract_pymupdf_blocks(state.file_path)
+
+    # Deduplicate Blocks (Slide Build Detection)
+    blocks = _deduplicate_blocks(blocks)
 
     # 1. Populate layout_blocks (Raw-ish view)
     state.layout_blocks = [
@@ -80,23 +79,80 @@ def ingest_node(state: DocumentState) -> DocumentState:
     LOGGER.info(f"Ingestion complete ({source}). Found {len(state.layout_blocks)} blocks, merged into {len(state.chunks)} semantic chunks.")
     return state
 
+def _deduplicate_blocks(blocks: List[Dict]) -> List[Dict]:
+    """
+    Filters out blocks that are duplicates of content on the *previous* page.
+    This handles slide 'builds' where previous bullets are repeated on new pages.
+    """
+    if not blocks:
+        return blocks
+        
+    unique_blocks = []
+    # Organize text by page for comparison
+    page_buffers: Dict[int, List[str]] = {}
+    
+    dedup_count = 0
+    
+    for block in blocks:
+        page_idx = block.get("page_idx", 0)
+        text = block.get("text", "").strip()
+        if not text:
+            continue
+            
+        # Compare against previous page buffer
+        prev_page_idx = page_idx - 1
+        is_dup = False
+        
+        if prev_page_idx in page_buffers:
+            # Check if exact match exists in previous page
+            # For strict slide builds, text is usually exact.
+            if text in page_buffers[prev_page_idx]:
+                is_dup = True
+            else:
+                # Fuzzy match for slight rendering shifts?
+                # Let's stick to exact match first to avoid false positives.
+                # If text is short (< 10 chars), ignore check to keep context?
+                # No, usually short titles repeat too.
+                pass
+        
+        if not is_dup:
+            unique_blocks.append(block)
+            if page_idx not in page_buffers:
+                page_buffers[page_idx] = []
+            page_buffers[page_idx].append(text)
+        else:
+            dedup_count += 1
+            # LOGGER.debug(f"Dropped duplicate on P{page_idx}: {text[:30]}...")
+
+    if dedup_count > 0:
+        LOGGER.info(f"Deduplication removed {dedup_count} blocks repeated from previous pages.")
+        
+    return unique_blocks
+
 def _extract_pymupdf_blocks(pdf_path: Path) -> List[Dict]:
     import fitz
     doc = fitz.open(pdf_path)
     blocks = []
+    print(f"DEBUG: PyMuPDF opened {pdf_path} with {len(doc)} pages.")
     for page_idx, page in enumerate(doc):
-        # get_text("blocks") returns (x0, y0, x1, y1, text, block_no, block_type)
         raw_blocks = page.get_text("blocks")
+        # Sort by vertical position (y0), then horizontal (x0)
+        raw_blocks.sort(key=lambda b: (b[1], b[0]))
+        
         for b in raw_blocks:
             text = b[4].strip()
             if not text:
                 continue
+            # Debug log for first few blocks
+            if len(blocks) < 5:
+                print(f"DEBUG: Found Block P{page_idx}: {text[:30]}...")
             blocks.append({
                 "text": text,
                 "bbox": list(b[:4]),
                 "page_idx": page_idx,
                 "type": "text" # PyMuPDF generic
             })
+    print(f"DEBUG: Extracted {len(blocks)} total blocks.")
     return blocks
 
 def _refine_tag(raw_type: str, text: str) -> str:
@@ -181,7 +237,7 @@ def _create_chunk(buffer: List[Dict], tag: str, idx: int) -> common.Chunk:
     }
     
     return common.Chunk(
-        chunk_id=f"chunk_{{idx:04d}}",
+        chunk_id=f"chunk_{idx:04d}",
         page=buffer[0]["page_idx"],
         text=full_text,
         metadata=metadata
