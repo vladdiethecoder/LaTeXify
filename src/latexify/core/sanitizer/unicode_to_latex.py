@@ -1,4 +1,4 @@
-"Unicode ">→</ LaTeX normalization utilities."
+"""Unicode to LaTeX normalization utilities."""
 from __future__ import annotations
 
 from typing import Dict
@@ -99,7 +99,7 @@ UNICODE_LATEX_MAP: Dict[str, str] = {
     "©": r"\textcopyright",
     "®": r"\textregistered",
     "™": r"\texttrademark",
-    "": "?", 
+    "\ufffd": "?", 
     "ℝ": r"\mathbb{R}",
     
     # Primes (Safe)
@@ -110,6 +110,8 @@ UNICODE_LATEX_MAP: Dict[str, str] = {
     "»": ">>",
     "‹": "<",
     "›": ">",
+    "^": r"\^{}",  # Caret in text must be escaped or it triggers math mode
+    "~": r"\textasciitilde{}",
 }
 
 CONTROL_CHAR_TRANSLATION = {code: " " for code in range(0, 32)}

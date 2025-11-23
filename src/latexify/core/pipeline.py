@@ -29,7 +29,7 @@ class LaTeXifyPipeline:
             "llm_device": hardware_cfg.get("llm_device", "cuda"),
             "load_in_4bit": pipeline_cfg.get("refinement", {}).get("load_in_4bit", False),
             "load_in_8bit": pipeline_cfg.get("refinement", {}).get("load_in_8bit", False),
-            "refinement_passes": 1,
+            "refinement_passes": pipeline_cfg.get("refinement", {}).get("refinement_passes", 1),
             "skip_compile": False,
             "enable_formal_verification": False
         }

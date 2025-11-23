@@ -15,6 +15,7 @@ def refine_node(state: DocumentState) -> DocumentState:
         return state
         
     LOGGER.info("Starting Refinement Node...")
+    LOGGER.info(f"Config: llm_repo={state.config.get('llm_repo')}, device={state.config.get('llm_device')}, vllm={state.config.get('use_vllm')}")
     
     # Initialize Refiner
     refiner = LLMRefiner(

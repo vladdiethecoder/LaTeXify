@@ -36,14 +36,21 @@ class LLMRefiner:
                 print(f"Failed to initialize vLLM: {e}. Falling back to Transformers.")
                 self.use_vllm = False
 
+        if self.device == "cpu":
+            if self.load_in_8bit or self.load_in_4bit:
+                print("Warning: Disabling 4-bit/8-bit quantization on CPU (not supported).")
+                self.load_in_8bit = False
+                self.load_in_4bit = False
+
         # Fallback or Standard Transformers
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             
             # For 8bit, avoid passing device_map="auto" if it causes dispatch errors.
             # Usually load_in_8bit handles device placement on GPU 0 by default.
+            dtype = torch.float32 if self.device == "cpu" else torch.float16
             model_kwargs = {
-                "torch_dtype": torch.float16,
+                "torch_dtype": dtype,
                 "trust_remote_code": True
             }
             
@@ -58,18 +65,53 @@ class LLMRefiner:
             
             self.model = AutoModelForCausalLM.from_pretrained(self.model_path, **model_kwargs)
             
-            if not self.load_in_8bit and not self.load_in_4bit and hasattr(torch, "compile"):
-                try:
-                    print("Compiling Refiner LLM with torch.compile...")
-                    self.model = torch.compile(self.model, mode="max-autotune")
-                except Exception as e:
-                    print(f"torch.compile failed (continuing without it): {e}")
+            # if not self.load_in_8bit and not self.load_in_4bit and hasattr(torch, "compile"):
+            #     try:
+            #         print("Compiling Refiner LLM with torch.compile...")
+            #         self.model = torch.compile(self.model, mode="max-autotune")
+            #     except Exception as e:
+            #         print(f"torch.compile failed (continuing without it): {e}")
 
         except Exception as e:
             print(f"Failed to load LLM ({e}). Switching to MOCK mode.")
             import traceback
             traceback.print_exc()
             self.mock_mode = True
+
+    def _post_process_latex(self, text: str) -> str:
+        """
+        Deterministic cleanup of common LLM LaTeX mistakes.
+        """
+        # 1. Unicode to LaTeX Map
+        replacements = {
+            "≠": "\\neq",
+            "≤": "\\leq",
+            "≥": "\\geq",
+            "×": "\\times",
+            "−": "-",
+            "’": "'",
+            "“": "``",
+            "”": "''",
+            "…": "\\dots",
+            "̸=": "\\neq",  # The specific artifact seen in logs
+            "≈": "\\approx",
+            "←": "\\leftarrow",
+            "→": "\\rightarrow"
+        }
+        for char, repl in replacements.items():
+            text = text.replace(char, repl)
+
+        # 2. Fix common math environment issues
+        # Ensure simple single-letter variables in text are wrapped (heuristic)
+        # Note: This is risky with regex, doing minimal safety here
+        
+        # 3. Fix broken equation environments
+        # Replace \[ \] inside align environments which is invalid
+        # (LLMs sometimes do \begin{align} \[ ... \] \end{align})
+        text = re.sub(r"\\begin\{align\*?\}\s*\\\[", r"\\begin{align}\n", text)
+        text = re.sub(r"\\\]\s*\\end\{align\*?\}", r"\n\\end{align}", text)
+
+        return text
 
     def _generate(self, prompt: str, step_name: str = "generate") -> str:
         if self.mock_mode:
@@ -80,24 +122,6 @@ class LLMRefiner:
             {"role": "system", "content": "You are a helpful assistant and a LaTeX expert."},
             {"role": "user", "content": prompt}
         ]
-
-        if self.use_vllm and self.vllm_model:
-            # vLLM usually handles chat templates if we pass prompt as string with special tokens, 
-            # OR we use the chat entrypoint. But here we are using LLM class which is for completion.
-            # We need to format it manually using tokenizer (if available) or just hope the model works?
-            # Actually LLM class in vLLM 0.4 supports 'chat' via `chat` method in newer versions, 
-            # or we format it. Let's try formatting if tokenizer is available, else raw prompt might fail.
-            # The current `LLM` class usage suggests text completion.
-            # Let's try to use the tokenizer to format it if we have one, or just use raw prompt if we can't.
-            # Ideally we should use `tokenizer.apply_chat_template`.
-            # Since we don't have the tokenizer loaded in vLLM mode easily (it's inside the engine),
-            # let's assume we can load it or it's Qwen which needs <|im_start|>.
-            
-            # For safety, let's fallback to transformers logic for formatting if possible, 
-            # or just disable vLLM if we can't format.
-            # But wait, we didn't load tokenizer in vLLM mode.
-            # Let's load tokenizer always.
-            pass
 
         # Ensure tokenizer is loaded for template application
         if self.tokenizer is None:
@@ -146,6 +170,9 @@ class LLMRefiner:
             if "\\end{document}" in result:
                 end = result.find("\\end{document}") + len("\\end{document}")
                 result = result[:end]
+        
+        # Apply Deterministic Sanitization
+        result = self._post_process_latex(result)
             
         return result
 

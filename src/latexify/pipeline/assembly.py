@@ -409,6 +409,7 @@ def build_preamble(config: Dict[str, object]) -> str:
     lines.extend(directives.pre_document_commands)
     extra_cmds = config.get("extra_preamble_commands") or []
     lines.extend(extra_cmds)
+    print(f"DEBUG: Adding {len(DECLARATIONS)} declarations to preamble.")
     lines.extend(DECLARATIONS)
     lines.append("\\begin{document}")
     return "\n".join(lines)
