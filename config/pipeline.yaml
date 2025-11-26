@@ -14,7 +14,7 @@ pipeline:
     lang: en
   refinement:
     enabled: true
-    use_vllm: false
+    use_vllm: true
     load_in_8bit: false
     load_in_4bit: true
     refinement_passes: 2

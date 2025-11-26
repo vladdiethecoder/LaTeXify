@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import List
 
 from ..core.sanitizer.unicode_to_latex import sanitize_unicode_to_latex
 from ..models.vllm_client import get_vllm_client
@@ -38,7 +39,27 @@ class EquationNormalizer:
         if cleaned.lower().startswith("<latex>"):
             cleaned = cleaned.split("</latex>", 1)[0]
             cleaned = cleaned.replace("<latex>", "")
-        return cleaned.strip() or sanitized
+        normalized = cleaned.strip() or sanitized
+        return self._align_multiline(normalized)
+
+    def _align_multiline(self, payload: str) -> str:
+        """Wrap multiline equations in an align* block with aligned equals signs."""
+        lowered = payload.lower()
+        if "\\begin{align" in lowered or "\\begin{aligned" in lowered:
+            return payload
+        lines: List[str] = [ln.strip() for ln in payload.splitlines() if ln.strip()]
+        if len(lines) <= 1:
+            return payload
+
+        aligned: List[str] = []
+        for line in lines:
+            if "=" in line and "&" not in line:
+                head, tail = line.split("=", 1)
+                aligned.append(f"{head.strip()} & = {tail.strip()}")
+            else:
+                aligned.append(line)
+
+        return "\\begin{align*}\n" + " \\\n".join(aligned) + "\n\\end{align*}"
 
 
 equation_normalizer = EquationNormalizer()

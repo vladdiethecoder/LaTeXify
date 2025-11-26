@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,80 @@ def _strip_internal_macros(tex: str) -> str:
     return "\n".join(
         line for line in tex.splitlines() if not INTERNAL_MACRO_RE.search(line)
     )
+
+
+ALIGN_BLOCK_RE = re.compile(r"(?:^\\\[.*?=.*?\\\]\s*$\n){2,}", re.MULTILINE)
+
+
+def _auto_math_blocks(tex: str) -> str:
+    math_tokens = set("=+−-*/^±∞√pmPM01·23456789()[]{}qxyz")
+
+    def is_mathy(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        # Ignore pure commands that are already math envs
+        if stripped.startswith("\\"):
+            return False
+        return any(ch in math_tokens for ch in stripped)
+
+    lines = tex.splitlines()
+    out = []
+    buffer: List[str] = []
+
+    def flush_buffer(force: bool = False):
+        if not buffer:
+            return
+        # More aggressive: if any mathy lines accumulated, wrap them all
+        if len(buffer) >= 2 or force or any(is_mathy(b) for b in buffer):
+            body = " \\\n".join([ln.strip() for ln in buffer])
+            out.append("\\begin{align*}\n" + body + "\n\\end{align*}")
+        else:
+            out.extend(buffer)
+        buffer.clear()
+
+    for ln in lines:
+        if is_mathy(ln):
+            buffer.append(ln)
+            continue
+        flush_buffer()
+        out.append(ln)
+    flush_buffer()
+    return "\n".join(out)
+
+
+def _ensure_math_macros(tex: str) -> str:
+    replacements = ["pm", "sqrt", "times", "neq", "leq", "geq"]
+    for macro in replacements:
+        tex = re.sub(rf"\\{macro}(?![a-zA-Z])", rf"\\ensuremath{{\\{macro}}}", tex)
+    return tex
+
+
+def _wrap_align_blocks(tex: str) -> str:
+    """Wrap sequences of display equations with '=' into an align* block with aligned equals."""
+
+    def _repl(match: re.Match[str]) -> str:
+        raw_lines = [ln.strip() for ln in match.group(0).strip().splitlines() if ln.strip()]
+        aligned: List[str] = []
+        for ln in raw_lines:
+            body = ln
+            if body.startswith("["):
+                body = body[1:]
+            if body.startswith("\\["):
+                body = body[2:]
+            if body.endswith("\\]"):
+                body = body[:-2]
+            if body.endswith("]"):
+                body = body[:-1]
+            body = body.strip()
+            if "=" in body and "&" not in body:
+                head, tail = body.split("=", 1)
+                aligned.append(f"{head.strip()} & = {tail.strip()}")
+            else:
+                aligned.append(body)
+        return "\\begin{align*}\n" + " \\\n".join(aligned) + "\n\\end{align*}\n"
+
+    return ALIGN_BLOCK_RE.sub(_repl, tex)
 
 
 def escape(text: str) -> str:
@@ -137,6 +212,7 @@ def _demote_plain_text_equations(snippet: str) -> str:
 def _sanitize_snippet(snippet: str) -> str:
     # First, apply Unicode replacements
     snippet = sanitize_unicode_to_latex(snippet)
+    snippet = snippet.replace("\u0338", "")  # drop combining long solidus
     
     cleaned_lines: List[str] = []
     skip_block = False
@@ -158,6 +234,24 @@ def _sanitize_snippet(snippet: str) -> str:
         cleaned_lines.append(raw_line)
     cleaned = "\n".join(cleaned_lines).strip()
     return _demote_plain_text_equations(cleaned)
+
+
+def _force_align(snippet: str) -> str:
+    lowered = snippet.lower()
+    if "\\begin{align" in lowered or "\\begin{aligned" in lowered:
+        return snippet
+    lines = [ln.strip() for ln in snippet.splitlines() if ln.strip()]
+    if not lines:
+        return snippet
+    aligned = []
+    for ln in lines:
+        if "=" in ln and "&" not in ln:
+            head, tail = ln.split("=", 1)
+            aligned.append(f"{head.strip()} & = {tail.strip()}")
+        else:
+            aligned.append(ln)
+    body = " \\\n".join(aligned)
+    return f"\\begin{{align*}}\n{body}\n\\end{{align*}}"
 
 
 def _copy_block_images(block: common.PlanBlock, assets_dir: Path, used_assets: set[str]) -> List[str]:
@@ -274,6 +368,14 @@ def block_to_latex(
     raw_snippet = snippet_map.get(block.chunk_id, "")
     cleaned = _sanitize_snippet(raw_snippet)
     snippet = cleaned if cleaned else raw_snippet
+    if block.block_type == "equation":
+        snippet = _force_align(_wrap_align_blocks(snippet))
+    else:
+        # Temporary guard: wrap short mathy blocks even if not tagged as equation
+        lines = [ln for ln in snippet.splitlines() if ln.strip()]
+        mathy_count = sum(1 for ln in lines if any(ch in "=+-*/^±∞√0123456789" for ch in ln))
+        if mathy_count >= 2:
+            snippet = _force_align(snippet)
     if bibliography_result:
         snippet = bibliography_result.apply_to_text(snippet)
     if block.block_type == "figure":
@@ -498,6 +600,9 @@ def write_tex(
         ]
     )
     tex_content = _strip_internal_macros(tex_content)
+    tex_content = _wrap_align_blocks(tex_content)
+    tex_content = _auto_math_blocks(tex_content)
+    tex_content = _ensure_math_macros(tex_content)
     if sanitize_unicode:
         tex_content = sanitize_unicode_to_latex(tex_content)
     tex_path = output_dir / "main.tex"
@@ -625,10 +730,13 @@ class ProgressiveAssembler:
                 bibliography_generator=self.bibliography_generator,
                 citation_report=self.citation_report,
                 bibliography_result=self.bibliography_result,
-        )
+            )
         if self.bibliography_result and self.bibliography_result.latex:
             tex_content = "\n".join([tex_content, self.bibliography_result.latex])
         tex_content = _strip_internal_macros(tex_content)
+        tex_content = _wrap_align_blocks(tex_content)
+        tex_content = _auto_math_blocks(tex_content)
+        tex_content = _ensure_math_macros(tex_content)
         if sanitize_unicode:
             tex_content = sanitize_unicode_to_latex(tex_content)
         tex_path = self.output_dir / "main.tex"
@@ -842,9 +950,9 @@ def _traditional_compile(tex_path: Path) -> tuple[Path | None, List[Dict[str, ob
         if not binary:
             continue
         if engine == "tectonic":
-            cmd = [binary, "--keep-logs", "--keep-intermediates", str(tex_path)]
+            cmd = [binary, "--keep-logs", "--keep-intermediates", tex_path.name]
         else:
-            cmd = [binary, "-pdf", "-silent", str(tex_path)]
+            cmd = [binary, "-pdf", "-silent", tex_path.name]
         try:
             subprocess.run(cmd, check=True, cwd=str(tex_path.parent), timeout=60)
             if pdf_path.exists():

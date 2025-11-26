@@ -26,6 +26,11 @@ class LLMRefiner:
         """
         Load the model. Delayed loading to save VRAM if not used immediately.
         """
+        if not self.model_path or str(self.model_path).lower() == "none":
+            print("Loading Refiner LLM: <disabled> -> MOCK mode")
+            self.mock_mode = True
+            return
+
         print(f"Loading Refiner LLM: {self.model_path} (vLLM={self.use_vllm}, 8bit={self.load_in_8bit}, 4bit={self.load_in_4bit})...")
         
         if self.use_vllm:
@@ -82,36 +87,93 @@ class LLMRefiner:
         """
         Deterministic cleanup of common LLM LaTeX mistakes.
         """
-        # 1. Unicode to LaTeX Map
+        # 1. Unicode to LaTeX Map (Wrapped in ensuremath for safety)
         replacements = {
-            "≠": "\\neq",
-            "≤": "\\leq",
-            "≥": "\\geq",
-            "×": "\\times",
-            "−": "-",
+            "≠": "\\ensuremath{\\neq}",
+            "≤": "\\ensuremath{\\leq}",
+            "≥": "\\ensuremath{\\geq}",
+            "×": "\\ensuremath{\\times}",
+            "−": "-", 
             "’": "'",
             "“": "``",
             "”": "''",
             "…": "\\dots",
-            "̸=": "\\neq",  # The specific artifact seen in logs
-            "≈": "\\approx",
-            "←": "\\leftarrow",
-            "→": "\\rightarrow"
+            "̸=": "\\ensuremath{\\neq}",
+            "≈": "\\ensuremath{\\approx}",
+            "←": "\\ensuremath{\\leftarrow}",
+            "→": "\\ensuremath{\\rightarrow}",
+            "⇒": "\\ensuremath{\\Rightarrow}",
+            "⇐": "\\ensuremath{\\Leftarrow}",
+            "⇔": "\\ensuremath{\\Leftrightarrow}",
+            "±": "\\ensuremath{\\pm}",
+            "∞": "\\ensuremath{\\infty}",
+            "°": "\\ensuremath{^{\\circ}}",
+            "µ": "\\ensuremath{\\mu}"
         }
         for char, repl in replacements.items():
             text = text.replace(char, repl)
 
-        # 2. Fix common math environment issues
-        # Ensure simple single-letter variables in text are wrapped (heuristic)
-        # Note: This is risky with regex, doing minimal safety here
+        # 1.5 Fix missing space after specific macros (e.g., \RightarrowN -> \Rightarrow N)
+        # This ensures they are parsed as command + text, not a new unknown command.
+        # We only target \Rightarrow for now as it's a common hallucination artifact.
+        text = re.sub(r"\\Rightarrow(?=[a-zA-Z0-9])", r"\\Rightarrow ", text)
+
+        # 2. Safety wrapper for common commands often used in text mode by mistake
+        # We use simple string replacement because \ensuremath works in math mode too.
+        # We avoid replacing if it's already wrapped (simple check) to keep source clean, 
+        # but strictly speaking \ensuremath{\ensuremath{...}} is valid/safe.
+        # List of commands that MUST be in math mode:
+        math_commands = [
+            "\\Rightarrow", "\\rightarrow", "\\leftarrow", "\\leftrightarrow",
+            "\\Leftarrow", "\\Leftrightarrow", "\\neq", "\\leq", "\\geq",
+            "\\approx", "\\pm", "\\infty", "\\times"
+        ]
         
-        # 3. Fix broken equation environments
-        # Replace \[ \] inside align environments which is invalid
-        # (LLMs sometimes do \begin{align} \[ ... \] \end{align})
+        for cmd in math_commands:
+            # Negative lookbehind to avoid double wrapping if we run this multiple times 
+            # or if it was replaced above. 
+            # Actually, the replacements above already produce \ensuremath{...}.
+            # We need to catch EXPLICIT \Rightarrow usage by the LLM.
+            
+            # We perform a replacement of "\cmd" with "\ensuremath{\cmd}"
+            # BUT we must ensure we don't match "\ensuremath{\cmd}" itself.
+            # Regex: (?<!\\ensuremath\{)\\\bcmd\b
+            # Note: standard macros usually don't have \b at start (it's \)
+            
+            escaped_cmd = re.escape(cmd)
+            # Pattern: Not preceded by ensuremath{, match cmd, word boundary or non-letter
+            # Using a simple string replace might loop if we are not careful.
+            # Let's use a unique marker approach or just precise regex.
+            
+            pattern = r"(?<!\\ensuremath\{)" + escaped_cmd + r"(?![a-zA-Z])"
+            # Use lambda to avoid re.sub interpreting backslashes in the replacement string
+            text = re.sub(pattern, lambda m: f"\\ensuremath{{{cmd}}}", text)
+
+        # 3. Fix common math environment issues
         text = re.sub(r"\\begin\{align\*?\}\s*\\\[", r"\\begin{align}\n", text)
         text = re.sub(r"\\\]\s*\\end\{align\*?\}", r"\n\\end{align}", text)
-
-        return text
+        
+        # 4. Auto-wrap naked math lines
+        lines = text.splitlines()
+        processed_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("%") or stripped.startswith("\\"):
+                processed_lines.append(line)
+                continue
+            
+            # Check for math indicators
+            has_math_chars = any(c in stripped for c in ["=", "^", "_"])
+            # Don't count ensuremath as a full-line delimiter. 
+            # If a line has ^ or _ but only ensuremath, it likely needs full wrapping.
+            has_delimiters = "$" in stripped or "\\(" in stripped or "\\[" in stripped
+            
+            if has_math_chars and not has_delimiters:
+                processed_lines.append(f"\\[ {stripped} \\]")
+            else:
+                processed_lines.append(line)
+        
+        return "\n".join(processed_lines)
 
     def _generate(self, prompt: str, step_name: str = "generate") -> str:
         if self.mock_mode:
@@ -197,8 +259,9 @@ class LLMRefiner:
         4. Fix all syntax errors and OCR typos.
         5. Infer sections and structure from the text.
         6. Ensure all math is correctly formatted.
-        7. **STRICTLY FORBIDDEN:** Do NOT use Unicode mathematical symbols (e.g., −, ×, ≤, ≥, ’). You MUST use their LaTeX equivalents (e.g., -, \\times, \\leq, \\geq, ').
-        8. Wrap all single-letter mathematical variables in math mode (e.g., $x$, $y$).
+        7. **CRITICAL:** Convert all Unicode math symbols (e.g. →, ≠, ≤) to LaTeX commands inside math mode (e.g. $\\rightarrow$, $\\neq$, $\\leq$).
+        8. **CRITICAL:** Arrows like \\Rightarrow, \\rightarrow MUST be inside math delimiters (e.g. $\\Rightarrow$).
+        9. Wrap all single-letter mathematical variables in math mode (e.g., $x$, $y$).
         
         **RAW INPUT:**
         {raw_latex}
@@ -227,5 +290,6 @@ class LLMRefiner:
         2. Return **ONLY** the corrected LaTeX code inside a Markdown code block (```latex ... ```).
         3. Do NOT add explanations.
         4. Ensure no Unicode characters remain in the fixed code. Use LaTeX macros instead.
+        5. Check for "Missing $" errors: ensure all math symbols (\\Rightarrow, \\pm, etc.) are inside $...$.
         """
         return self._generate(prompt, step_name="refine_fix")

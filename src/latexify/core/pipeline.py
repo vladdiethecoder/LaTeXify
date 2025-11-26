@@ -16,7 +16,7 @@ class LaTeXifyPipeline:
         self.cfg = cfg
         self.workflow = create_workflow()
 
-    def process(self, pdf_path: Path) -> str:
+    def process(self, pdf_path: Path, *, skip_compile: bool = False) -> str:
         logger.info(f"Initializing Pipeline for {pdf_path}")
         
         pipeline_cfg = OmegaConf.to_container(self.cfg.pipeline, resolve=True)
@@ -30,7 +30,7 @@ class LaTeXifyPipeline:
             "load_in_4bit": pipeline_cfg.get("refinement", {}).get("load_in_4bit", False),
             "load_in_8bit": pipeline_cfg.get("refinement", {}).get("load_in_8bit", False),
             "refinement_passes": pipeline_cfg.get("refinement", {}).get("refinement_passes", 1),
-            "skip_compile": False,
+            "skip_compile": skip_compile,
             "enable_formal_verification": False
         }
         

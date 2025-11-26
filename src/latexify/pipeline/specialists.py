@@ -95,6 +95,9 @@ class PreambleAgent:
         self.request("graphicx")
         self.request("geometry", options="margin=1in")
         self.request("float")
+        self.request("amsmath")
+        self.request("amssymb")
+        self.request("amsfonts")
 
     def request(self, package: str, options: str | None = None) -> None:
         existing = self._packages.get(package)
