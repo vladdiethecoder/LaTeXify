@@ -163,9 +163,10 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
     ),
     "ocr/pix2tex-base": ModelSpec(
         key="ocr/pix2tex-base",
-        repo_id="lupantech/pix2tex-base",
+        repo_id=None,
         target=Path("ocr/pix2tex-base"),
-        notes="pix2tex LaTeX OCR recognizer (required for MathOCREngine).",
+        git_url="https://github.com/lukas-blecher/LaTeX-OCR.git",
+        notes="pix2tex LaTeX OCR recognizer (required for MathOCREngine). Cloned from GitHub.",
     ),
     "layout/layoutlmv3-base": ModelSpec(
         key="layout/layoutlmv3-base",
@@ -181,7 +182,7 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
     ),
     "layout/surya": ModelSpec(
         key="layout/surya",
-        repo_id="SuryaResearch/surya_layout",
+        repo_id="vikp/surya_layout",
         target=Path("layout/surya"),
         notes="Surya layout detector weights for render-aware ingestion.",
     ),

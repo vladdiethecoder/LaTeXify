@@ -21,6 +21,8 @@ from latexify.core import common
 from latexify.core.state import DocumentState, TextBlock
 from latexify.pipeline.semantic_chunking import SemanticChunker
 from latexify.ingestion.pymupdf import PyMuPDFIngestor
+from latexify.pipeline.docling_offline import docling_ingest_blocks
+from latexify.pipeline.advanced_ocr import run_advanced_ocr
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ def ingest_node(state: DocumentState) -> DocumentState:
     """
     Ingestion Node: Runs MinerU to populate layout_blocks AND chunks in DocumentState.
     Falls back to PyMuPDF if MinerU fails (e.g. missing weights).
+    Docling backend can be selected via state.config["ingestion_backend"] = "docling".
     """
     if not state.file_path or not state.file_path.exists():
         raise FileNotFoundError(f"Document path not set in state: {state.file_path}")
@@ -40,19 +43,31 @@ def ingest_node(state: DocumentState) -> DocumentState:
     
     blocks = []
     source = "mineru"
+    backend = state.config.get("ingestion_backend", "mineru")
+    docling_options = state.config.get("docling_options", {})
 
-    if MAGIC_PDF_AVAILABLE:
+    if backend == "docling":
         try:
-            LOGGER.info("Attempting MinerU extraction...")
-            ingestor = MinerUIngestion()
-            blocks = ingestor.extract_blocks(state.file_path)
-            LOGGER.info("MinerU extraction successful.")
+            blocks = docling_ingest_blocks(state.file_path, docling_options=docling_options)
+            source = "docling"
         except Exception as e:
-            LOGGER.warning(f"MinerU extraction failed ({e}). Falling back to PyMuPDF.")
+            LOGGER.warning(f"Docling ingestion failed ({e}). Falling back to MinerU/PyMuPDF.")
+            backend = "mineru"
+            source = "mineru"
+
+    if backend != "docling":
+        if MAGIC_PDF_AVAILABLE:
+            try:
+                LOGGER.info("Attempting MinerU extraction...")
+                ingestor = MinerUIngestion()
+                blocks = ingestor.extract_blocks(state.file_path)
+                LOGGER.info("MinerU extraction successful.")
+            except Exception as e:
+                LOGGER.warning(f"MinerU extraction failed ({e}). Falling back to PyMuPDF.")
+                source = "pymupdf"
+        else:
+            LOGGER.info("MinerU not available. Using PyMuPDF.")
             source = "pymupdf"
-    else:
-        LOGGER.info("MinerU not available. Using PyMuPDF.")
-        source = "pymupdf"
         
     if not blocks and source == "pymupdf":
         blocks = _extract_pymupdf_blocks(state.file_path)
@@ -75,6 +90,11 @@ def ingest_node(state: DocumentState) -> DocumentState:
     # 2. Populate chunks (Semantic view)
     chunk_chars = state.config.get("chunk_chars", 2000)
     state.chunks = _semantic_block_processing(blocks, chunk_chars)
+    
+    # 3. Advanced OCR Refinement (Phase 2 of Offline Pipeline)
+    # Check config or default to enabled if using Docling
+    if backend == "docling" or state.config.get("docling_options", {}).get("pix2tex_fallback", True):
+        state.chunks = run_advanced_ocr(state.file_path, state.chunks)
     
     LOGGER.info(f"Ingestion complete ({source}). Found {len(state.layout_blocks)} blocks, merged into {len(state.chunks)} semantic chunks.")
     return state

@@ -32,3 +32,6 @@ paddlepaddle>=2.6.0
 paddleocr>=2.7.0
 ultralytics>=8.2.0
 opencv-python-headless>=4.9.0
+docling[vlm,tesserocr]>=1.0.0
+nougat-ocr>=0.1.17
+pix2tex>=0.1.0

@@ -1,5 +1,7 @@
+import os
 import torch
 import re
+from pathlib import Path
 from typing import Optional
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -8,6 +10,19 @@ try:
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
+
+try:  # GGUF / llama.cpp path for local Kimi checkpoints
+    from latexify.models.kimi_k2_adapter import (
+        GGUFModelConfig,
+        KimiK2InstructAdapter,
+        LATEX_VALIDATION_GRAMMAR,
+    )
+    KIMI_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    KIMI_AVAILABLE = False
+    GGUFModelConfig = None  # type: ignore
+    KimiK2InstructAdapter = None  # type: ignore
+    LATEX_VALIDATION_GRAMMAR = None  # type: ignore
 
 class LLMRefiner:
     def __init__(self, model_path: str = "Qwen/Qwen2.5-Coder-14B-Instruct", device: str = "cuda", use_vllm: bool = True, load_in_8bit: bool = False, load_in_4bit: bool = False):
@@ -20,6 +35,7 @@ class LLMRefiner:
         self.model = None
         self.tokenizer = None
         self.vllm_model = None
+        self.gguf_adapter = None
         self.mock_mode = False
 
     def load_model(self):
@@ -29,6 +45,27 @@ class LLMRefiner:
         if not self.model_path or str(self.model_path).lower() == "none":
             print("Loading Refiner LLM: <disabled> -> MOCK mode")
             self.mock_mode = True
+            return
+
+        # GGUF / llama.cpp path (e.g., Kimi-K2 GGUF)
+        model_path_obj = Path(self.model_path)
+        if model_path_obj.suffix == ".gguf":
+            if not KIMI_AVAILABLE:
+                print("GGUF requested but kimi_k2_adapter/llama-cpp is unavailable; switching to MOCK mode")
+                self.mock_mode = True
+                return
+            if not model_path_obj.exists():
+                print(f"GGUF model not found at {model_path_obj}; switching to MOCK mode")
+                self.mock_mode = True
+                return
+            cfg = GGUFModelConfig(
+                model_path=model_path_obj,
+                context_window=int(os.environ.get("LATEXIFY_KIMI_K2_CONTEXT", "32768")),
+                temperature=float(os.environ.get("LATEXIFY_KIMI_K2_TEMPERATURE", "0.05")),
+                default_grammar=LATEX_VALIDATION_GRAMMAR,
+            )
+            self.gguf_adapter = KimiK2InstructAdapter(cfg)
+            print(f"Loading Refiner LLM (GGUF via llama.cpp): {model_path_obj}")
             return
 
         print(f"Loading Refiner LLM: {self.model_path} (vLLM={self.use_vllm}, 8bit={self.load_in_8bit}, 4bit={self.load_in_4bit})...")
@@ -60,10 +97,12 @@ class LLMRefiner:
             }
             
             if self.load_in_8bit:
-                model_kwargs["load_in_8bit"] = True
+                from transformers import BitsAndBytesConfig
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
                 model_kwargs["device_map"] = "auto"
             elif self.load_in_4bit:
-                model_kwargs["load_in_4bit"] = True
+                from transformers import BitsAndBytesConfig
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
                 model_kwargs["device_map"] = "auto"
             else:
                 model_kwargs["device_map"] = self.device
@@ -178,6 +217,20 @@ class LLMRefiner:
     def _generate(self, prompt: str, step_name: str = "generate") -> str:
         if self.mock_mode:
             return "Mock Generation"
+
+        if self.gguf_adapter is not None:
+            result = self.gguf_adapter.generate(
+                prompt,
+                max_tokens=8192,
+                temperature=0.4,
+                stop=["```"],  # guard against runaway formatting
+                grammar=None,
+            )
+            result = result.strip()
+            with open(f"debug_llm_{step_name}.txt", "w", encoding="utf-8") as f:
+                f.write(result)
+            result = self._post_process_latex(result)
+            return result
 
         # Construct messages for Chat Model
         messages = [

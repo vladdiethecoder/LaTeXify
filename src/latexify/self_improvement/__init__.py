@@ -17,7 +17,7 @@ from .loop import EvolutionRunner
 from .report import render_report
 from .generator import LLMPatchGenerator, GeneratorConfig
 from .evaluator import EvaluatorRunner, EvaluationConfig
-from .text_llm import LocalTextGenerator, LocalLLMConfig
+from .text_llm import LocalTextGenerator, LocalLLMConfig, GGUFTextGenerator, GGUFLLMConfig
 
 __all__ = [
     "AgentMetrics",
@@ -41,4 +41,6 @@ __all__ = [
     "EvaluationConfig",
     "LocalTextGenerator",
     "LocalLLMConfig",
+    "GGUFTextGenerator",
+    "GGUFLLMConfig",
 ]

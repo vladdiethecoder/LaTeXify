@@ -24,6 +24,9 @@ class LaTeXifyPipeline:
         
         flat_config = {
             "chunk_chars": pipeline_cfg.get("ingestion", {}).get("chunk_chars", 2000),
+            "ingestion_backend": pipeline_cfg.get("ingestion", {}).get("backend", "mineru"),
+            "ingestion_dpi": pipeline_cfg.get("ingestion", {}).get("dpi", 300),
+            "docling_options": pipeline_cfg.get("ingestion", {}).get("docling", {}),
             "use_vllm": pipeline_cfg.get("refinement", {}).get("use_vllm", True),
             "llm_repo": pipeline_cfg.get("refinement", {}).get("llm_repo", None),
             "llm_device": hardware_cfg.get("llm_device", "cuda"),

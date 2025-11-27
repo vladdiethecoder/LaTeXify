@@ -85,13 +85,10 @@ class LLMPatchGenerator:
             "{\n"
             "  \"proposals\": [\n"
             "    {\n"
-            "      \"candidate_id\": \"v1\",\n"
             "      \"strategy\": \"TARGETED\",\n"
             "      \"rationale\": \"why this helps\",\n"
             "      \"target_tests\": [\"src/latexify/tests/test_smoke_release.py::test_smoke_pipeline_produces_rewards\"],\n"
-            "      \"ops\": [\n"
-            "        {\"file\": \"path/relative.py\", \"search\": \"old text\", \"replace\": \"new text\"}\n"
-            "      ]\n"
+            "      \"ops\": []\n"
             "    }\n"
             "  ]\n"
             "}\n"
@@ -118,7 +115,7 @@ class LLMPatchGenerator:
             return self._fallback(parent)
 
         proposals: List[PatchProposal] = []
-        for item in data.get("proposals", []):
+        for idx, item in enumerate(data.get("proposals", [])):
             ops: List[PatchOperation] = []
             for op in item.get("ops", []):
                 try:
@@ -131,9 +128,13 @@ class LLMPatchGenerator:
                     )
                 except KeyError:
                     continue
+            
+            # Force unique ID: parent-v{idx}
+            unique_id = f"{parent.version_id}-p{idx+1}"
+            
             proposals.append(
                 PatchProposal(
-                    candidate_id=item.get("candidate_id", f"{parent.version_id}-cand"),
+                    candidate_id=unique_id,
                     strategy=item.get("strategy", "TARGETED"),
                     rationale=item.get("rationale", ""),
                     operations=ops,

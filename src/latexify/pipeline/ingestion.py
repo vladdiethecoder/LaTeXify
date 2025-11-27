@@ -58,29 +58,69 @@ def run_ingestion(
     enable_monkey_ocr: bool | None = None,
 ) -> IngestionResult:
     
-    # --- MinerU (Magic-PDF) Integration ---
-    # Check if backend config requests MinerU or we default to it for SOTA
-    # The user intent implies we should swap to MinerU.
+    # --- Backend Selection ---
+    backend = "docling" # Default to Docling as per Offline Pipeline PDF
+    if backend_config:
+        if getattr(backend_config, "mineru_enabled", False):
+            backend = "mineru"
+        elif hasattr(backend_config, "backend"):
+            backend = backend_config.backend
     
-    use_mineru = True # Defaulting to True for this "Textbook Quality" upgrade
-    
-    if backend_config and not backend_config.mineru_enabled:
-        # If explicitly disabled, we might fallback, but let's prioritize it.
-        pass 
-
-    if use_mineru:
+    if backend == "mineru":
         LOGGER.info("Ingesting PDF using MinerU (Magic-PDF)...")
         mineru = MinerUIngestion(models_dir=models_dir)
-        
-        if not mineru.is_available():
-             LOGGER.warning("MinerU not available, falling back to legacy ingestion.")
-        else:
+        if mineru.is_available():
              return mineru.process(
                  pdf_path=pdf_path,
                  workspace=workspace,
                  chunk_chars=chunk_chars,
                  semantic_chunker=semantic_chunker
              )
+        else:
+             LOGGER.warning("MinerU not available, falling back to Docling.")
+             backend = "docling"
+
+    if backend == "docling":
+        LOGGER.info("Ingesting PDF using Docling (Offline Pipeline)...")
+        from . import docling_offline
+        
+        # Docling options
+        doc_opts = {}
+        if capture_page_images:
+            doc_opts["do_ocr"] = True # Force OCR if we want detailed layout
+        
+        blocks = docling_offline.docling_ingest_blocks(pdf_path, docling_options=doc_opts)
+        
+        # Convert blocks to Chunks
+        chunks = []
+        for i, block in enumerate(blocks):
+            # Create a Chunk object
+            # assuming common.Chunk signature: (chunk_id, text, page, metadata, images)
+            meta = {
+                "region_type": block.get("type", "text"),
+                "bbox": block.get("bbox"),
+                "page_idx": block.get("page_idx"),
+                "raw_type": block.get("metadata", {}).get("raw_type")
+            }
+            chunks.append(
+                common.Chunk(
+                    chunk_id=f"chunk_{i:04d}",
+                    text=block.get("text", ""),
+                    page=block.get("page_idx", 0) + 1,
+                    metadata=meta,
+                    images=[] # Docling images not extracted yet in this pass, can be added if docling_offline returns them
+                )
+            )
+            
+        chunks_path = workspace / "chunks.json"
+        common.save_chunks(chunks, chunks_path)
+        
+        return IngestionResult(
+            chunks_path=chunks_path,
+            image_dir=workspace / "images", # Placeholder
+            ocr_dir=workspace / "ocr",      # Placeholder
+            page_images_available=False     # Docling handles images internally usually
+        )
 
     # --- Legacy Ingestion (Fallback) ---
     LOGGER.info("Running legacy ingestion pipeline...")

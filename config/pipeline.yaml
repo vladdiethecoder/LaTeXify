@@ -5,8 +5,14 @@ defaults:
 
 pipeline:
   ingestion:
+    backend: docling   # options: docling, mineru (fallback auto-handles missing deps)
     dpi: 300
     chunk_chars: 2000
+    docling:
+      pipeline: vlm            # use visual layout model when available
+      do_ocr: true             # enable OCR for scanned PDFs
+      vlm_model: granite_docling
+      pix2tex_fallback: true   # enable math fallback for low-confidence LaTeX
   layout:
     model: yolov10n.pt
     conf_threshold: 0.25
