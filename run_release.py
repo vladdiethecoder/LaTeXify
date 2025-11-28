@@ -10,6 +10,21 @@ from omegaconf import OmegaConf
 # Add src to sys.path
 sys.path.append(str(Path(__file__).parent / "src"))
 
+# Fix for HF_HOME if it points to invalid location (e.g. from previous user env)
+if "HF_HOME" in os.environ:
+    hf_home = Path(os.environ["HF_HOME"])
+    # Check if we can write to it or if it exists
+    # If it starts with /run/media, likely external drive that might be missing
+    if str(hf_home).startswith("/run/media") and not hf_home.exists():
+         new_home = Path.home() / ".cache" / "huggingface"
+         os.environ["HF_HOME"] = str(new_home)
+         os.environ["TRANSFORMERS_CACHE"] = str(new_home / "hub")
+         print(f"WARNING: Resetting invalid HF_HOME to {new_home}")
+else:
+     new_home = Path.home() / ".cache" / "huggingface"
+     os.environ["HF_HOME"] = str(new_home)
+     os.environ["TRANSFORMERS_CACHE"] = str(new_home / "hub")
+
 from latexify.core.pipeline import LaTeXifyPipeline
 from latexify.core.compiler import LatexCompiler
 
@@ -50,6 +65,21 @@ def load_config(args):
     if args.llm_vllm:
         cfg.pipeline.refinement.use_vllm = True
 
+    if args.load_in_4bit:
+        if "refinement" not in cfg.pipeline:
+            cfg.pipeline.refinement = {}
+        cfg.pipeline.refinement.load_in_4bit = True
+        
+    if args.load_in_8bit:
+        if "refinement" not in cfg.pipeline:
+            cfg.pipeline.refinement = {}
+        cfg.pipeline.refinement.load_in_8bit = True
+
+    if args.chunk_size:
+        if "ingestion" not in cfg.pipeline:
+            cfg.pipeline.ingestion = {}
+        cfg.pipeline.ingestion.chunk_chars = args.chunk_size
+
     if args.disable_refinement:
         if "refinement" not in cfg.pipeline:
             cfg.pipeline.refinement = {}
@@ -59,6 +89,11 @@ def load_config(args):
         if "qa" not in cfg.model:
             cfg.model.qa = {}
         cfg.model.qa.repo_id = args.qa_model
+        
+    if args.qa_threshold:
+        if "qa" not in cfg.model:
+            cfg.model.qa = {}
+        cfg.model.qa.threshold = args.qa_threshold
         
     if args.qa_device:
         if "hardware" not in cfg:
@@ -170,9 +205,13 @@ def main():
     parser.add_argument("--llm-repo", type=str, help="Refiner LLM Repo ID")
     parser.add_argument("--llm-device", type=str, help="Device for LLM (cuda:0, cpu)")
     parser.add_argument("--llm-vllm", action="store_true", help="Use vLLM for refinement")
+    parser.add_argument("--load-in-4bit", action="store_true", help="Load LLM in 4-bit quantization")
+    parser.add_argument("--load-in-8bit", action="store_true", help="Load LLM in 8-bit quantization")
     parser.add_argument("--qa-model", type=str, help="QA Model Repo ID")
     parser.add_argument("--qa-device", type=str, help="Device for QA model")
     parser.add_argument("--qa-vllm", action="store_true", help="Use vLLM for QA")
+    parser.add_argument("--qa-threshold", type=float, help="QA/BLEU Threshold")
+    parser.add_argument("--chunk-size", type=int, help="Ingestion chunk size in chars")
     parser.add_argument("--output-dir", type=str, help="Output directory")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -200,7 +239,7 @@ def main():
     parser.add_argument("--math-ocr-backend", type=str, help="Math OCR backend (mathvision|pix2tex|nougat)")
     
     # Ignored args for now but accepted to prevent crashing if user passes them
-    parser.add_argument("--qa-threshold", type=float, help="QA Threshold")
+    # parser.add_argument("--qa-threshold", type=float, help="QA Threshold") # Already defined above
     parser.add_argument("--max-reruns", type=int, help="Max reruns")
     parser.add_argument("--rerun-delay", type=str, help="Rerun delay")
     parser.add_argument("--log-level", type=str, help="Log level")

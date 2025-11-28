@@ -52,7 +52,10 @@ def docling_ingest_blocks(pdf_path: Path, *, docling_options: Dict[str, Any] | N
 
     payload = None
     try:
-        payload = document.export_json()  # type: ignore[attr-defined]
+        if hasattr(document, "export_to_dict"):
+            payload = document.export_to_dict()
+        else:
+            payload = document.export_json()  # type: ignore[attr-defined]
     except Exception:
         try:
             payload = document.export_to_markdown()  # type: ignore[attr-defined]
@@ -86,7 +89,23 @@ def _parse_docling_payload(payload: Any) -> List[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
 
+    # Docling v2 support
+    if "texts" in payload:
+        return _parse_docling_v2_payload(payload)
+
     pages = payload.get("pages") or []
+    # Handle Docling v2 beta where pages might be a dict
+    if isinstance(pages, dict):
+        page_list = []
+        sorted_keys = sorted(pages.keys(), key=lambda k: int(k) if str(k).isdigit() else k)
+        for k in sorted_keys:
+            p = pages[k]
+            if isinstance(p, dict):
+                if "number" not in p and str(k).isdigit():
+                    p["number"] = int(k)
+                page_list.append(p)
+        pages = page_list
+
     blocks: List[Dict[str, Any]] = []
     for idx, page in enumerate(pages):
         page_idx = int(page.get("number", idx + 1)) - 1
@@ -100,6 +119,57 @@ def _parse_docling_payload(payload: Any) -> List[Dict[str, Any]]:
             if isinstance(entries, list):
                 blocks.extend(_coerce_elements(entries, page_idx, hinted_type=key))
     return blocks
+
+
+def _parse_docling_v2_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Parse flattened Docling v2 dict."""
+    blocks = []
+    # Collect items from all relevant lists
+    for kind in ["texts", "tables", "pictures", "equations", "key_value_items", "form_items"]:
+        if kind not in payload:
+            continue
+        for item in payload[kind]:
+            text = item.get("text", "")
+            label = item.get("label", "text")
+            provs = item.get("prov", [])
+            if not provs:
+                # Items without provenance (e.g. root metadata) usually skipped
+                continue
+            
+            # Use first provenance item for location
+            prov = provs[0]
+            page_no = prov.get("page_no", 1)
+            page_idx = page_no - 1
+            
+            bbox_data = prov.get("bbox")
+            bbox = None
+            if bbox_data:
+                # Docling v2 bbox is {l, t, r, b, coord_origin='BOTTOMLEFT'} usually
+                # Convert to [x0, y0, x1, y1]
+                # Assuming BOTTOMLEFT origin: l=x0, b=y0, r=x1, t=y1
+                l = bbox_data.get("l", 0.0)
+                r = bbox_data.get("r", 0.0)
+                t = bbox_data.get("t", 0.0)
+                b = bbox_data.get("b", 0.0)
+                bbox = (l, b, r, t)
+            
+            blocks.append({
+                "text": text,
+                "bbox": bbox,
+                "page_idx": page_idx,
+                "type": _refine_type(label, item),
+                "metadata": {"raw_type": label}
+            })
+            
+    # Sort: Page ASC, then Top-to-Bottom.
+    # If origin is Bottom-Left, Top has higher Y. So sort Y descending.
+    blocks.sort(key=lambda b: (
+        b["page_idx"],
+        -1 * (b["bbox"][3] if b["bbox"] else 0), # Top (y1) descending
+        b["bbox"][0] if b["bbox"] else 0         # Left (x0) ascending
+    ))
+    return blocks
+
 
 
 def _coerce_elements(entries: List[Dict[str, Any]], page_idx: int, hinted_type: str | None = None) -> List[Dict[str, Any]]:

@@ -4,24 +4,32 @@ build-backend = "hatchling.build"
 
 [project]
 name = "latexify"
-version = "0.2.0"
-description = "A production-grade Python-to-LaTeX transpiler and PDF conversion pipeline."
+version = "1.0.0"
+description = "State-of-the-Art Python-to-LaTeX Transpiler (DeepEvolve SOTA v1.0)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
   {name = "LaTeXify Team", email = "dev@latexify.org"},
 ]
-keywords = ["latex", "python", "transpiler", "ast", "pdf", "ocr"]
+keywords = ["latex", "python", "transpiler", "ast", "math", "compiler"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Mathematics",
 ]
 dependencies = [
+    # Minimal dependencies for core transpiler
+    "typing-extensions>=4.0.0",
+]
+
+[project.optional-dependencies]
+pdf = [
+    # Legacy Pipeline Dependencies
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.23.0",
     "starlette>=0.37.0",
@@ -29,7 +37,6 @@ dependencies = [
     "streamlit>=1.36.0",
     "requests>=2.31.0",
     "fastjsonschema>=2.19.0",
-    "pytest>=8.2.0",
     "langchain-core>=0.1.39",
     "langgraph>=0.0.46",
     "jinja2>=3.1.0",
@@ -69,7 +76,7 @@ packages = ["src/latexify"]
 dev-dependencies = [
     "ruff>=0.3.0",
     "mypy>=1.9.0",
-    "mkdocs-material>=9.5.0",
+    "pytest>=8.2.0",
 ]
 
 [tool.ruff]
@@ -83,9 +90,6 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true 
-# Strict mode is hard on existing unchecked code, so we might need excludes or relaxed settings for legacy parts.
-# But for new transpiler code, we want strict.
-# We can configure per-module overrides if needed, but global strict is the goal.
 
 [tool.pytest.ini_options]
 addopts = "-ra -q"

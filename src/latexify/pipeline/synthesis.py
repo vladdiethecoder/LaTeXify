@@ -145,6 +145,9 @@ def synthesis_node(state: DocumentState) -> DocumentState:
         "\\end{document}"
     ])
     
+    # Apply post-processing (essential for math macro fixups like \inR -> \in \mathbb{R})
+    full_latex = assembly.finalize_latex(full_latex)
+    
     state.generated_latex = full_latex
     LOGGER.info("Synthesis complete. LaTeX generated.")
     return state

@@ -45,10 +45,22 @@ class EquationNormalizer:
     def _align_multiline(self, payload: str) -> str:
         """Wrap multiline equations in an align* block with aligned equals signs."""
         lowered = payload.lower()
-        if "\\begin{align" in lowered or "\\begin{aligned" in lowered:
+        if "\\begin{align" in lowered or "\\begin{aligned" in lowered or "\\begin{equation" in lowered:
             return payload
+            
+        if "\\question" in lowered or "question" in lowered or "\\section" in lowered:
+            return payload
+            
         lines: List[str] = [ln.strip() for ln in payload.splitlines() if ln.strip()]
         if len(lines) <= 1:
+            return payload
+
+        # Heuristic: Only align if it looks like a system of equations
+        has_equals = any("=" in line for line in lines)
+        has_math_chars = any(c in payload for c in ["\\", "^", "_", "+", "-"])
+        
+        if not (has_equals or has_math_chars):
+            # Likely just text
             return payload
 
         aligned: List[str] = []
@@ -59,7 +71,7 @@ class EquationNormalizer:
             else:
                 aligned.append(line)
 
-        return "\\begin{align*}\n" + " \\\n".join(aligned) + "\n\\end{align*}"
+        return "\\begin{align*}\n" + " \\\\\n".join(aligned) + "\n\\end{align*}"
 
 
 equation_normalizer = EquationNormalizer()

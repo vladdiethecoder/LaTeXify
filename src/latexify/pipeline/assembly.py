@@ -52,6 +52,17 @@ LATEX_ESCAPES = {
 _LAST_COMPILATION_METRICS: Dict[str, object] | None = None
 
 
+def finalize_latex(tex_content: str, sanitize_unicode: bool = True) -> str:
+    """Apply standard post-processing filters to raw LaTeX."""
+    tex_content = _strip_internal_macros(tex_content)
+    tex_content = _wrap_align_blocks(tex_content)
+    tex_content = _auto_math_blocks(tex_content)
+    tex_content = _ensure_math_macros(tex_content)
+    if sanitize_unicode:
+        from ..core.sanitizer import sanitize_unicode_to_latex
+        tex_content = sanitize_unicode_to_latex(tex_content)
+    return tex_content
+
 def _strip_internal_macros(tex: str) -> str:
     """Remove stray enumitem/internal macros that can break compilation."""
     return "\n".join(
@@ -63,30 +74,60 @@ ALIGN_BLOCK_RE = re.compile(r"(?:^\\\[.*?=.*?\\\]\s*$\n){2,}", re.MULTILINE)
 
 
 def _auto_math_blocks(tex: str) -> str:
-    math_tokens = set("=+−-*/^±∞√pmPM01·23456789()[]{}qxyz")
-
+    # Stricter math token set. Exclude '(', ')', '[', ']' from being sufficient on their own.
+    # Exclude standard hyphen '-' unless surrounded by spaces or digits? 
+    # Actually, let's rely on specific operators.
+    math_tokens = set("=+−*/^±∞√<>≤≥≈≡")
+    
     def is_mathy(line: str) -> bool:
         stripped = line.strip()
         if not stripped:
             return False
-        # Ignore pure commands that are already math envs
-        if stripped.startswith("\\"):
+        # Ignore pure commands that are already math envs or structural
+        if stripped.startswith("\\") or "Section" in stripped or "Question" in stripped or "Introduction" in stripped:
             return False
-        return any(ch in math_tokens for ch in stripped)
+            
+        # Check for explicit math operators
+        has_operator = any(ch in math_tokens for ch in stripped)
+        
+        # Check for numeric density or variable-like patterns
+        # But avoid dates "October 28, 2025"
+        # Avoid text "Part 1 - Communication"
+        
+        if not has_operator:
+            # If no operator, we rarely want to wrap in align* unless it's a bare number or variable list
+            # e.g. "x, y, z"
+            # But "October 28, 2025" has no operator.
+            return False
+
+        # If it has operators, check if it's actually text
+        # Count alpha characters vs math/number characters
+        alpha_count = sum(1 for ch in stripped if ch.isalpha())
+        total_len = len(stripped)
+        
+        # If highly alphabetic, assume text unless it has a very strong signal like "="
+        if alpha_count > total_len * 0.7:
+             if "=" in stripped or "≈" in stripped:
+                 # Check if it looks like "Speed = Distance / Time" (Textual formula)
+                 # We might want to wrap this, but inside \text{}?
+                 # Auto-math block puts it in align*, which ruins text.
+                 # Safer to Return False and let it be text, unless we are sure.
+                 return False
+             return False
+
+        return True
 
     lines = tex.splitlines()
     out = []
     buffer: List[str] = []
 
-    def flush_buffer(force: bool = False):
+    def flush_buffer():
         if not buffer:
             return
-        # More aggressive: if any mathy lines accumulated, wrap them all
-        if len(buffer) >= 2 or force or any(is_mathy(b) for b in buffer):
-            body = " \\\n".join([ln.strip() for ln in buffer])
+        # Only wrap if we have content
+        if len(buffer) >= 1:
+            body = " \\\\\n".join([ln.strip() for ln in buffer])
             out.append("\\begin{align*}\n" + body + "\n\\end{align*}")
-        else:
-            out.extend(buffer)
         buffer.clear()
 
     for ln in lines:
@@ -100,9 +141,33 @@ def _auto_math_blocks(tex: str) -> str:
 
 
 def _ensure_math_macros(tex: str) -> str:
-    replacements = ["pm", "sqrt", "times", "neq", "leq", "geq"]
+    # Fix common OCR typos first. Use ensuremath to be safe.
+    tex = tex.replace(r"\inR", r"\ensuremath{\in \mathbb{R}}")
+    tex = tex.replace(r"\inZ", r"\ensuremath{\in \mathbb{Z}}")
+    tex = tex.replace(r"\inN", r"\ensuremath{\in \mathbb{N}}")
+    
+    # Fix fused macros like \Rightarrowgraph -> \Rightarrow graph
+    # We ignore \Longrightarrow because regex matches literal \Rightarrow which is distinct from \L
+    tex = re.sub(r"\\Rightarrow([a-zA-Z])", r"\\Rightarrow \1", tex)
+    tex = re.sub(r"\\rightarrow([a-zA-Z])", r"\\rightarrow \1", tex)
+    
+    # Replace \sqrt in text with \ensuremath{\surd} to avoid crashing on missing arguments.
+    tex = re.sub(r"\\sqrt(?![a-zA-Z])", r"\\ensuremath{\\surd}", tex)
+    
+    # List of macros that should be wrapped in \ensuremath if found in text
+    # Exclude macros that take arguments (like mathbb) as wrapping just the command is risky.
+    replacements = [
+        "pm", "times", "neq", "leq", "geq", "le", "ge",
+        "in", "infty", "Rightarrow", "rightarrow", "leftarrow", "Leftrightarrow",
+        "cdot", "approx", "equiv", "propto", "angle", "nabla", "partial",
+        "alpha", "beta", "gamma", "theta", "pi", "mu", "sigma", "omega", "Delta"
+    ]
+    
     for macro in replacements:
+        # regex: backslash + macro + boundary (not followed by letters)
+        # We replace with \ensuremath{\macro}
         tex = re.sub(rf"\\{macro}(?![a-zA-Z])", rf"\\ensuremath{{\\{macro}}}", tex)
+        
     return tex
 
 
@@ -370,12 +435,10 @@ def block_to_latex(
     snippet = cleaned if cleaned else raw_snippet
     if block.block_type == "equation":
         snippet = _force_align(_wrap_align_blocks(snippet))
-    else:
-        # Temporary guard: wrap short mathy blocks even if not tagged as equation
-        lines = [ln for ln in snippet.splitlines() if ln.strip()]
-        mathy_count = sum(1 for ln in lines if any(ch in "=+-*/^±∞√0123456789" for ch in ln))
-        if mathy_count >= 2:
-            snippet = _force_align(snippet)
+    # else:
+    #     # Temporary guard removed: relying on _auto_math_blocks to handle fine-grained math wrapping
+    #     # to prevent mixed text/math chunks from being entirely wrapped in align*.
+    #     pass
     if bibliography_result:
         snippet = bibliography_result.apply_to_text(snippet)
     if block.block_type == "figure":

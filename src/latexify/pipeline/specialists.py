@@ -50,9 +50,18 @@ QUESTION_TOKEN_RE = re.compile(r"(?i)\b(question|problem)\s+([0-9]+[A-Za-z]?)")
 
 
 def _question_slug(value: str | None) -> str:
+    """
+    Generate a clean alphanumeric slug from a question label/number.
+    Handles 'Question 1', '1', '1a', '1.1', etc.
+    """
     if not value:
         return ""
-    return re.sub(r"[^0-9a-z]+", "", value.lower())
+    # Extract just the number/alphanum part if it contains words like 'Question'
+    match = re.search(r"(?:question|problem|q\.?)?\s*([0-9]+[a-z\.]*[0-9]*)", str(value), re.IGNORECASE)
+    if match:
+        return re.sub(r"[^0-9a-z]", "", match.group(1).lower())
+    
+    return re.sub(r"[^0-9a-z]", "", str(value).lower())
 
 
 def _resolve_cross_references(text: str) -> str:
@@ -249,20 +258,54 @@ def question_agent(
     preamble.request("tcolorbox")
     preamble.request("enumitem")
     meta = chunk.metadata or {}
-    label = meta.get("question_label") or meta.get("header_label") or chunk.metadata.get("label")
-    number = label or f"{chunk.page:02d}"
-    slug = _question_slug(number) or f"q{chunk.page:02d}"
+    
+    # 1. Determine Label/Number
+    # Prioritize metadata (likely from planner)
+    meta_label = meta.get("question_label") or meta.get("header_label") or chunk.metadata.get("label")
+    
+    # Fallback: Extract from text
+    text_label = None
+    # Regex handles "Question 1", "Q1", "Problem 1", etc.
+    match = re.match(r"^(?:#+\s*)?(?:question|q\.?|problem)\s*([0-9]+[a-z]?)", chunk.text, re.IGNORECASE)
+    if match:
+        text_label = match.group(1)
+        
+    # Decision logic: Use metadata if available, else text, else page fallback
+    number_display = str(meta_label or text_label or f"{chunk.page + 1}")
+    
+    # Generate slug for referencing
+    # Normalize "01" to "1" for consistency if it looks like an integer
+    slug_base = _question_slug(number_display)
+    if slug_base.isdigit():
+        slug_base = str(int(slug_base))
+        
+    # Make label unique to avoid "multiply defined" errors if duplicates exist
+    # (e.g. multiple "Question 1"s in input).
+    # We append a hash of the chunk ID.
+    unique_suffix = chunk.chunk_id[-4:] if chunk.chunk_id else "gen"
+    label_def = f"q:{slug_base}:{unique_suffix}"
+    
+    # 2. Clean Body
     body = _normalize_paragraphs(chunk.text)
+    # Aggressively strip ANY "Question X" prefix from the body text to avoid repetition
+    # Matches "Question 1", "Question 1.", "Question 1:", "## Question 1"
+    body = re.sub(r"^(?:#+\s*)?(?:question|q\.?|problem)\s*[0-9]+[a-z]?[\.\:\)]?\s*", "", body, flags=re.IGNORECASE).strip()
+
     header = _context_comment(context)
     prefix_lines = [header.strip()] if header else []
     if examples:
         prefix_lines.append(_rag_comment(examples[0].doc_id))
     prefix = "\n".join([line for line in prefix_lines if line])
+    
+    # We define the unique label, but ALSO a semantic alias if possible?
+    # No, keep it simple. Resolve refs separately or assume user refs use the unique ID (which they won't).
+    # Post-processing usually handles ref resolution.
+    
     latex = "\n".join(
         [
             prefix if prefix else "% question block",
-            f"\\begin{{question}}{{{number}}}",
-            f"\\label{{q:{slug}}}",
+            f"\\begin{{question}}{{{number_display}}}",
+            f"\\label{{{label_def}}}",
             body,
             "\\end{question}",
         ]
@@ -286,14 +329,19 @@ def equation_agent(
             preamble.request(pkg)
     body = equation_normalizer.normalize(chunk.text).strip() or "[equation unavailable]"
     header = (_context_comment(context) + (_rag_comment(examples[0].doc_id) if examples else "% equation snippet"))
-    latex = "\n".join(
-        [
-            header.strip() if header else "% equation snippet",
-            f"\\begin{{{env}}}",
-            body,
-            f"\\end{{{env}}}",
-        ]
-    )
+    
+    # Detect if already wrapped OR if it contains structural commands that break math mode
+    if body.startswith("\\begin{") or body.startswith("\\[") or "\\Question" in body or "\\section" in body or "\\begin{question}" in body:
+        latex = f"{header.strip()}\n{body}"
+    else:
+        latex = "\n".join(
+            [
+                header.strip() if header else "% equation snippet",
+                f"\\begin{{{env}}}",
+                body,
+                f"\\end{{{env}}}",
+            ]
+        )
     return SpecialistResult(latex=latex)
 
 
