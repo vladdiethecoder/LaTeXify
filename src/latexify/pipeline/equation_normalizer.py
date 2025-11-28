@@ -8,11 +8,16 @@ from ..core.sanitizer.unicode_to_latex import sanitize_unicode_to_latex
 from ..models.vllm_client import get_vllm_client
 
 LOGGER = logging.getLogger(__name__)
-PROMPT = """You normalize OCR equations. Convert the input into canonical LaTeX.
-Replace any unicode math or currency characters (e.g., ¢) with proper LaTeX commands.
-Respond ONLY with LaTeX.
+PROMPT = """You are an expert LaTeX typesetter. Normalize the following OCR math snippet into canonical LaTeX.
 
-Equation:
+Rules:
+1. Replace unicode math/currency chars (e.g., ¢, ×, ÷) with proper macros.
+2. If the input contains multiple lines of equations that should be aligned (e.g. a system of equations, or a derivation steps), wrap them in an `align*` environment and use `&` for alignment (usually at the equals sign).
+3. If it is a single display equation, wrap it in `equation*` or `\[ ... \]`.
+4. If it is inline math text, just return the math content without wrappers, or wrap in `$ ... $` if context implies inline.
+5. Do NOT add preamble or explanations. Respond ONLY with the LaTeX code.
+
+Input:
 {equation}
 """
 
@@ -31,47 +36,22 @@ class EquationNormalizer:
             return sanitized
         prompt = PROMPT.format(equation=sanitized.strip())
         try:
-            response = self._client.generate(prompt, stop=[], max_tokens=256)
+            response = self._client.generate(prompt, stop=[], max_tokens=512)
         except Exception as exc:  # pragma: no cover - runtime guard
             LOGGER.debug("Equation normalizer LLM failed: %s", exc)
             return sanitized
         cleaned = response.strip()
+        # Remove markdown code blocks if present
+        if cleaned.startswith("```latex"):
+            cleaned = cleaned.replace("```latex", "").replace("```", "")
+        elif cleaned.startswith("```"):
+            cleaned = cleaned.replace("```", "")
+            
         if cleaned.lower().startswith("<latex>"):
             cleaned = cleaned.split("</latex>", 1)[0]
             cleaned = cleaned.replace("<latex>", "")
         normalized = cleaned.strip() or sanitized
-        return self._align_multiline(normalized)
-
-    def _align_multiline(self, payload: str) -> str:
-        """Wrap multiline equations in an align* block with aligned equals signs."""
-        lowered = payload.lower()
-        if "\\begin{align" in lowered or "\\begin{aligned" in lowered or "\\begin{equation" in lowered:
-            return payload
-            
-        if "\\question" in lowered or "question" in lowered or "\\section" in lowered:
-            return payload
-            
-        lines: List[str] = [ln.strip() for ln in payload.splitlines() if ln.strip()]
-        if len(lines) <= 1:
-            return payload
-
-        # Heuristic: Only align if it looks like a system of equations
-        has_equals = any("=" in line for line in lines)
-        has_math_chars = any(c in payload for c in ["\\", "^", "_", "+", "-"])
-        
-        if not (has_equals or has_math_chars):
-            # Likely just text
-            return payload
-
-        aligned: List[str] = []
-        for line in lines:
-            if "=" in line and "&" not in line:
-                head, tail = line.split("=", 1)
-                aligned.append(f"{head.strip()} & = {tail.strip()}")
-            else:
-                aligned.append(line)
-
-        return "\\begin{align*}\n" + " \\\\\n".join(aligned) + "\n\\end{align*}"
+        return normalized
 
 
 equation_normalizer = EquationNormalizer()

@@ -1,15 +1,15 @@
-\documentclass[11pt]{article}
+\documentclass[12pt,twoside]{article}
 \usepackage{graphicx}
 \usepackage[margin=1in]{geometry}
 \usepackage{float}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsfonts}
-\usepackage{tcolorbox}
-\usepackage{enumitem}
 \usepackage{amsthm}
 \usepackage{booktabs}
 \usepackage{siunitx}
+\usepackage[most]{tcolorbox}
+\usepackage{enumitem}
 \usepackage{hyperref}
 \usepackage[T1]{fontenc}
 \usepackage[english]{babel}
@@ -36,6 +36,7 @@
 \tcbset{flashcard/.style={enhanced, drop shadow, colback=white, colframe=gray!50!black, fonttitle=\bfseries}}
 \newtcolorbox{questionbox}[2][]{title={Question\textasciitilde{}#2},#1}
 \newenvironment{question}[1]{\begin{questionbox}{#1}}{\end{questionbox}}
+\newenvironment{problem}[2][]{\begin{tcolorbox}[title={Problem\textasciitilde{}#2\textasciitilde{}(#1)},colback=white]}{\end{tcolorbox}}
 \newenvironment{answer}{\begin{tcolorbox}[title={Answer},colback=green!5]}{\end{tcolorbox}}
 \newenvironment{summarycard}[1]{\begin{tcolorbox}[flashcard, title={#1}]}{\end{tcolorbox}}
 \setlist{leftmargin=*}
@@ -51,11 +52,8 @@ Basic Advanced Functions --- Part 1: Communication Problems
 Your Name
 October 28, 2025
 % context: section=Preamble / Introduction
-\begin{question}{1}
-\label{q:1:0001}
-Question\textasciitilde{}\ref{q:1}
+Question 1
 (6 points)
-\end{question}
 % context: section=Preamble / Introduction
 Rewrite each relationship using function notation. All given text retained; one ``='' per line; equals
 aligned.
@@ -94,11 +92,8 @@ Scott drives at a constant speed of 50 km/h. If d(t) is the distance (km) after 
 d(t) = 50t
 \end{align*}
 % context: section=Preamble / Introduction
-\begin{question}{2}
-\label{q:2:0003}
-Question\textasciitilde{}\ref{q:2}
+Question 2
 (6 points)
-\end{question}
 % context: section=Preamble / Introduction
 Formatting: parts (a) and (b) are side by side with a clean divider; all ``='' signs aligned inside each
 block.
@@ -235,11 +230,8 @@ h-1(x) = -3 \ensuremath{\pm}
 4.9
 2
 % context: section=Preamble / Introduction
-\begin{question}{3}
-\label{q:3:0005}
-Question\textasciitilde{}\ref{q:3}
+Question 3
 (6 points)
-\end{question}
 % context: section=Preamble / Introduction
 Using graphs, decide whether each inverse is a function. Figures are side by side (uniform size) with
 concise captions. Below each pair, the reasoning lines up the ``\ensuremath{\Rightarrow}'' arrows and the verdict is boxed.
@@ -276,11 +268,8 @@ Inverse is not a function
 Domain/Range swap : Dom(h-1) = Ran(h), Ran(h-1) = Dom(h)
 \end{align*}
 % context: section=Preamble / Introduction
-\begin{question}{4}
-\label{q:4:0007}
-Question\textasciitilde{}\ref{q:4}
+Question 4
 (24 points)
-\end{question}
 % context: section=Preamble / Introduction
 All original answers preserved. Reformatted into three readable ``summary cards'' (no clipping;
 full-size math).
@@ -411,11 +400,8 @@ F(0) = 0 + 1
 = -1
 \end{align*}
 % context: section=Preamble / Introduction
-\begin{question}{5}
-\label{q:5:0009}
-Question\textasciitilde{}\ref{q:5}
+Question 5
 (8 points)
-\end{question}
 % context: section=Preamble / Introduction
 The point (1, -2) is on the graph of f. Describe the following transformations on f, and determine
 the resulting point.

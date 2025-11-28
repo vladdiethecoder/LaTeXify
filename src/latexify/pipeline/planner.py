@@ -9,6 +9,7 @@ from typing import Dict, Iterable, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from ..core import common
+from ..models.vllm_client import get_vllm_client
 from latexify.core.state import DocumentState
 # from .enhanced_structure_graph import generate_enhanced_graph
 
@@ -50,9 +51,57 @@ class PlanSection(BaseModel):
 
 class MasterPlan(BaseModel):
     document_title: str
-    document_class: str = "article" # Default, usually overridden by CLI
-    class_options: str = "12pt,twoside" # Better default for textbooks
+    document_class: str = "article"  # Default, usually overridden by Layout Planner
+    class_options: str = "12pt,twoside"  # Better default for textbooks
     sections: List[PlanSection]
+
+
+def _infer_layout_from_chunks(
+    chunks: Iterable[common.Chunk],
+    default_class: str = "article",
+    default_options: str = "12pt,twoside",
+) -> tuple[str, str]:
+    """
+    Lightweight Layout Planner: summarizes the document and lets an LLM
+    pick an appropriate LaTeX document class and options.
+    """
+    # Materialize a small preview so we don't feed the model the entire book.
+    sample_texts: List[str] = []
+    total_chars = 0
+    for chunk in chunks:
+        if not chunk.text:
+            continue
+        sample_texts.append(chunk.text)
+        total_chars += len(chunk.text)
+        if total_chars > 3000:
+            break
+
+    preview = "\n\n".join(sample_texts) if sample_texts else ""
+    client = get_vllm_client()
+    if not client or not preview.strip():
+        return default_class, default_options
+
+    prompt = (
+        "You are a LaTeX layout planner.\n"
+        "Given the following preview of a document, choose the most appropriate LaTeX "
+        "documentclass and class options.\n"
+        "You may choose documentclass from: article, book, report, exam.\n"
+        "Options examples: '11pt', '12pt,twoside', '12pt,addpoints'.\n"
+        "Respond ONLY with JSON of the form "
+        '{"document_class": "article", "class_options": "12pt,twoside"}.\n\n'
+        f"Preview:\n{preview[:2500]}"
+    )
+    try:
+        resp = client.generate(prompt, max_tokens=128)
+        match = json.loads(resp) if resp.strip().startswith("{") else json.loads(
+            resp[resp.index("{") : resp.rindex("}") + 1]
+        )
+        doc_class = str(match.get("document_class", default_class)).strip() or default_class
+        class_options = str(match.get("class_options", default_options)).strip() or default_options
+        return doc_class, class_options
+    except Exception:
+        LOGGER.warning("Layout planner LLM unavailable or returned invalid JSON; using defaults.")
+        return default_class, default_options
 
 
 def plan_node(state: DocumentState) -> DocumentState:
@@ -62,12 +111,16 @@ def plan_node(state: DocumentState) -> DocumentState:
     LOGGER.info("Starting Planning Node...")
     if not state.chunks:
         LOGGER.warning("No chunks found in state. Planning might be empty.")
-    
-    # Reuse existing logic
+
+    # Layout Planner: let the LLM pick document class/options.
+    doc_class, class_options = _infer_layout_from_chunks(state.chunks, default_class="article", default_options="12pt,twoside")
+
+    # Reuse existing logic to build the section/content plan.
     plan = build_master_plan(
         chunks=state.chunks,
         document_title=state.document_name,
-        document_class="article" # could be from state.config
+        document_class=doc_class,
+        class_options=class_options,
     )
     
     state.semantic_plan = plan.model_dump()
@@ -217,7 +270,15 @@ def run_planner(
     class_options: str = "12pt",
 ) -> Path:
     chunks = common.load_chunks(chunks_path)
-    plan = build_master_plan(chunks, document_title or "Generated Document", document_class, class_options)
+    inferred_class, inferred_options = _infer_layout_from_chunks(
+        chunks, default_class=document_class, default_options=class_options
+    )
+    plan = build_master_plan(
+        chunks,
+        document_title or "Generated Document",
+        inferred_class,
+        inferred_options,
+    )
     save_master_plan(plan, master_plan_path)
     LOGGER.info("PlannerAgent generated %s sections", len(plan.sections))
     

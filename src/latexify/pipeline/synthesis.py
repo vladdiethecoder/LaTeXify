@@ -97,27 +97,21 @@ def synthesis_node(state: DocumentState) -> DocumentState:
         ))
     
     # 3. Assembly (Generate main.tex content)
-    # assembly.build_preamble now expects a dict with 'packages'
-    # We must ensure we are merging the preamble agent packages with assembly's defaults if needed,
-    # OR we trust assembly.build_preamble to handle it if we pass partial config.
-    # Looking at assembly.py, `build_preamble` takes a config dict.
-    # It does NOT auto-merge BASE_PACKAGES unless we use `load_preamble_config`.
-    # But here we are calling `build_preamble` directly with a constructed dict.
-    
-    # Let's manually merge BASE_PACKAGES from assembly to be safe, or rely on PreambleAgent to have them?
-    # PreambleAgent has some (graphicx, geometry, float). But NOT siunitx by default unless requested.
-    # The prompt requests structure-aware refinement which implies we might need more.
-    # assembly.BASE_PACKAGES has siunitx.
-    
+    # Merge PreambleAgent packages with BASE_PACKAGES and respect planner-chosen layout.
     from .assembly import BASE_PACKAGES, _ensure_base_packages
-    
-    # Merge PreambleAgent packages with BASE_PACKAGES
+
     agent_packages = preamble_agent.packages()
     merged_packages = _ensure_base_packages(agent_packages)
-    
+
+    # Let the Planner (Layout Planner) decide document class/options when available.
+    plan_dict = state.semantic_plan or {}
+    document_class = plan_dict.get("document_class", "article")
+    class_options = plan_dict.get("class_options", "12pt")
+
     preamble_config = {
-        "document_class": "article",
-        "packages": merged_packages
+        "document_class": document_class,
+        "class_options": class_options,
+        "packages": merged_packages,
     }
     preamble = assembly.build_preamble(preamble_config)
     
@@ -133,7 +127,7 @@ def synthesis_node(state: DocumentState) -> DocumentState:
             assets_dir,
             used_assets,
             chunk_lookup=chunk_map,
-            document_class="article"
+            document_class=document_class,
         )
         body_parts.append(latex)
         

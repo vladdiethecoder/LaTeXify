@@ -1,18 +1,12 @@
-"""
-Math Agent: Enhanced UniMERNet wrapper with batching and validation.
-
-This agent wraps UniMERNet for formula extraction while adding:
-- Efficient batch processing
-- SymPy validation
-- Confidence scoring
-"""
+"""Math agent built on UniMERNet with batching and validation."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 from PIL import Image
 
-from latexify.agents.base import BaseExtractor, BaseAgent
+from latexify.agents.base import AgentResult, BaseAgent, BaseExtractor
 from latexify.exceptions import ExtractionError
 from latexify.optimization import apply_fp8_quantization, warmup_model
 
@@ -40,11 +34,9 @@ except ImportError:
 
 
 class UniMERExtractor(BaseExtractor):
-    """
-    UniMERNet extractor with optimized batch processing.
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    """UniMERNet extractor with optimized batch processing."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(config)
         self.predictor = None
         self.model_path = self.config.get("model_path", "wanderkid/unimernet_small")
@@ -55,10 +47,10 @@ class UniMERExtractor(BaseExtractor):
         self.use_fp8 = self.config.get("use_fp8", False)
         self.mock_mode = not UNIMER_AVAILABLE
         
-        self._last_confidence = None
-        
-    def _initialize(self):
-        """Load UniMERNet model."""
+        self._last_confidence: Optional[float] = None
+
+    def _initialize(self) -> None:
+        """Load the UniMERNet model and apply optimizations."""
         if self.mock_mode:
             logger.warning("UniMERNet not available. Running in MOCK mode.")
             return
@@ -118,15 +110,7 @@ class UniMERExtractor(BaseExtractor):
             self.mock_mode = True
     
     def extract(self, image: np.ndarray) -> str:
-        """
-        Extract LaTeX from a single equation image.
-        
-        Args:
-            image: NumPy array (H, W, C) in RGB format
-            
-        Returns:
-            LaTeX string
-        """
+        """Extract LaTeX from a single equation image."""
         if not self._initialized:
             self.warmup()
         
@@ -153,15 +137,7 @@ class UniMERExtractor(BaseExtractor):
             )
     
     def extract_batch(self, images: List[np.ndarray]) -> List[str]:
-        """
-        Extract LaTeX from multiple equation images (batched).
-        
-        Args:
-            images: List of NumPy arrays in RGB format
-            
-        Returns:
-            List of LaTeX strings
-        """
+        """Extract LaTeX from multiple equation images (batched)."""
         if not self._initialized:
             self.warmup()
         
@@ -193,42 +169,29 @@ class UniMERExtractor(BaseExtractor):
             )
     
     def get_confidence(self) -> Optional[float]:
-        """Return confidence of last extraction."""
+        """Return confidence of the last extraction."""
         return self._last_confidence
 
 
 class MathAgent(BaseAgent):
-    """
-    High-level Math Agent with validation and error handling.
-    
-    Routes to UniMERExtractor and optionally validates with SymPy.
-    """
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    """High-level math agent with validation and error handling."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
         config = config or {}
         
         # Create UniMER extractor
         unimer = UniMERExtractor(config)
         super().__init__({"unimernet": unimer})
         
-        self.enable_sympy_validation = config.get("enable_sympy_validation", True)
-        self.confidence_threshold = config.get("confidence_threshold", 0.7)
-        
+        self.enable_sympy_validation: bool = config.get("enable_sympy_validation", True)
+        self.confidence_threshold: float = config.get("confidence_threshold", 0.7)
+
     def process(
         self,
         image: np.ndarray,
-        context: Optional[Dict[str, Any]] = None
+        context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        Process an equation image and return validated result.
-        
-        Args:
-            image: Equation crop (NumPy array)
-            context: Optional context (category, bbox, etc.)
-            
-        Returns:
-            Dict with keys: content, confidence, metadata
-        """
+        """Process an equation image and return a validated legacy result dict."""
         context = context or {}
         category = context.get("category", "Equation_Unknown")
         
@@ -258,18 +221,9 @@ class MathAgent(BaseAgent):
     def process_batch(
         self,
         images: List[np.ndarray],
-        contexts: Optional[List[Dict[str, Any]]] = None
+        contexts: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Process multiple equation images (batched).
-        
-        Args:
-            images: List of equation crops
-            contexts: Optional list of context dicts
-            
-        Returns:
-            List of result dicts
-        """
+        """Process multiple equation images (batched) and return legacy dicts."""
         contexts = contexts or [{} for _ in images]
         
         # Batch extract
@@ -297,13 +251,8 @@ class MathAgent(BaseAgent):
         
         return results
     
-    def _validate_latex(self, latex: str) -> tuple[bool, Optional[str]]:
-        """
-        Validate LaTeX using SymPy.
-        
-        Returns:
-            (is_valid, error_message)
-        """
+    def _validate_latex(self, latex: str) -> Tuple[bool, Optional[str]]:
+        """Validate LaTeX using SymPy and return (is_valid, error_message)."""
         try:
             # Attempt to parse with SymPy
             expr = parse_latex(latex)
@@ -315,21 +264,18 @@ class MathAgent(BaseAgent):
             return (False, str(e))
 
 
-# Backward compatibility
 class UniMERNetMathRecognizer:
     """Legacy wrapper for existing pipeline code."""
-    
-    def __init__(self, cfg_path: str = "config/model/unimer.yaml", device: str = "cuda"):
+
+    def __init__(self, cfg_path: str = "config/model/unimer.yaml", device: str = "cuda") -> None:
         config = {"device": device}
         self.agent = MathAgent(config)
         self.agent.extractors["unimernet"].warmup()
     
     def predict(self, image: Any) -> str:
         """Predict LaTeX from a single image."""
-        result = self.agent.process(image)
-        return result["content"]
+        return self.agent.run(image).content
     
     def predict_batch(self, images: List[Any]) -> List[str]:
         """Predict LaTeX from multiple images."""
-        results = self.agent.process_batch(images)
-        return [r["content"] for r in results]
+        return [self.agent.run(img).content for img in images]

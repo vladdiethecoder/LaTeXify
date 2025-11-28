@@ -491,6 +491,8 @@ DECLARATIONS = [
     "\\tcbset{flashcard/.style={enhanced, drop shadow, colback=white, colframe=gray!50!black, fonttitle=\\bfseries}}", 
     "\\newtcolorbox{questionbox}[2][]{title={Question~#2},#1}",
     "\\newenvironment{question}[1]{\\begin{questionbox}{#1}}{\\end{questionbox}}",
+    # Problem + Answer styling for exam layouts
+    "\\newenvironment{problem}[2][]{\\begin{tcolorbox}[title={Problem~#2~(#1)},colback=white]}{\\end{tcolorbox}}",
     "\\newenvironment{answer}{\\begin{tcolorbox}[title={Answer},colback=green!5]}{\\end{tcolorbox}}",
     "\\newenvironment{summarycard}[1]{\\begin{tcolorbox}[flashcard, title={#1}]}{\\end{tcolorbox}}",
     "\\setlist{leftmargin=*}",

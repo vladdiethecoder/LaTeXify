@@ -5,8 +5,6 @@ import os
 import shutil
 from pathlib import Path
 
-from omegaconf import OmegaConf
-
 # Add src to sys.path
 sys.path.append(str(Path(__file__).parent / "src"))
 
@@ -25,100 +23,40 @@ else:
      os.environ["HF_HOME"] = str(new_home)
      os.environ["TRANSFORMERS_CACHE"] = str(new_home / "hub")
 
+from latexify.config import load_runtime_config, RuntimeConfig
 from latexify.core.pipeline import LaTeXifyPipeline
 from latexify.core.compiler import LatexCompiler
 
-def load_config(args):
-    # Manual config loading to bypass Hydra/Python 3.14 incompatibility
-    conf_dir = Path("config")
-    pipeline_cfg = OmegaConf.load(conf_dir / "pipeline.yaml")
-    
-    # Load defaults if present
-    defaults = OmegaConf.create({})
-    if (conf_dir / "hardware" / "rtx5090.yaml").exists():
-        hw_cfg = OmegaConf.load(conf_dir / "hardware" / "rtx5090.yaml")
-        defaults.merge_with({"hardware": hw_cfg})
-    
-    if (conf_dir / "model" / "unimer.yaml").exists():
-        model_cfg = OmegaConf.load(conf_dir / "model" / "unimer.yaml")
-        defaults.merge_with({"model": model_cfg})
 
-    cfg = OmegaConf.merge(defaults, pipeline_cfg)
-    
-    # Apply CLI Overrides
+def _merge_cli_overrides(cfg: RuntimeConfig, args: argparse.Namespace) -> RuntimeConfig:
+    """Apply a subset of CLI overrides to the typed runtime configuration."""
+    data = cfg.model_dump()
+
     if args.pdf_dpi:
-        cfg.pipeline.ingestion.dpi = args.pdf_dpi
-    
-    if args.ocr_model:
-        # Assuming ocr model override updates the model name
-        cfg.model.name = args.ocr_model
-        
-    if args.llm_repo:
-        # Ensure the key exists even if not in yaml
-        if "refinement" not in cfg.pipeline:
-            cfg.pipeline.refinement = {}
-        cfg.pipeline.refinement.llm_repo = args.llm_repo
-        
-    if args.llm_device:
-        cfg.hardware.llm_device = args.llm_device
-        
-    if args.llm_vllm:
-        cfg.pipeline.refinement.use_vllm = True
-
-    if args.load_in_4bit:
-        if "refinement" not in cfg.pipeline:
-            cfg.pipeline.refinement = {}
-        cfg.pipeline.refinement.load_in_4bit = True
-        
-    if args.load_in_8bit:
-        if "refinement" not in cfg.pipeline:
-            cfg.pipeline.refinement = {}
-        cfg.pipeline.refinement.load_in_8bit = True
+        data.setdefault("pipeline", {}).setdefault("ingestion", {})["dpi"] = args.pdf_dpi
 
     if args.chunk_size:
-        if "ingestion" not in cfg.pipeline:
-            cfg.pipeline.ingestion = {}
-        cfg.pipeline.ingestion.chunk_chars = args.chunk_size
+        data.setdefault("pipeline", {}).setdefault("ingestion", {})["chunk_chars"] = args.chunk_size
+
+    if args.llm_repo:
+        data.setdefault("pipeline", {}).setdefault("refinement", {})["llm_repo"] = args.llm_repo
+
+    if args.llm_device:
+        data.setdefault("hardware", {})["llm_device"] = args.llm_device
+
+    if args.llm_vllm:
+        data.setdefault("pipeline", {}).setdefault("refinement", {})["use_vllm"] = True
+
+    if args.load_in_4bit:
+        data.setdefault("pipeline", {}).setdefault("refinement", {})["load_in_4bit"] = True
+
+    if args.load_in_8bit:
+        data.setdefault("pipeline", {}).setdefault("refinement", {})["load_in_8bit"] = True
 
     if args.disable_refinement:
-        if "refinement" not in cfg.pipeline:
-            cfg.pipeline.refinement = {}
-        cfg.pipeline.refinement.enabled = False
-        
-    if args.qa_model:
-        if "qa" not in cfg.model:
-            cfg.model.qa = {}
-        cfg.model.qa.repo_id = args.qa_model
-        
-    if args.qa_threshold:
-        if "qa" not in cfg.model:
-            cfg.model.qa = {}
-        cfg.model.qa.threshold = args.qa_threshold
-        
-    if args.qa_device:
-        if "hardware" not in cfg:
-            cfg.hardware = {}
-        cfg.hardware.qa_device = args.qa_device
+        data.setdefault("pipeline", {}).setdefault("refinement", {})["enabled"] = False
 
-    # Optional overrides that map to pipeline runtime toggles
-    if args.fusion_strategy:
-        if "fusion" not in cfg.pipeline:
-            cfg.pipeline.fusion = {}
-        cfg.pipeline.fusion.strategy = args.fusion_strategy
-    if args.vision_preset:
-        if "vision" not in cfg.pipeline:
-            cfg.pipeline.vision = {}
-        cfg.pipeline.vision.preset = args.vision_preset
-    if args.layout_backend:
-        if "layout" not in cfg.pipeline:
-            cfg.pipeline.layout = {}
-        cfg.pipeline.layout.backend = args.layout_backend
-    if args.math_ocr_backend:
-        if "ocr" not in cfg.pipeline:
-            cfg.pipeline.ocr = {}
-        cfg.pipeline.ocr.math_backend = args.math_ocr_backend
-    
-    return cfg
+    return RuntimeConfig.model_validate(data)
 
 def _apply_runtime_env(args) -> None:
     """Propagate CLI toggles into environment variables consumed downstream."""
@@ -154,7 +92,8 @@ def run_pipeline(args):
     logger = logging.getLogger("run_release")
     
     logger.info("Loading configuration...")
-    cfg = load_config(args)
+    cfg = load_runtime_config("config")
+    cfg = _merge_cli_overrides(cfg, args)
     
     input_pdf = Path(args.pdf)
     if not input_pdf.exists():

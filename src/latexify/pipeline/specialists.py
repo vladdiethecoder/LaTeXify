@@ -5,9 +5,10 @@ import logging
 import os
 import re
 import tempfile
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Any
 
 from PIL import Image
 
@@ -19,6 +20,7 @@ from ..models.vlm_adapters import (
     get_vlm_adapter,
     resolve_vlm_backend,
 )
+from ..models.vllm_client import get_vllm_client
 from ..agents.figure_table_agent import FigureTableAgent
 from .equation_normalizer import equation_normalizer
 from .code_block_detector import wrap_code_blocks
@@ -45,44 +47,6 @@ FIGURE_PROMPT = (
     "Mention axes or key objects when relevant."
 )
 markdown_translator = MarkdownTranslator()
-SEE_REF_RE = re.compile(r"(?i)\b(see|refer to)\s+(question|problem)\s+([0-9]+[A-Za-z]?)")
-QUESTION_TOKEN_RE = re.compile(r"(?i)\b(question|problem)\s+([0-9]+[A-Za-z]?)")
-
-
-def _question_slug(value: str | None) -> str:
-    """
-    Generate a clean alphanumeric slug from a question label/number.
-    Handles 'Question 1', '1', '1a', '1.1', etc.
-    """
-    if not value:
-        return ""
-    # Extract just the number/alphanum part if it contains words like 'Question'
-    match = re.search(r"(?:question|problem|q\.?)?\s*([0-9]+[a-z\.]*[0-9]*)", str(value), re.IGNORECASE)
-    if match:
-        return re.sub(r"[^0-9a-z]", "", match.group(1).lower())
-    
-    return re.sub(r"[^0-9a-z]", "", str(value).lower())
-
-
-def _resolve_cross_references(text: str) -> str:
-    def _replacement(match: re.Match[str]) -> str:
-        prefix = match.group(1)
-        noun = match.group(2)
-        label = _question_slug(match.group(3))
-        if not label:
-            return match.group(0)
-        return f"{prefix} {noun}~\\ref{{q:{label}}}"
-
-    updated = SEE_REF_RE.sub(_replacement, text)
-
-    def _noun_replace(match: re.Match[str]) -> str:
-        noun = match.group(1)
-        label = _question_slug(match.group(2))
-        if not label:
-            return match.group(0)
-        return f"{noun}~\\ref{{q:{label}}}"
-
-    return QUESTION_TOKEN_RE.sub(_noun_replace, updated)
 
 
 def _florence_model_dir() -> Path:
@@ -208,14 +172,61 @@ graph_tikz_generator = GraphToTikZGenerator()
 ENABLE_TIKZ_GRAPHS = os.environ.get("LATEXIFY_TIKZ_GRAPHS", "1") != "0"
 
 
+def _question_slug(value: str | None) -> str:
+    """
+    Generate a clean alphanumeric slug from a question label/number.
+    This is only used to build LaTeX labels, not to heuristically
+    classify or route content.
+    """
+    if not value:
+        return ""
+    return re.sub(r"[^0-9a-z]", "", str(value).lower())
+
+
+class SemanticRouter:
+    """Uses LLM to route chunk to appropriate specialist agent."""
+    def __init__(self):
+        self._client = get_vllm_client()
+        self._system_prompt = """You are a semantic router for a LaTeX conversion pipeline.
+Analyze the input text chunk and classify it into one of the following categories:
+- question: A distinct exam/homework question block (e.g. "Question 1", "Problem 3").
+- answer: A distinct answer block, solution, or marking rubric entry.
+- table: A tabular structure or matrix that should be formatted as a table.
+- equation: A mathematical block (single or multiline).
+- list: A bulleted or numbered list.
+- figure: A caption or reference to an image/figure.
+- text: General prose, paragraphs, or section headers.
+
+Respond ONLY with a JSON object: {"category": "...", "confidence": 0.0-1.0}
+"""
+
+    def route(self, chunk: common.Chunk, block_type_hint: str) -> str:
+        if not self._client:
+            return block_type_hint or "text"
+            
+        prompt = f"Block Type Hint: {block_type_hint}\n\nContent:\n{chunk.text[:1000]}"
+        try:
+            response = self._client.generate(self._system_prompt + "\nInput:\n" + prompt, max_tokens=64)
+            # Simple JSON extraction
+            match = re.search(r"\{.*\}", response, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                return data.get("category", "text")
+        except Exception as e:
+            LOGGER.warning(f"Semantic router failed: {e}")
+            
+        return block_type_hint or "text"
+
+semantic_router = SemanticRouter()
+
+
 def _normalize_paragraphs(text: str) -> str:
     markdown_processed = markdown_translator.convert(text)
     markdown_processed = wrap_code_blocks(markdown_processed)
     paragraphs = [line.strip() for line in markdown_processed.split("\n\n") if line.strip()]
     if not paragraphs:
         paragraphs = [markdown_processed.strip() or "[empty snippet]"]
-    resolved = [_resolve_cross_references(paragraph) for paragraph in paragraphs]
-    escaped = [_escape_plain_text(paragraph) for paragraph in resolved]
+    escaped = [_escape_plain_text(paragraph) for paragraph in paragraphs]
     return "\n\n".join(escaped)
 
 
@@ -249,6 +260,45 @@ def paragraph_agent(chunk: common.Chunk, examples=None, context: Dict[str, objec
     return SpecialistResult(latex=header + latex)
 
 
+def _extract_question_metadata(chunk: common.Chunk) -> Dict[str, str]:
+    """
+    Ask the LLM to parse question structure instead of regex heuristics.
+    Returns a dict with label, points, topic, and body keys.
+    """
+    client = get_vllm_client()
+    defaults = {
+        "label": str(chunk.page + 1),
+        "points": "",
+        "topic": "",
+        "body": chunk.text,
+    }
+    if not client:
+        return defaults
+
+    prompt = (
+        "You are structuring an exam question for LaTeX.\n"
+        "Extract the logical metadata and return JSON only.\n"
+        'Fields: \"label\" (e.g. \"1\", \"1a\"), \"points\" (e.g. \"6pts\" or \"\"), '
+        '\"topic\" (short topic name), and \"body\" (question text without leading labels).\n\n'
+        f"Question:\n{chunk.text[:1200]}"
+    )
+    try:
+        resp = client.generate(prompt, max_tokens=256)
+        match = re.search(r"\{.*\}", resp, re.DOTALL)
+        if not match:
+            return defaults
+        data = json.loads(match.group(0))
+        return {
+            "label": str(data.get("label") or defaults["label"]),
+            "points": str(data.get("points") or "").strip(),
+            "topic": str(data.get("topic") or "").strip(),
+            "body": str(data.get("body") or defaults["body"]),
+        }
+    except Exception as exc:  # pragma: no cover - runtime guard
+        LOGGER.warning("Question metadata extraction failed: %s", exc)
+        return defaults
+
+
 def question_agent(
     chunk: common.Chunk,
     preamble: PreambleAgent,
@@ -257,57 +307,82 @@ def question_agent(
 ) -> SpecialistResult:
     preamble.request("tcolorbox")
     preamble.request("enumitem")
-    meta = chunk.metadata or {}
-    
-    # 1. Determine Label/Number
-    # Prioritize metadata (likely from planner)
-    meta_label = meta.get("question_label") or meta.get("header_label") or chunk.metadata.get("label")
-    
-    # Fallback: Extract from text
-    text_label = None
-    # Regex handles "Question 1", "Q1", "Problem 1", etc.
-    match = re.match(r"^(?:#+\s*)?(?:question|q\.?|problem)\s*([0-9]+[a-z]?)", chunk.text, re.IGNORECASE)
-    if match:
-        text_label = match.group(1)
-        
-    # Decision logic: Use metadata if available, else text, else page fallback
-    number_display = str(meta_label or text_label or f"{chunk.page + 1}")
-    
-    # Generate slug for referencing
-    # Normalize "01" to "1" for consistency if it looks like an integer
-    slug_base = _question_slug(number_display)
-    if slug_base.isdigit():
-        slug_base = str(int(slug_base))
-        
-    # Make label unique to avoid "multiply defined" errors if duplicates exist
-    # (e.g. multiple "Question 1"s in input).
-    # We append a hash of the chunk ID.
-    unique_suffix = chunk.chunk_id[-4:] if chunk.chunk_id else "gen"
-    label_def = f"q:{slug_base}:{unique_suffix}"
-    
-    # 2. Clean Body
-    body = _normalize_paragraphs(chunk.text)
-    # Aggressively strip ANY "Question X" prefix from the body text to avoid repetition
-    # Matches "Question 1", "Question 1.", "Question 1:", "## Question 1"
-    body = re.sub(r"^(?:#+\s*)?(?:question|q\.?|problem)\s*[0-9]+[a-z]?[\.\:\)]?\s*", "", body, flags=re.IGNORECASE).strip()
+    meta = _extract_question_metadata(chunk)
+
+    # Build stable LaTeX label for cross-references
+    raw_label = meta.get("label") or str(chunk.page + 1)
+    slug = _question_slug(raw_label)
+    unique_suffix = (chunk.chunk_id or "gen")[-4:]
+    label_def = f"q:{slug or raw_label}:{unique_suffix}"
+
+    points = meta.get("points") or ""
+    topic = meta.get("topic") or f"Question {raw_label}"
+    body_source = meta.get("body") or chunk.text
+    body = _normalize_paragraphs(body_source)
 
     header = _context_comment(context)
     prefix_lines = [header.strip()] if header else []
     if examples:
         prefix_lines.append(_rag_comment(examples[0].doc_id))
     prefix = "\n".join([line for line in prefix_lines if line])
-    
-    # We define the unique label, but ALSO a semantic alias if possible?
-    # No, keep it simple. Resolve refs separately or assume user refs use the unique ID (which they won't).
-    # Post-processing usually handles ref resolution.
-    
+
+    problem_opts = f"[{points}]" if points else ""
     latex = "\n".join(
         [
             prefix if prefix else "% question block",
-            f"\\begin{{question}}{{{number_display}}}",
+            f"\\begin{{problem}}{problem_opts}{{{topic}}}",
             f"\\label{{{label_def}}}",
             body,
-            "\\end{question}",
+            "\\end{problem}",
+        ]
+    )
+    return SpecialistResult(latex=latex)
+
+
+def answer_agent(
+    chunk: common.Chunk,
+    preamble: PreambleAgent,
+    examples=None,
+    context: Dict[str, object] | None = None
+) -> SpecialistResult:
+    preamble.request("tcolorbox")
+    preamble.request("enumitem")
+
+    header = _context_comment(context)
+    rag_prefix = _rag_comment(examples[0].doc_id) if examples else ""
+
+    client = get_vllm_client()
+    body = _normalize_paragraphs(chunk.text)
+    if client:
+        prompt = (
+            "You are formatting an answer or grading rubric for a professional exam textbook.\n"
+            "Rewrite the content as LaTeX suitable to be placed INSIDE an 'answer' tcolorbox environment.\n"
+            "- Use bullet lists or enumerated steps when appropriate.\n"
+            "- Preserve math notation but convert it to LaTeX.\n"
+            "- Do NOT include \\begin{answer} or \\end{answer}.\n\n"
+            f"Answer text:\n{chunk.text[:2000]}"
+        )
+        try:
+            raw = client.generate(prompt, max_tokens=512)
+            stripped = raw.strip()
+            # Guard against the model echoing the environment
+            if "\\begin{answer}" in stripped:
+                stripped = stripped.replace("\\begin{answer}", "").replace("\\end{answer}", "").strip()
+            body = stripped or body
+        except Exception as exc:  # pragma: no cover - runtime guard
+            LOGGER.warning("Answer agent LLM failed, falling back to normalized text: %s", exc)
+
+    lines = [line for line in [header.strip(), rag_prefix.strip()] if line]
+    prefix = "\n".join(lines)
+    if prefix:
+        prefix += "\n"
+
+    latex = "".join(
+        [
+            prefix,
+            "\\begin{answer}\n",
+            body,
+            "\n\\end{answer}",
         ]
     )
     return SpecialistResult(latex=latex)
@@ -320,28 +395,10 @@ def equation_agent(
     context: Dict[str, object] | None = None,
 ) -> SpecialistResult:
     preamble.request("amsmath")
-    env = "equation"
-    if examples:
-        sample = examples[0].text
-        if "\\begin{align" in sample:
-            env = "align"
-        for pkg in examples[0].packages:
-            preamble.request(pkg)
+    # Delegate completely to equation_normalizer which now uses LLM
     body = equation_normalizer.normalize(chunk.text).strip() or "[equation unavailable]"
-    header = (_context_comment(context) + (_rag_comment(examples[0].doc_id) if examples else "% equation snippet"))
-    
-    # Detect if already wrapped OR if it contains structural commands that break math mode
-    if body.startswith("\\begin{") or body.startswith("\\[") or "\\Question" in body or "\\section" in body or "\\begin{question}" in body:
-        latex = f"{header.strip()}\n{body}"
-    else:
-        latex = "\n".join(
-            [
-                header.strip() if header else "% equation snippet",
-                f"\\begin{{{env}}}",
-                body,
-                f"\\end{{{env}}}",
-            ]
-        )
+    header = _context_comment(context)
+    latex = f"{header.strip()}\n{body}" if header else body
     return SpecialistResult(latex=latex)
 
 
@@ -350,47 +407,6 @@ def _extract_tabular_align(example_text: str) -> str | None:
     if match:
         return match.group(1)
     return None
-
-
-def _split_row_cells(row: str) -> List[str]:
-    if "|" in row:
-        cells = [cell.strip() for cell in row.split("|")]
-    elif "\t" in row:
-        cells = [cell.strip() for cell in row.split("\t")]
-    elif "," in row and len(row.split(",")) > 1:
-        cells = [cell.strip() for cell in row.split(",")]
-    else:
-        cells = [cell.strip() for cell in re.split(r"\s{2,}", row)]
-    return [cell for cell in cells if cell]
-
-
-def _escape_table_cell(cell: str) -> str:
-    replacements = {
-        "&": "\\&",
-        "%": "\\%",
-        "#": "\\#",
-    }
-    sanitized = cell.strip()
-    for needle, repl in replacements.items():
-        sanitized = sanitized.replace(needle, repl)
-    return sanitized
-
-
-def _estimate_column_count(rows: List[str], metadata: Dict[str, object]) -> int:
-    signature = metadata.get("table_signature") or {}
-    columns = signature.get("columns")
-    if isinstance(columns, int) and columns > 0:
-        return columns
-    if isinstance(columns, str) and columns.isdigit():
-        return max(1, int(columns))
-    counts = []
-    for row in rows:
-        cells = _split_row_cells(row)
-        if cells:
-            counts.append(len(cells))
-    if not counts:
-        return 1
-    return max(max(counts), 1)
 
 
 def _extract_region_crop(metadata: Dict[str, object]) -> Path | None:
@@ -432,7 +448,8 @@ def _extract_region_crop(metadata: Dict[str, object]) -> Path | None:
         return None
 
 
-def _generate_table_from_vlm(chunk: common.Chunk) -> List[List[str]] | None:
+def _generate_table_from_vlm(chunk: common.Chunk) -> str | None:
+    # UPDATED: Returns raw latex string from VLM, not rows
     crop_path = _extract_region_crop(chunk.metadata or {})
     if crop_path is None:
         return None
@@ -443,17 +460,7 @@ def _generate_table_from_vlm(chunk: common.Chunk) -> List[List[str]] | None:
             crop_path.unlink()
         except Exception:
             pass
-    if not vlm_text:
-        return None
-    rows = []
-    for raw_line in vlm_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        cells = _split_row_cells(line)
-        if cells:
-            rows.append(cells)
-    return rows or None
+    return vlm_text
 
 
 def _generate_figure_caption(chunk: common.Chunk) -> str | None:
@@ -514,106 +521,51 @@ def table_agent(
     context: Dict[str, object] | None = None,
 ) -> SpecialistResult:
     preamble.request("booktabs")
-    metadata = chunk.metadata or {}
-    rows = [row for row in chunk.text.splitlines() if row.strip()]
-    cols = _estimate_column_count(rows, metadata)
-    align = "".join(["c"] * cols)
-    if examples:
-        align_hint = _extract_tabular_align(examples[0].text)
-        if align_hint:
-            align = align_hint
-        for pkg in examples[0].packages:
-            preamble.request(pkg)
-    context_comment = _context_comment(context)
-    assessment = figure_table_agent.assess_table(chunk)
-    width_value = min(0.98, max(0.65, assessment.recommended_width))
-    header_parts = []
-    if context_comment:
-        header_parts.append(context_comment.strip())
-    header_parts.append(_rag_comment(examples[0].doc_id) if examples else "% auto table")
-    header_parts.append(
-        f"% table-profile rows={assessment.rows} cols={assessment.columns} width={width_value:.2f}\\linewidth"
-    )
-    header = "\n".join(filter(None, header_parts))
-    vlm_rows = _generate_table_from_vlm(chunk)
-    if vlm_rows:
-        cols = max(len(row) for row in vlm_rows)
-        body_lines = []
-        for row in vlm_rows:
-            cells = [
-                _escape_table_cell(cell)
-                for cell in (row[:cols] + [""] * max(0, cols - len(row)))
-            ]
-            body_lines.append(" & ".join(cells) + " \\\\ ")
-        body = "\n    ".join(body_lines)
-        header = header or "% auto table"
-        align = "".join(["c"] * max(cols, 1))
-        latex = "\n".join(
-            [
-                header,
-                "\\begin{table}[H]",
-                "  \\centering",
-                f"  \\resizebox{{{width_value:.2f}\\linewidth}}{{!}}{{%",
-                f"    \\begin{{tabular}}{{{align}}}",
-                "    \\toprule",
-                f"    {body}",
-                "    \\bottomrule",
-                "    \\end{tabular}",
-                "  }",
-                "  \\caption{Auto-transcribed table}",
-                "\\end{table}",
-            ]
-        )
-        return SpecialistResult(latex=latex)
-    body_lines: List[str] = []
-    for row in rows:
-        cells = _split_row_cells(row)
-        if not cells:
-            continue
-        body_lines.append(" & ".join(cells[:cols]) + " \\\\")
-    if not body_lines:
-        body_lines.append(f"\\multicolumn{{{cols}}}{{c}}{{[table content unavailable]}} \\\\")
-    body = "\n    ".join(body_lines)
-    header = header or "% auto table"
-    latex = "\n".join(
-        [
-            header,
-            "\\begin{table}[H]",
-            "  \\centering",
-            f"  \\resizebox{{{width_value:.2f}\\linewidth}}{{!}}{{%",
-            f"    \\begin{{tabular}}{{{align}}}",
-            "    \\toprule",
-            f"    {body}",
-            "    \\bottomrule",
-            "    \\end{tabular}",
-            "  }",
-            "  \\caption{Auto-transcribed table}",
-            "\\end{table}",
-        ]
-    )
-    return SpecialistResult(latex=latex)
+    
+    # Try VLM first
+    vlm_latex = _generate_table_from_vlm(chunk)
+    
+    if not vlm_latex:
+        # Fallback to LLM text-to-table
+        client = get_vllm_client()
+        if client:
+            prompt = f"Convert this text to a LaTeX table:\n{chunk.text}"
+            try:
+                vlm_latex = client.generate(prompt, max_tokens=512)
+            except:
+                pass
+                
+    if not vlm_latex:
+        vlm_latex = "\\begin{table}[H]\\centering [Table generation failed] \\end{table}"
+
+    # Ensure environment wrapper
+    if "\\begin{table" not in vlm_latex:
+        vlm_latex = f"\\begin{{table}}[H]\n\\centering\n{vlm_latex}\n\\caption{{Generated Table}}\n\\end{{table}}"
+
+    context_comment = _context_comment(context) or ""
+    rag_comment = _rag_comment(examples[0].doc_id) + "\n" if examples else ""
+    prefix = context_comment + rag_comment
+    return SpecialistResult(latex=f"{prefix}{vlm_latex}")
 
 
 def list_agent(chunk: common.Chunk, examples=None, context: Dict[str, object] | None = None) -> SpecialistResult:
-    lines = [line for line in chunk.text.splitlines() if line.strip()]
-    first = lines[0] if lines else ""
-    ordered = first.lstrip().startswith(tuple("0123456789"))
-    env = "enumerate" if ordered else "itemize"
-    items = []
-    for line in chunk.text.splitlines():
-        stripped = line.strip("-*• \t")
-        if not stripped:
-            continue
-        items.append(f"  \\item {stripped}")
-    if not items:
-        items.append("  \\item [list content unavailable]")
-    header = []
-    context_comment = _context_comment(context)
-    if context_comment:
-        header.append(context_comment.strip())
-    header.append(_rag_comment(examples[0].doc_id) if examples else "% auto list")
-    latex = "\n".join(["\n".join(header), f"\\begin{{{env}}}", *items, f"\\end{{{env}}}"])
-    return SpecialistResult(latex=latex)
+    # Use LLM for list formatting to avoid regex-heavy heuristics.
+    client = get_vllm_client()
+    if client:
+        prompt = (
+            "Format the following text as a LaTeX list.\n"
+            "Choose itemize or enumerate based on the content structure.\n"
+            "Return only the LaTeX list environment.\n\n"
+            f"{chunk.text}"
+        )
+        try:
+            latex = client.generate(prompt, max_tokens=512)
+            return SpecialistResult(latex=latex.strip() or _normalize_paragraphs(chunk.text))
+        except Exception as exc:  # pragma: no cover - runtime guard
+            LOGGER.warning("List agent LLM failed, falling back to plain text: %s", exc)
+
+    # Fallback: treat as plain paragraph if LLM is unavailable.
+    return SpecialistResult(latex=_normalize_paragraphs(chunk.text))
 
 
 def figure_agent(chunk: common.Chunk, examples=None, context: Dict[str, object] | None = None) -> SpecialistResult:
@@ -655,44 +607,6 @@ def figure_agent(chunk: common.Chunk, examples=None, context: Dict[str, object] 
     return SpecialistResult(latex=latex)
 
 
-ROUTING_ALIASES = {
-    "math": "equation",
-    "formula": "equation",
-    "eq": "equation",
-    "display_equation": "equation",
-    "img": "figure",
-    "question_block": "question",
-    "answer_block": "paragraph", # Map answer to paragraph for now, or add answer_agent
-    "theorem_block": "paragraph", # Map to paragraph (will be formatted by latex content)
-    "proof_block": "paragraph",
-}
-ROUTING_FIGURE_CONFIDENCE = float(os.environ.get("LATEXIFY_ROUTING_FIGURE_THRESHOLD", "0.45") or 0.45)
-
-
-def _route_modality(block_type: str, chunk: common.Chunk) -> Dict[str, object]:
-    """Centralized modality routing with configurable thresholds.
-
-    This consolidates heuristic checks so downstream agents share the same decision.
-    """
-    metadata = chunk.metadata or {}
-    region = str(metadata.get("region_type") or block_type or "text").lower()
-    region = ROUTING_ALIASES.get(region, region)
-    layout_conf = float(metadata.get("layout_confidence", 0.7) or 0.7)
-    if region not in {"question", "table", "equation", "list", "figure"}:
-        images = getattr(chunk, "images", None) or []
-        if images and layout_conf < ROUTING_FIGURE_CONFIDENCE:
-            region = "figure"
-        elif metadata.get("table_signature"):
-            region = "table"
-        elif "equation" in chunk.text.lower() or "formula" in chunk.text.lower():
-            region = "equation"
-        elif metadata.get("bulleted") or metadata.get("list"):
-            region = "list"
-        else:
-            region = "text"
-    return {"region": region, "layout_confidence": layout_conf}
-
-
 def dispatch_specialist(
     block_type: str,
     chunk: common.Chunk,
@@ -701,10 +615,13 @@ def dispatch_specialist(
     *,
     context: Dict[str, object] | None = None,
 ) -> SpecialistResult:
-    routing = _route_modality(block_type, chunk)
-    region = routing["region"]
+    # ZERO HEURISTICS: Use Semantic Router
+    region = semantic_router.route(chunk, block_type)
+    
     if region == "question":
         result = question_agent(chunk, preamble, examples, context)
+    elif region == "answer":
+        result = answer_agent(chunk, preamble, examples, context)
     elif region == "table":
         result = table_agent(chunk, preamble, examples, context)
     elif region == "equation":
@@ -715,7 +632,8 @@ def dispatch_specialist(
         result = figure_agent(chunk, examples, context)
     else:
         result = paragraph_agent(chunk, examples, context)
-    result.notes["routing"] = routing
+        
+    result.notes["routing"] = region
     return result
 
 
